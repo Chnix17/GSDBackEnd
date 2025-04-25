@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "express": "^4.21.1",
+    "mysql2": "^3.14.0",
+    "ws": "^8.18.1"
+  },
+  "name": "gsd",
+  "version": "1.0.0",
+  "description": "\"# gs1\"",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
