@@ -272,29 +272,35 @@ class ReservationDetails {
                 LEFT JOIN 
                     tbl_reservation_passenger rp ON r.reservation_id = rp.reservation_reservation_id
                 WHERE 
-                    (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
+                    (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
                     AND r.reservation_id IS NOT NULL
                     AND rp.reservation_passenger_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1
-                        FROM tbl_reservation_venue rv
-                        INNER JOIN tbl_reservation_checklist_venue cv 
-                            ON rv.reservation_venue_id = cv.checklist_venue_id
-                        WHERE rv.reservation_reservation_id = r.reservation_id
+                        FROM tbl_reservation_checklist_venue cv 
+                        WHERE cv.reservation_venue_id IN (
+                            SELECT rv.reservation_venue_id 
+                            FROM tbl_reservation_venue rv 
+                            WHERE rv.reservation_reservation_id = r.reservation_id
+                        )
                     )
                     AND NOT EXISTS (
                         SELECT 1
-                        FROM tbl_reservation_vehicle rvh
-                        INNER JOIN tbl_reservation_checklist_vehicle cvh 
-                            ON rvh.reservation_vehicle_id = cvh.checklist_vehicle_id
-                        WHERE rvh.reservation_reservation_id = r.reservation_id
+                        FROM tbl_reservation_checklist_vehicle cvh 
+                        WHERE cvh.reservation_vehicle_id IN (
+                            SELECT rvh.reservation_vehicle_id 
+                            FROM tbl_reservation_vehicle rvh 
+                            WHERE rvh.reservation_reservation_id = r.reservation_id
+                        )
                     )
                     AND NOT EXISTS (
                         SELECT 1
-                        FROM tbl_reservation_equipment re
-                        INNER JOIN tbl_reservation_checklist_equipment ce 
-                            ON re.reservation_equipment_id = ce.checklist_equipment_id
-                        WHERE re.reservation_reservation_id = r.reservation_id
+                        FROM tbl_reservation_checklist_equipment ce 
+                        WHERE ce.reservation_equipment_id IN (
+                            SELECT re.reservation_equipment_id 
+                            FROM tbl_reservation_equipment re 
+                            WHERE re.reservation_reservation_id = r.reservation_id
+                        )
                     )
                 ORDER BY 
                     r.reservation_created_at DESC

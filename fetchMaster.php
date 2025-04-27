@@ -192,7 +192,7 @@ class VehicleMake {
     }
 
     public function fetchConditions() {
-        $sql = "SELECT `condition_id`, `condition_name` FROM `tbl_condition_master` ORDER BY condition_name";
+        $sql = "SELECT `id`, `condition_name` FROM `tbl_condition` WHERE 1";
         return $this->executeQuery($sql);
     }
     

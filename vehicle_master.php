@@ -284,7 +284,7 @@ public function saveDepartmentData($json) {
 
 public function conditionExists($conditionName) {
     try {
-        $sql = "SELECT COUNT(*) FROM tbl_condition_master WHERE condition_name = :name";
+        $sql = "SELECT COUNT(*) FROM tbl_condition WHERE condition_name = :name";
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':name', $conditionName);
         $stmt->execute();
@@ -306,7 +306,7 @@ public function saveConditionData($json) {
     }
 
     try {
-        $sql = "INSERT INTO tbl_condition_master (condition_name) VALUES (:name)";
+        $sql = "INSERT INTO tbl_condition (condition_name) VALUES (:name)";
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':name', $json['condition_name']);
         $stmt->execute();
