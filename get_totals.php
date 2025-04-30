@@ -15,20 +15,7 @@ class Dashboard {
     public function getTotals() {
         try {
             // Query for approved reservations (status_id = 3)
-            $reservationQuery = "
-                SELECT COUNT(DISTINCT r.reservation_id) AS total 
-                FROM tbl_reservation r
-                JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_status_reservation_id
-                WHERE rs.reservation_status_status_reservation_id = 3
-            ";
 
-            // Query for pending reservations (status_id = 2)
-            $pendingRequestQuery = "
-                SELECT COUNT(DISTINCT r.reservation_id) AS total 
-                FROM tbl_reservation r
-                JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_status_reservation_id
-                WHERE rs.reservation_status_status_reservation_id = 2
-            ";
 
             // Query for vehicles
             $vehicleQuery = "SELECT COUNT(*) AS total FROM tbl_vehicle WHERE is_active = 1";
@@ -39,21 +26,11 @@ class Dashboard {
             // Query for equipment
             $equipmentQuery = "SELECT COUNT(*) AS total FROM tbl_equipments WHERE is_active = 1";
 
-            // Query for users (combining all user tables)
-            $userQuery = "
-                SELECT 
-                    (SELECT COUNT(*) FROM tbl_admin WHERE is_active = 1) +
-                    (SELECT COUNT(*) FROM tbl_dept WHERE is_active = 1) +
-                    (SELECT COUNT(*) FROM tbl_driver WHERE is_active = 1) +
-                    (SELECT COUNT(*) FROM tbl_users WHERE is_active = 1) +
-                    (SELECT COUNT(*) FROM tbl_personel WHERE is_active = 1) +
-                    (SELECT COUNT(*) FROM tbl_super_admin WHERE is_active = 1) AS total
-            ";
+            // Query for users (only from tbl_users)
+            $userQuery = "SELECT COUNT(*) AS total FROM tbl_users WHERE is_active = 1";
 
             // Execute all queries
             $queries = [
-                'reservations' => $reservationQuery,
-                'pending_requests' => $pendingRequestQuery,
                 'vehicles' => $vehicleQuery,
                 'venues' => $venueQuery,
                 'equipments' => $equipmentQuery,

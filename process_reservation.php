@@ -28,7 +28,7 @@ class User {
                     r.reservation_title, 
                     r.reservation_description, 
                     r.reservation_start_date, 
-                    r.reservation_end_date, S
+                    r.reservation_end_date, 
                     r.reservation_participants, 
                     r.reservation_user_id,
                     rs.reservation_status_status_id AS status_id,

@@ -25,6 +25,7 @@ class User {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
+
     public function fetchAssignedRelease($personnel_id) {
         if (!$personnel_id) {
             return json_encode(['status' => 'error', 'message' => 'Personnel ID is required']);
@@ -124,6 +125,13 @@ class User {
                         'reservation_description' => '',
                         'reservation_start_date' => '',
                         'reservation_end_date' => '',
+                        'reservation_participants' => '',
+                        'reservation_user_id' => '',
+                        'user_details' => [
+                            'full_name' => '',
+                            'department' => '',
+                            'role' => ''
+                        ],
                         'venue' => [
                             'reservation_venue_id' => null,
                             'reservation_venue_venue_id' => null,
@@ -145,7 +153,7 @@ class User {
                         ]
                     ];
                 }
-
+    
                 // Add venue checklist data if present
                 if (isset($data['reservation_venue_venue_id'])) {
                     $reservations[$reservation_id]['venue']['reservation_venue_id'] = $data['reservation_venue_id'];
@@ -160,7 +168,7 @@ class User {
                         $reservations[$reservation_id]['venue']['name'] = $data['venue_name'];
                     }
                 }
-
+    
                 // Add vehicle checklist data if present
                 if (isset($data['reservation_vehicle_vehicle_id'])) {
                     $reservations[$reservation_id]['vehicle']['reservation_vehicle_id'] = $data['reservation_vehicle_id'];
@@ -174,7 +182,7 @@ class User {
                         'isChecked' => $data['vehicle_isChecked']
                     ];
                 }
-
+    
                 // Add equipment checklist data if present
                 if (isset($data['reservation_equipment_equip_id'])) {
                     $reservations[$reservation_id]['equipment']['reservation_equipment_id'] = $data['reservation_equipment_id'];
@@ -194,13 +202,23 @@ class User {
                 if ($reservation['venue']['reservation_venue_venue_id'] || $reservation['vehicle']['reservation_vehicle_id'] || $reservation['equipment']['reservation_equipment_id']) {
                     $sqlReservation = "
                         SELECT 
-                            reservation_id, 
-                            reservation_title,
-                            reservation_description,
-                            reservation_start_date,
-                            reservation_end_date
-                        FROM tbl_reservation
-                        WHERE reservation_id = :reservation_id
+                            r.reservation_id, 
+                            r.reservation_title,
+                            r.reservation_description,
+                            r.reservation_start_date,
+                            r.reservation_end_date,
+                            r.reservation_participants,
+                            r.reservation_user_id,
+                            u.users_fname,
+                            u.users_mname,
+                            u.users_lname,
+                            d.departments_name,
+                            ul.user_level_name AS role
+                        FROM tbl_reservation r
+                        INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                        LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+                        LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+                        WHERE r.reservation_id = :reservation_id
                     ";
                     $stmtReservation = $this->conn->prepare($sqlReservation);
                     $stmtReservation->execute(['reservation_id' => $reservation_id]);
@@ -211,6 +229,19 @@ class User {
                         $reservations[$reservation_id]['reservation_description'] = $reservationData['reservation_description'];
                         $reservations[$reservation_id]['reservation_start_date'] = $reservationData['reservation_start_date'];
                         $reservations[$reservation_id]['reservation_end_date'] = $reservationData['reservation_end_date'];
+                        $reservations[$reservation_id]['reservation_participants'] = $reservationData['reservation_participants'];
+                        $reservations[$reservation_id]['reservation_user_id'] = $reservationData['reservation_user_id'];
+                        
+                        // Build user details
+                        $fullName = trim($reservationData['users_fname'] . ' ' . 
+                                        ($reservationData['users_mname'] ? $reservationData['users_mname'] . ' ' : '') . 
+                                        $reservationData['users_lname']);
+                        
+                        $reservations[$reservation_id]['user_details'] = [
+                            'full_name' => $fullName,
+                            'department' => $reservationData['departments_name'] ?? 'N/A',
+                            'role' => $reservationData['role'] ?? 'N/A'
+                        ];
                     }
                 }
             }
@@ -222,7 +253,7 @@ class User {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
-    
+ 
     
     
     
