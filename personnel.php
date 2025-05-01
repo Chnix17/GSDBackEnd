@@ -545,240 +545,231 @@ class User {
         }
     }
 
+
     public function submitCondition($data) {
-        if (!isset($data['conditions'])) {
-            return json_encode([
-                'status' => 'error',
-                'message' => 'Missing required parameter (conditions)',
-                'timestamp' => date('Y-m-d H:i:s')
-            ]);
-        }
-    
-        try {
-            $timestamp = date('Y-m-d H:i:s');
-            $conditions = $data['conditions'];
-            $results = [];
-            
-            // Begin transaction for all operations
-            $this->conn->beginTransaction();
-            
-            // Process each type of condition
-            foreach ($conditions as $type => $typeData) {
-                if (!isset($typeData['reservation_ids']) || !isset($typeData['condition_ids']) || 
-                    !is_array($typeData['reservation_ids']) || !is_array($typeData['condition_ids']) ||
-                    count($typeData['reservation_ids']) != count($typeData['condition_ids'])) {
-                    $results[$type] = [
-                        'status' => 'error',
-                        'message' => 'Invalid or mismatched reservation_ids and condition_ids arrays',
-                        'timestamp' => $timestamp
-                    ];
-                    continue;
-                }
+    if (!isset($data['conditions'])) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Missing required parameter (conditions)',
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+    }
 
-                // Initialize SQL and table names based on type
-                $tables = [
-                    'venue' => [
-                        'reservationTable' => 'tbl_reservation_venue',
-                        'conditionTable' => 'tbl_reservation_condition_venue',
-                        'reservationIdField' => 'reservation_venue_id',
-                        'checkField' => 'reservation_venue_id'
-                    ],
-                    'vehicle' => [
-                        'reservationTable' => 'tbl_reservation_vehicle',
-                        'conditionTable' => 'tbl_reservation_condition_vehicle',
-                        'reservationIdField' => 'reservation_vehicle_id',
-                        'checkField' => 'reservation_vehicle_id'
-                    ],
-                    'equipment' => [
-                        'reservationTable' => 'tbl_reservation_equipment',
-                        'conditionTable' => 'tbl_reservation_condition_equipment',
-                        'reservationIdField' => 'reservation_equipment_id',
-                        'checkField' => 'reservation_equipment_id'
-                    ]
-                ];
-
-                if (!isset($tables[$type])) {
-                    $results[$type] = [
-                        'status' => 'error',
-                        'message' => 'Invalid type specified',
-                        'timestamp' => $timestamp
-                    ];
-                    continue;
-                }
-
-                $tableInfo = $tables[$type];
-                $reservation_ids = $typeData['reservation_ids'];
-                $condition_ids = $typeData['condition_ids'];
-
-                // Validate all reservation_ids exist
-                $placeholders = str_repeat('?,', count($reservation_ids) - 1) . '?';
-                $checkReservation = "SELECT COUNT(*) FROM {$tableInfo['reservationTable']} WHERE {$tableInfo['reservationIdField']} IN ($placeholders)";
-                $stmtReservation = $this->conn->prepare($checkReservation);
-                $stmtReservation->execute($reservation_ids);
-                if ($stmtReservation->fetchColumn() != count($reservation_ids)) {
-                    $results[$type] = [
-                        'status' => 'error',
-                        'message' => 'One or more invalid reservation IDs',
-                        'timestamp' => $timestamp
-                    ];
-                    continue;
-                }
-
-                $typeResults = [];
-                $insertedCount = 0;
-                $skippedCount = 0;
-
-                // Process each reservation-condition pair
-                for ($i = 0; $i < count($reservation_ids); $i++) {
-                    $reservation_id = $reservation_ids[$i];
-                    $condition_id = $condition_ids[$i];
-
-                    // Check for existing condition record
-                    $checkExisting = "SELECT COUNT(*) FROM {$tableInfo['conditionTable']} 
-                                    WHERE {$tableInfo['checkField']} = :reservation_id 
-                                    AND condition_id = :condition_id";
-                    $stmtExisting = $this->conn->prepare($checkExisting);
-                    $stmtExisting->execute([
-                        'reservation_id' => $reservation_id,
-                        'condition_id' => $condition_id
-                    ]);
-                    
-                    // Just insert the record directly
-                    $sql = "INSERT INTO {$tableInfo['conditionTable']} 
-                            ({$tableInfo['checkField']}, condition_id) 
-                            VALUES (:reservation_id, :condition_id)";
-                    
-                    $stmt = $this->conn->prepare($sql);
-                    $stmt->execute([
-                        'reservation_id' => $reservation_id,
-                        'condition_id' => $condition_id
-                    ]);
-                    $insertedCount++;
-                    
-                    $typeResults[$reservation_id] = [
-                        'status' => 'success',
-                        'condition_id' => $condition_id,
-                        'message' => 'Condition inserted successfully'
-                    ];
-                }
-
+    try {
+        $timestamp = date('Y-m-d H:i:s');
+        $conditions = $data['conditions'];
+        $results = [];
+        
+        // Begin transaction for all operations
+        $this->conn->beginTransaction();
+        
+        // Process each type of condition
+        foreach ($conditions as $type => $typeData) {
+            if (!isset($typeData['reservation_ids']) || !isset($typeData['condition_ids']) || 
+                !is_array($typeData['reservation_ids']) || !is_array($typeData['condition_ids']) ||
+                count($typeData['reservation_ids']) != count($typeData['condition_ids'])) {
                 $results[$type] = [
-                    'status' => 'success',
-                    'summary' => "Processed: $insertedCount inserted",
-                    'details' => $typeResults,
+                    'status' => 'error',
+                    'message' => 'Invalid or mismatched reservation_ids and condition_ids arrays',
                     'timestamp' => $timestamp
+                ];
+                continue;
+            }
+
+            // Initialize SQL and table names based on type
+            $tables = [
+                'venue' => [
+                    'reservationTable' => 'tbl_reservation_venue',
+                    'conditionTable' => 'tbl_reservation_condition_venue',
+                    'reservationIdField' => 'reservation_venue_id',
+                    'checkField' => 'reservation_venue_id'
+                ],
+                'vehicle' => [
+                    'reservationTable' => 'tbl_reservation_vehicle',
+                    'conditionTable' => 'tbl_reservation_condition_vehicle',
+                    'reservationIdField' => 'reservation_vehicle_id',
+                    'checkField' => 'reservation_vehicle_id'
+                ],
+                'equipment' => [
+                    'reservationTable' => 'tbl_reservation_equipment',
+                    'conditionTable' => 'tbl_reservation_condition_equipment',
+                    'reservationIdField' => 'reservation_equipment_id',
+                    'checkField' => 'reservation_equipment_id'
+                ]
+            ];
+
+            if (!isset($tables[$type])) {
+                $results[$type] = [
+                    'status' => 'error',
+                    'message' => 'Invalid type specified',
+                    'timestamp' => $timestamp
+                ];
+                continue;
+            }
+
+            $tableInfo = $tables[$type];
+            $reservation_ids = $typeData['reservation_ids'];
+            $condition_ids = $typeData['condition_ids'];
+            $other_reasons = $typeData['other_reasons'] ?? array_fill(0, count($reservation_ids), null);
+
+            // Validate all reservation_ids exist
+            $placeholders = str_repeat('?,', count($reservation_ids) - 1) . '?';
+            $checkReservation = "SELECT COUNT(*) FROM {$tableInfo['reservationTable']} WHERE {$tableInfo['reservationIdField']} IN ($placeholders)";
+            $stmtReservation = $this->conn->prepare($checkReservation);
+            $stmtReservation->execute($reservation_ids);
+            if ($stmtReservation->fetchColumn() != count($reservation_ids)) {
+                $results[$type] = [
+                    'status' => 'error',
+                    'message' => 'One or more invalid reservation IDs',
+                    'timestamp' => $timestamp
+                ];
+                continue;
+            }
+
+            $typeResults = [];
+            $insertedCount = 0;
+            $skippedCount = 0;
+
+            // Process each reservation-condition pair
+            for ($i = 0; $i < count($reservation_ids); $i++) {
+                $reservation_id = $reservation_ids[$i];
+                $condition_id = $condition_ids[$i];
+                $other_reason = isset($other_reasons[$i]) ? $other_reasons[$i] : null;
+
+                // Validate other_reason is provided when condition_id is 6
+                if ($condition_id == '6' && empty($other_reason)) {
+                    $typeResults[$reservation_id] = [
+                        'status' => 'error',
+                        'condition_id' => $condition_id,
+                        'message' => 'Other reason is required when condition is Others'
+                    ];
+                    continue;
+                }
+
+                // Check for existing condition record
+                $checkExisting = "SELECT COUNT(*) FROM {$tableInfo['conditionTable']} 
+                                WHERE {$tableInfo['checkField']} = :reservation_id 
+                                AND condition_id = :condition_id";
+                $stmtExisting = $this->conn->prepare($checkExisting);
+                $stmtExisting->execute([
+                    'reservation_id' => $reservation_id,
+                    'condition_id' => $condition_id
+                ]);
+                
+                // Insert the record with other_reason and is_active
+                $sql = "INSERT INTO {$tableInfo['conditionTable']} 
+                        ({$tableInfo['checkField']}, condition_id, other_reason, is_active) 
+                        VALUES (:reservation_id, :condition_id, :other_reason, 1)";
+                
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute([
+                    'reservation_id' => $reservation_id,
+                    'condition_id' => $condition_id,
+                    'other_reason' => $other_reason
+                ]);
+                $insertedCount++;
+                
+                $typeResults[$reservation_id] = [
+                    'status' => 'success',
+                    'condition_id' => $condition_id,
+                    'other_reason' => $other_reason,
+                    'message' => 'Condition inserted successfully'
                 ];
             }
 
-            // Commit all changes
-            $this->conn->commit();
-            
-            return json_encode([
+            $results[$type] = [
                 'status' => 'success',
-                'results' => $results,
+                'summary' => "Processed: $insertedCount inserted",
+                'details' => $typeResults,
                 'timestamp' => $timestamp
-            ]);
-            
-        } catch (PDOException $e) {
-            // Rollback transaction on error
-            if ($this->conn->inTransaction()) {
-                $this->conn->rollBack();
-            }
-            return json_encode([
-                'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage(),
-                'timestamp' => date('Y-m-d H:i:s')
-            ]);
+            ];
         }
+
+        // Commit all changes
+        $this->conn->commit();
+        
+        return json_encode([
+            'status' => 'success',
+            'results' => $results,
+            'timestamp' => $timestamp
+        ]);
+        
+    } catch (PDOException $e) {
+        // Rollback transaction on error
+        if ($this->conn->inTransaction()) {
+            $this->conn->rollBack();
+        }
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage(),
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
     }
+}
 
-    public function updateReservationStatus($reservation_id) {
-        if (!$reservation_id) {
+public function updateResourceStatusAndCondition($type, $resourceId, $recordId) {
+    try {
+        $type = strtolower($type); // normalize input
+        $resourceId = (int)$resourceId;
+        $recordId = (int)$recordId;
+
+        // Define table and column mappings for resources
+        $resourceMap = [
+            'equipment' => ['table' => 'tbl_equipments', 'column' => 'equip_id'],
+            'venue'     => ['table' => 'tbl_venue',     'column' => 'ven_id'],
+            'vehicle'   => ['table' => 'tbl_vehicle',   'column' => 'vehicle_id'],
+        ];
+
+        // Define table mappings for conditions
+        $conditionMap = [
+            'equipment' => 'tbl_reservation_condition_equipment',
+            'venue'     => 'tbl_reservation_condition_venue',
+            'vehicle'   => 'tbl_reservation_condition_vehicle',
+        ];
+
+        // Check if resource type is valid
+        if (!isset($resourceMap[$type]) || !isset($conditionMap[$type])) {
             return json_encode([
                 'status' => 'error',
-                'message' => 'Reservation ID is required',
-                'timestamp' => date('Y-m-d H:i:s')
+                'message' => 'Invalid resource type.'
             ]);
         }
 
-        try {
-            $timestamp = date('Y-m-d H:i:s');
-            
-            // First check if reservation exists
-            $checkSql = "SELECT COUNT(*) FROM tbl_reservation WHERE reservation_id = :reservation_id";
-            $checkStmt = $this->conn->prepare($checkSql);
-            $checkStmt->execute(['reservation_id' => $reservation_id]);
-            
-            if ($checkStmt->fetchColumn() === 0) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Reservation not found',
-                    'timestamp' => $timestamp
-                ]);
-            }
+        // Get table and column names
+        $resourceTable = $resourceMap[$type]['table'];
+        $resourceColumn = $resourceMap[$type]['column'];
+        $conditionTable = $conditionMap[$type];
 
-            $this->conn->beginTransaction();
+        // Start transaction to ensure atomicity
+        $this->conn->beginTransaction();
 
-            try {
-                // Step 1: Deactivate current active status
-                $sqlUpdate = "
-                    UPDATE tbl_reservation_status 
-                    SET reservation_active = 0, 
-                        reservation_updated_at = :timestamp
-                    WHERE reservation_reservation_id = :reservation_id 
-                    AND reservation_status_status_id = 6 
-                    AND reservation_active = 1";
+        // 1) Update the resource status availability to 1 (Available)
+        $stmt = $this->conn->prepare("UPDATE $resourceTable SET status_availability_id = 1 WHERE $resourceColumn = :resourceId");
+        $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
+        $stmt->execute();
 
-                $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                $stmtUpdate->execute([
-                    'reservation_id' => $reservation_id,
-                    'timestamp' => $timestamp
-                ]);
+        // 2) Update the condition record's is_active to 0
+        $stmt = $this->conn->prepare("UPDATE $conditionTable SET is_active = 0 WHERE id = :recordId");
+        $stmt->bindParam(':recordId', $recordId, PDO::PARAM_INT);
+        $stmt->execute();
 
-                if ($stmtUpdate->rowCount() === 0) {
-                    throw new Exception('No active status found for deactivation');
-                }
+        // Commit transaction
+        $this->conn->commit();
 
-                // Step 2: Insert new completed status
-                $sqlInsert = "
-                    INSERT INTO tbl_reservation_status 
-                    (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at)
-                    VALUES (4, :reservation_id, 1, :timestamp)";
-
-                $stmtInsert = $this->conn->prepare($sqlInsert);
-                $stmtInsert->execute([
-                    'reservation_id' => $reservation_id,
-                    'timestamp' => $timestamp
-                ]);
-
-                $this->conn->commit();
-
-                return json_encode([
-                    'status' => 'success',
-                    'message' => 'Reservation status updated successfully',
-                    'timestamp' => $timestamp
-                ]);
-
-            } catch (Exception $e) {
-                $this->conn->rollBack();
-                return json_encode([
-                    'status' => 'error',
-                    'message' => $e->getMessage(),
-                    'timestamp' => $timestamp
-                ]);
-            }
-
-        } catch (PDOException $e) {
-            if ($this->conn->inTransaction()) {
-                $this->conn->rollBack();
-            }
-            return json_encode([
-                'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage(),
-                'timestamp' => $timestamp
-            ]);
-        }
+        return json_encode([
+            'status' => 'success',
+            'message' => "Updated $type (ID: $resourceId) to status_availability_id = 1 and set condition record ID $recordId to is_active = 0."
+        ]);
+    } catch (PDOException $e) {
+        // Rollback transaction if an error occurs
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
     }
+}
+
 }
 
 // Handle the request
@@ -859,16 +850,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'submitCondition':
             echo $user->submitCondition($jsonInput);
             break;
-        case 'updateReservationStatus':
-            $reservation_id = $jsonInput['reservation_id'] ?? null;
-            if (!$reservation_id) {
+        case 'updateResourceStatusAndCondition':
+            $type = $jsonInput['type'] ?? null;
+            $resourceId = $jsonInput['resource_id'] ?? null;
+            $recordId = $jsonInput['record_id'] ?? null;
+            if (!$type || !$resourceId || !$recordId) {
                 die(json_encode([
                     'status' => 'error',
-                    'message' => 'Reservation ID is required',
+                    'message' => 'Type, Resource ID, and Record ID are required',
                     'timestamp' => date('Y-m-d H:i:s')
                 ]));
             }
-            echo $user->updateReservationStatus($reservation_id);
+            echo $user->updateResourceStatusAndCondition($type, $resourceId, $recordId);
             break;
     
         default:

@@ -721,6 +721,55 @@ class User {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
+
+    public function fetchAllReservations() {
+        try {
+            $query = "
+                SELECT 
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    r.reservation_participants,
+                    r.reservation_user_id,
+                    r.reservation_created_at,
+                    rs.reservation_active,
+                    sm.status_master_name AS reservation_status
+                FROM tbl_reservation AS r
+                /* join exactly the one status row having the latest updated_at,
+                   tie‐broken by the highest reservation_status_id */
+                LEFT JOIN tbl_reservation_status AS rs
+                  ON rs.reservation_status_id = (
+                        SELECT reservation_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_reservation_id = r.reservation_id
+                        ORDER BY 
+                          reservation_updated_at DESC,
+                          reservation_status_id   DESC
+                        LIMIT 1
+                  )
+                LEFT JOIN tbl_status_master AS sm
+                  ON rs.reservation_status_status_id = sm.status_master_id
+                ORDER BY r.reservation_start_date DESC
+            ";
+    
+            $stmt = $this->conn->prepare($query);
+            $stmt->execute();
+            $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+            return json_encode([
+                'status' => 'success',
+                'data'   => $reservations
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Error fetching reservations: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
 }
 
 // Handle the request
@@ -852,6 +901,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "updateUsers":
             echo $user->updateUsers($input);
             break;
+        case "fetchAllReservations":
+            echo $user->fetchAllReservations();
+            break;
+    
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;
