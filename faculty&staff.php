@@ -340,6 +340,120 @@ class FacultyStaff {
             ]);
         }
     }
+
+    public function displayedMaintenanceResources(int $reservationId) {
+        try {
+            $records = [];
+    
+            //
+            // 1) Equipment under maintenance
+            //
+            $sql = "
+                SELECT 
+                    rce.id               AS record_id,
+                    'equipment'          AS resource_type,
+                    e.equip_name         AS resource_name,
+                    re.reservation_equipment_quantity AS quantity,
+                    re.reservation_equipment_equip_id  AS resource_id,
+                    CASE 
+                        WHEN c.condition_name = 'Other' THEN rce.other_reason 
+                        ELSE c.condition_name 
+                    END                   AS condition_name
+                FROM tbl_reservation_condition_equipment rce
+                JOIN tbl_reservation_equipment re 
+                  ON rce.reservation_equipment_id = re.reservation_equipment_id
+                JOIN tbl_reservation r
+                  ON re.reservation_reservation_id = r.reservation_id
+                JOIN tbl_equipments e 
+                  ON re.reservation_equipment_equip_id = e.equip_id
+                JOIN tbl_condition c 
+                  ON rce.condition_id = c.id
+                WHERE rce.condition_id != 2
+                  AND rce.is_active = 1
+                  AND r.reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':reservation_id' => $reservationId]);
+            $records = array_merge($records, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    
+            //
+            // 2) Venues under maintenance
+            //
+            $sql = "
+                SELECT 
+                    rcv.id               AS record_id,
+                    'venue'              AS resource_type,
+                    v.ven_name           AS resource_name,
+                    NULL                 AS quantity,
+                    rv.reservation_venue_venue_id  AS resource_id,
+                    CASE 
+                        WHEN c.condition_name = 'Other' THEN rcv.other_reason 
+                        ELSE c.condition_name 
+                    END                   AS condition_name
+                FROM tbl_reservation_condition_venue rcv
+                JOIN tbl_reservation_venue rv 
+                  ON rcv.reservation_venue_id = rv.reservation_venue_id
+                JOIN tbl_reservation r
+                  ON rv.reservation_reservation_id = r.reservation_id
+                JOIN tbl_venue v 
+                  ON rv.reservation_venue_venue_id = v.ven_id
+                JOIN tbl_condition c 
+                  ON rcv.condition_id = c.id
+                WHERE rcv.condition_id != 2
+                  AND rcv.is_active = 1
+                  AND r.reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':reservation_id' => $reservationId]);
+            $records = array_merge($records, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    
+            //
+            // 3) Vehicles under maintenance
+            //
+            $sql = "
+                SELECT
+                    rcvh.id              AS record_id,
+                    'vehicle'            AS resource_type,
+                    CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
+                    NULL                 AS quantity,
+                    rv.reservation_vehicle_vehicle_id AS resource_id,
+                    CASE 
+                        WHEN c.condition_name = 'Other' THEN rcvh.other_reason 
+                        ELSE c.condition_name 
+                    END                   AS condition_name
+                FROM tbl_reservation_condition_vehicle rcvh
+                JOIN tbl_reservation_vehicle rv 
+                  ON rcvh.reservation_vehicle_id = rv.reservation_vehicle_id
+                JOIN tbl_reservation r
+                  ON rv.reservation_reservation_id = r.reservation_id
+                JOIN tbl_vehicle vh 
+                  ON rv.reservation_vehicle_vehicle_id = vh.vehicle_id
+                JOIN tbl_vehicle_model vm 
+                  ON vh.vehicle_model_id = vm.vehicle_model_id
+                JOIN tbl_condition c 
+                  ON rcvh.condition_id = c.id
+                WHERE rcvh.condition_id != 2
+                  AND rcvh.is_active = 1
+                  AND r.reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':reservation_id' => $reservationId]);
+            $records = array_merge($records, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    
+            return json_encode([
+                'status' => 'success',
+                'data'   => $records
+            ], JSON_THROW_ON_ERROR);
+    
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => $e->getMessage()
+            ], JSON_THROW_ON_ERROR);
+        }
+    }
+    
+    
     
 }
 
@@ -375,6 +489,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             echo $facultyStaff->fetchStatusById($reservationId);
+            break;
+        case 'displayedMaintenanceResources':
+            if(!$reservationId = $input['reservationId'] ?? null) {
+                echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
+                break;
+            }
+            echo $facultyStaff->displayedMaintenanceResources($reservationId);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
