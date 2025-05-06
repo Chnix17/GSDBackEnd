@@ -191,7 +191,11 @@ class Login {
                         5 => 'Dean',
                         6 => 'Secretary',
                         13 => 'Driver',
-                        15 => 'School Head'
+                        15 => 'School Head',
+                        16 => 'SBO PRESIDENT',
+                        17 => 'CSG PRESIDENT',
+                        18 => 'Department Head',
+                        
                     ];
 
                     return json_encode([ 

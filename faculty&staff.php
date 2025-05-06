@@ -63,11 +63,6 @@ class FacultyStaff {
         }
     }
     
-    
-    
-    
-    
-
     public function fetchMyReservationById($reservationId){
         try {
             $sql = "
@@ -452,9 +447,89 @@ class FacultyStaff {
             ], JSON_THROW_ON_ERROR);
         }
     }
+
+    public function fetchMyActiveReservation($userId) {
+        try {
+            $query = "
+                SELECT 
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    r.reservation_participants,
+                    r.reservation_user_id,
+                    r.reservation_created_at,
+                    rs.reservation_active,
+                    sm.status_master_name AS reservation_status
+                FROM tbl_reservation AS r
+                LEFT JOIN tbl_reservation_status AS rs
+                  ON rs.reservation_status_id = (
+                        SELECT reservation_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_reservation_id = r.reservation_id
+                          AND reservation_status_status_id = 6
+                          AND reservation_active = 1
+                        ORDER BY 
+                          reservation_updated_at DESC,
+                          reservation_status_id DESC
+                        LIMIT 1
+                  )
+                LEFT JOIN tbl_status_master AS sm
+                  ON rs.reservation_status_status_id = sm.status_master_id
+                WHERE r.reservation_user_id = :userId
+                  AND rs.reservation_status_status_id = 6
+                  AND rs.reservation_active = 1
+                ORDER BY r.reservation_start_date DESC
+            ";
     
+            $stmt = $this->conn->prepare($query);
+            $stmt->bindParam(':userId', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+            $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    
+            return json_encode([
+                'status' => 'success',
+                'data'   => $reservations
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Error fetching active reservations: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchNotification($userId) {
+        try {
+            $query = "
+                SELECT 
+                    notification_reservation_id,
+                    notification_message,
+                    notification_reservation_reservation_id,
+                    notification_user_id,
+                    notification_created_at
+                FROM tbl_notification_reservation
+                WHERE notification_user_id = :userId
+                ORDER BY notification_created_at DESC
+            ";
+
+            $stmt = $this->conn->prepare($query);
+            $stmt->bindParam(':userId', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+            $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            return json_encode([
+                'status' => 'success',
+                'data'   => $notifications
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Error fetching notifications: ' . $e->getMessage()
+            ]);
+        }
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -496,6 +571,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             echo $facultyStaff->displayedMaintenanceResources($reservationId);
+            break;
+        case 'fetchMyActiveReservation':
+            if (!$userId) {
+                echo json_encode(['status' => 'error', 'message' => 'User ID is required']);
+                break;
+            }
+            echo $facultyStaff->fetchMyActiveReservation($userId);
+            break;
+        case 'fetchNotification':
+            if (!$userId) {
+                echo json_encode(['status' => 'error', 'message' => 'User ID is required']);
+                break;
+            }
+            echo $facultyStaff->fetchNotification($userId);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

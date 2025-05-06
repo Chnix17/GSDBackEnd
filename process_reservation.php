@@ -23,111 +23,95 @@ class User {
         try {
             $sql = "
                 SELECT 
-                    r.reservation_id, 
+                    r.reservation_id,
                     r.reservation_created_at,
-                    r.reservation_title, 
-                    r.reservation_description, 
-                    r.reservation_start_date, 
-                    r.reservation_end_date, 
-                    r.reservation_participants, 
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    r.reservation_participants,
                     r.reservation_user_id,
                     rs.reservation_status_status_id AS status_id,
                     rs.reservation_active AS active,
-
-                    -- Requester information
-                    CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
-                    
-                    -- Department information
+                    ul.user_level_id,
+                    ul.user_level_name AS userlevel_name,
+                    CONCAT(
+                        u_req.users_fname, ' ',
+                        u_req.users_mname, ' ',
+                        u_req.users_lname
+                    ) AS requester_name,
                     dep.departments_name AS department_name,
-                    
-                    -- Venue details
-                    GROUP_CONCAT(DISTINCT 
+                    GROUP_CONCAT(DISTINCT
                         CONCAT(
-                            v.reservation_venue_venue_id, ':', 
+                            v.reservation_venue_venue_id, ':',
                             venue.ven_name, ':',
                             venue.ven_occupancy, ':',
                             venue.ven_operating_hours, ':',
                             IFNULL(venue.ven_pic, '')
                         )
-                    ) as venue_data,
-                    
-                    -- Vehicle details
-                    GROUP_CONCAT(DISTINCT 
+                    ) AS venue_data,
+                    GROUP_CONCAT(DISTINCT
                         CONCAT(
                             ve.reservation_vehicle_vehicle_id, ':',
                             vm.vehicle_license, ':',
                             vmm.vehicle_model_name
                         )
-                    ) as vehicle_data,
-                    
-                    -- Equipment details
-                    GROUP_CONCAT(DISTINCT 
+                    ) AS vehicle_data,
+                    GROUP_CONCAT(DISTINCT
                         CONCAT(
                             e.reservation_equipment_equip_id, ':',
                             equip.equip_name, ':',
                             e.reservation_equipment_quantity
                         )
-                    ) as equipment_data,
-                    
-                    -- Remove driver GROUP_CONCAT and select driver details directly
-                    d.reservation_driver_user_id as driver_id,
+                    ) AS equipment_data,
+                    d.reservation_driver_user_id AS driver_id,
                     drv.driver_first_name,
                     drv.driver_middle_name,
                     drv.driver_last_name,
                     d.is_accepted_trip,
-                    
-                    -- Passenger details
-                    GROUP_CONCAT(DISTINCT 
+                    GROUP_CONCAT(DISTINCT
                         CONCAT(
                             p.reservation_passenger_id, ':',
                             p.reservation_passenger_name
                         )
-                    ) as passenger_data
-                FROM 
-                    tbl_reservation r
-                LEFT JOIN 
-                    tbl_users u_req ON r.reservation_user_id = u_req.users_id
-                LEFT JOIN 
-                    tbl_departments dep ON u_req.users_department_id = dep.departments_id
-                LEFT JOIN 
-                    tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                    
-                -- Venue joins
+                    ) AS passenger_data
+                FROM tbl_reservation r
+                LEFT JOIN tbl_users u_req ON r.reservation_user_id = u_req.users_id
+                LEFT JOIN tbl_user_level ul ON u_req.users_user_level_id = ul.user_level_id
+                LEFT JOIN tbl_departments dep ON u_req.users_department_id = dep.departments_id
+                LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
                 LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
                 LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
-                
-                -- Vehicle joins
                 LEFT JOIN tbl_reservation_vehicle ve ON r.reservation_id = ve.reservation_reservation_id
                 LEFT JOIN tbl_vehicle vm ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
                 LEFT JOIN tbl_vehicle_model vmm ON vm.vehicle_model_id = vmm.vehicle_model_id
-                
-                -- Equipment joins
                 LEFT JOIN tbl_reservation_equipment e ON r.reservation_id = e.reservation_reservation_id
                 LEFT JOIN tbl_equipments equip ON e.reservation_equipment_equip_id = equip.equip_id
-
-                
-                -- Driver joins
                 LEFT JOIN tbl_reservation_driver d ON r.reservation_id = d.reservation_reservation_id
                 LEFT JOIN tbl_driver drv ON d.reservation_driver_user_id = drv.driver_id
-                
-                -- Passenger joins
                 LEFT JOIN tbl_reservation_passenger p ON r.reservation_id = p.reservation_reservation_id
-                
-                WHERE 
-                    u_req.users_department_id = :department_id
+                WHERE
+                    (
+                        (:department_id = 29 AND u_req.users_user_level_id IN (16, 17))
+                        OR
+                        (:department_id != 29 AND u_req.users_department_id = :department_id AND u_req.users_user_level_id NOT IN (16, 17))
+                    )
                     AND EXISTS (
-                        SELECT 1 FROM tbl_reservation_status rs1
-                        WHERE rs1.reservation_reservation_id = r.reservation_id
-                        AND rs1.reservation_status_status_id = 1
-                        AND rs1.reservation_active = 1  
+                        SELECT 1
+                        FROM tbl_reservation_status rs1
+                        WHERE
+                            rs1.reservation_reservation_id = r.reservation_id
+                            AND rs1.reservation_status_status_id = 1
+                            AND rs1.reservation_active = 1
                     )
                     AND NOT EXISTS (
-                        SELECT 1 FROM tbl_reservation_status rs2
-                        WHERE rs2.reservation_reservation_id = r.reservation_id
-                        AND rs2.reservation_status_status_id IN (2, 3, 4, 5, 6)
+                        SELECT 1
+                        FROM tbl_reservation_status rs2
+                        WHERE
+                            rs2.reservation_reservation_id = r.reservation_id
+                            AND rs2.reservation_status_status_id IN (2,3,4,5,6)
                     )
-                GROUP BY 
-                    r.reservation_id
+                GROUP BY r.reservation_id
                 ";
     
             $stmt = $this->conn->prepare($sql);
@@ -220,6 +204,7 @@ class User {
                     'reservation_start_date' => $row['reservation_start_date'],
                     'reservation_end_date' => $row['reservation_end_date'],
                     'reservation_participants' => $row['reservation_participants'],
+                    'reservation_user_id' => $row['reservation_user_id'],
                     'status_id' => $row['status_id'],
                     'active' => $row['active'],
                     'requester_name' => $row['requester_name'],
@@ -426,6 +411,7 @@ class User {
                     'reservation_participants' => $row['reservation_participants'],
                     'status_id' => $row['status_id'],
                     'active' => $row['active'],
+                    'reservation_user_id' => $row['reservation_user_id'],
                     'requester_name' => $row['requester_name'],
                     'department_name' => $row['department_name'],
                     'user_level_name' => $row['user_level_name']
@@ -523,7 +509,7 @@ class User {
     }
     
        
-    public function handleApproval($reservationId, $isAccepted, $userId) {
+    public function handleApproval($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
         try {
             $this->conn->beginTransaction();
             $sql = "UPDATE tbl_reservation_status 
@@ -546,6 +532,20 @@ class User {
             $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
             $stmt->execute();
             
+            // Insert notification with proper notification_user_id
+            if (!empty($notificationMessage)) {
+                $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                                 (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                                 VALUES (:message, :reservation_id, :notification_user_id, NOW())";
+                
+                $stmtNotification = $this->conn->prepare($sqlNotification);
+                $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
+                $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $notificationUserId = $notification_user_id ?? $userId; // Store in variable first
+                $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
+                $stmtNotification->execute();
+            }
+            
             $this->conn->commit();
             return json_encode([
                 'status' => 'success', 
@@ -561,7 +561,7 @@ class User {
     }
 
 
-    public function handleRequest($reservationId, $isAccepted, $userId) {
+    public function handleRequest($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
         try {
             $this->conn->beginTransaction();
 
@@ -572,7 +572,8 @@ class User {
                     WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
                 
                 $stmtDeactivate = $this->conn->prepare($sqlDeactivate);
-                $stmtDeactivate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $reservation_id = $reservationId; // Store in variable
+                $stmtDeactivate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
                 $stmtDeactivate->execute();
 
                 // Then insert: Add new completed status (6)
@@ -582,8 +583,10 @@ class User {
                     VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
                 
                 $stmtInsert = $this->conn->prepare($sqlInsert);
-                $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                $reservation_id = $reservationId; // Store in variable
+                $user_id = $userId; // Store in variable
+                $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
                 $stmtInsert->execute();
             } else {
                 $sqlDeactivate = "
@@ -591,7 +594,8 @@ class User {
                     SET reservation_active = -1 
                     WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
                 $stmtDeactivate = $this->conn->prepare($sqlDeactivate);
-                $stmtDeactivate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $reservation_id = $reservationId; // Store in variable
+                $stmtDeactivate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
                 $stmtDeactivate->execute();
                 $sqlInsert = "
                     INSERT INTO tbl_reservation_status 
@@ -599,9 +603,27 @@ class User {
                     VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
                 
                 $stmtInsert = $this->conn->prepare($sqlInsert);
-                $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                $reservation_id = $reservationId; // Store in variable
+                $user_id = $userId; // Store in variable
+                $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
                 $stmtInsert->execute();
+            }
+
+            // Insert notification with proper notification_user_id
+            if (!empty($notificationMessage)) {
+                $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                                 (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                                 VALUES (:message, :reservation_id, :notification_user_id, NOW())";
+                
+                $stmtNotification = $this->conn->prepare($sqlNotification);
+                $message = $notificationMessage; // Store in variable
+                $reservation_id = $reservationId; // Store in variable
+                $notification_user = $notification_user_id ?? $userId; // Store in variable
+                $stmtNotification->bindParam(':message', $message, PDO::PARAM_STR);
+                $stmtNotification->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtNotification->bindParam(':notification_user_id', $notification_user, PDO::PARAM_INT);
+                $stmtNotification->execute();
             }
 
             $this->conn->commit();
@@ -749,7 +771,7 @@ class User {
                     SUM(re.reservation_equipment_quantity) AS reserved_quantity
                 FROM tbl_reservation r
                 INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                INNER JOIN tbl_reservation_equipment re ON r.reservation_id = re.reservation_reservation_id
+                INNERJOIN tbl_reservation_equipment re ON r.reservation_id = re.reservation_reservation_id
                 INNER JOIN tbl_equipments e ON re.reservation_equipment_equip_id = e.equip_id
                 WHERE r.reservation_start_date <= :endDate 
                 AND r.reservation_end_date >= :startDate
@@ -867,11 +889,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "handleApproval":
                 $reservationId = $data['reservation_id'] ?? null;
                 $isAccepted = $data['is_accepted'] ?? false;
+                $notificationMessage = $data['notification_message'] ?? '';
+                $notificationUserId = $data['notification_user_id'] ?? null;
                 if ($reservationId === null) {
                     echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
                     break;
                 }
-                echo $user->handleApproval($reservationId, $isAccepted, $userId);
+                echo $user->handleApproval($reservationId, $isAccepted, $userId, $notificationMessage, $notificationUserId);
                 break;
 
         case "declineRequest":
@@ -886,11 +910,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "handleRequest":
             $reservationId = $data['reservation_id'] ?? null;
             $isAccepted = $data['is_accepted'] ?? false;
+            $notificationMessage = $data['notification_message'] ?? '';
+            $notificationUserId = $data['notification_user_id'] ?? null;
             if ($reservationId === null) {
                 echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
                 break;
             }
-            echo $user->handleRequest($reservationId, $isAccepted, $userId);
+            echo $user->handleRequest($reservationId, $isAccepted, $userId, $notificationMessage, $notificationUserId);
             break;
 
         case "doubleCheckAvailability":

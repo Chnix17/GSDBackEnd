@@ -735,8 +735,11 @@ class User {
                     r.reservation_user_id,
                     r.reservation_created_at,
                     rs.reservation_active,
-                    sm.status_master_name AS reservation_status
+                    sm.status_master_name AS reservation_status,
+                    CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS user_full_name,
+                    d.departments_name AS department_name
                 FROM tbl_reservation AS r
+    
                 /* join exactly the one status row having the latest updated_at,
                    tie‐broken by the highest reservation_status_id */
                 LEFT JOIN tbl_reservation_status AS rs
@@ -746,11 +749,19 @@ class User {
                         WHERE reservation_reservation_id = r.reservation_id
                         ORDER BY 
                           reservation_updated_at DESC,
-                          reservation_status_id   DESC
+                          reservation_status_id DESC
                         LIMIT 1
                   )
+    
                 LEFT JOIN tbl_status_master AS sm
                   ON rs.reservation_status_status_id = sm.status_master_id
+    
+                LEFT JOIN tbl_users AS u
+                  ON r.reservation_user_id = u.users_id
+    
+                LEFT JOIN tbl_departments AS d
+                  ON u.users_department_id = d.departments_id
+    
                 ORDER BY r.reservation_start_date DESC
             ";
     
@@ -769,6 +780,98 @@ class User {
             ]);
         }
     }
+    
+
+    public function getInUse() {
+        try {
+            // Get all active reservations with status 6 (In Use)
+            $statusQuery = "SELECT reservation_reservation_id 
+                          FROM tbl_reservation_status 
+                          WHERE reservation_status_status_id = 6 
+                          AND reservation_active = 1";
+            $statusStmt = $this->conn->query($statusQuery);
+            $activeReservationIds = $statusStmt->fetchAll(PDO::FETCH_COLUMN);
+    
+            if (empty($activeReservationIds)) {
+                return json_encode(['status' => 'success', 'data' => []]);
+            }
+    
+            // Get equipment reservations with user details
+            $equipmentQuery = "
+                SELECT 
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS user_full_name,
+                    e.equip_name AS resource_name,
+                    re.reservation_equipment_quantity AS quantity,
+                    'equipment' AS resource_type
+                FROM tbl_reservation_equipment re
+                JOIN tbl_equipments e ON re.reservation_equipment_equip_id = e.equip_id
+                JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
+                JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                WHERE re.reservation_reservation_id IN (" . implode(',', $activeReservationIds) . ")";
+    
+            // Get venue reservations with user details
+            $venueQuery = "
+                SELECT 
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS user_full_name,
+                    v.ven_name AS resource_name,
+                    1 AS quantity,
+                    'venue' AS resource_type
+                FROM tbl_reservation_venue rv
+                JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
+                JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                WHERE rv.reservation_reservation_id IN (" . implode(',', $activeReservationIds) . ")";
+    
+            // Get vehicle reservations with user details
+            $vehicleQuery = "
+                SELECT 
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS user_full_name,
+                    CONCAT(vm.vehicle_model_name, ' (', v.vehicle_license, ')') AS resource_name,
+                    1 AS quantity,
+                    'vehicle' AS resource_type
+                FROM tbl_reservation_vehicle rv
+                JOIN tbl_vehicle v ON rv.reservation_vehicle_vehicle_id = v.vehicle_id
+                JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                WHERE rv.reservation_reservation_id IN (" . implode(',', $activeReservationIds) . ")";
+    
+            // Execute all queries
+            $equipment = $this->conn->query($equipmentQuery)->fetchAll(PDO::FETCH_ASSOC);
+            $venues = $this->conn->query($venueQuery)->fetchAll(PDO::FETCH_ASSOC);
+            $vehicles = $this->conn->query($vehicleQuery)->fetchAll(PDO::FETCH_ASSOC);
+    
+            // Combine all results
+            $result = array_merge($equipment, $venues, $vehicles);
+    
+            return json_encode([
+                'status' => 'success',
+                'data' => $result
+            ]);
+    
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
     
 }
 
@@ -903,6 +1006,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
         case "fetchAllReservations":
             echo $user->fetchAllReservations();
+            break;
+        case "getInUse":
+            echo $user->getInUse();
             break;
     
         default:

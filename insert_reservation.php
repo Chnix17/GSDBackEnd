@@ -625,7 +625,7 @@ class Reservation {
             // Initialize status SQL based on user level
             $statusSql = "";
     
-            if ($userLevelId == 3 || $userLevelId == 6) {
+            if ($userLevelId == 3 || $userLevelId == 6 || $userLevelId == 16 || $userLevelId == 17) {
                 // If user level is 3 or 6, set reservation as pending with active 1
                 $statusSql = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
@@ -639,6 +639,22 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create reservation status'];
                 }
+
+                // Insert notification for waiting for approval
+                $notificationSql = "INSERT INTO tbl_notification_reservation 
+                                  (notification_message, notification_reservation_reservation_id, 
+                                   notification_user_id, notification_created_at)
+                                  VALUES ('Your reservation is waiting for approval', 
+                                         :reservation_id, :user_id, NOW())";
+                $notificationStmt = $this->conn->prepare($notificationSql);
+                $notificationStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $notificationStmt->bindValue(':user_id', $data['user_id'], PDO::PARAM_INT);
+                
+                if (!$notificationStmt->execute()) {
+                    $this->conn->rollBack();
+                    return ['status' => 'error', 'message' => 'Failed to create notification'];
+                }
+
             } elseif ($userLevelId == 5 || $userLevelId == 15) {
                 // Status 1 = Pending, active = 0
                 $statusSql1 = "INSERT INTO tbl_reservation_status 
@@ -658,12 +674,27 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create first reservation status'];
                 }
-    
+
                 $statusStmt2 = $this->conn->prepare($statusSql2);
                 $statusStmt2->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
                 if (!$statusStmt2->execute()) {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create second reservation status'];
+                }
+
+                // Insert notification for waiting for confirmation
+                $notificationSql = "INSERT INTO tbl_notification_reservation 
+                                  (notification_message, notification_reservation_reservation_id, 
+                                   notification_user_id, notification_created_at)
+                                  VALUES ('Your reservation is waiting for confirmation', 
+                                         :reservation_id, :user_id, NOW())";
+                $notificationStmt = $this->conn->prepare($notificationSql);
+                $notificationStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $notificationStmt->bindValue(':user_id', $data['user_id'], PDO::PARAM_INT);
+                
+                if (!$notificationStmt->execute()) {
+                    $this->conn->rollBack();
+                    return ['status' => 'error', 'message' => 'Failed to create notification'];
                 }
             } else {
                 // Default case: set as pending with active 1
