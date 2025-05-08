@@ -17,7 +17,10 @@ class User {
     // Fetch approval requests based on department ID
     public function fetchApprovalByDept($departmentId) {
         if (!$departmentId) {
-            return json_encode(['status' => 'error', 'message' => 'Department ID is required']);
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Department ID is required'
+            ]);
         }
     
         try {
@@ -33,197 +36,218 @@ class User {
                     r.reservation_user_id,
                     rs.reservation_status_status_id AS status_id,
                     rs.reservation_active AS active,
-                    ul.user_level_id,
-                    ul.user_level_name AS userlevel_name,
-                    CONCAT(
-                        u_req.users_fname, ' ',
-                        u_req.users_mname, ' ',
+                    CONCAT_WS(' ',
+                        u_req.users_fname,
+                        u_req.users_mname,
                         u_req.users_lname
                     ) AS requester_name,
                     dep.departments_name AS department_name,
+    
+                    -- Venues
                     GROUP_CONCAT(DISTINCT
-                        CONCAT(
-                            v.reservation_venue_venue_id, ':',
-                            venue.ven_name, ':',
-                            venue.ven_occupancy, ':',
-                            venue.ven_operating_hours, ':',
-                            IFNULL(venue.ven_pic, '')
+                        CONCAT_WS(':',
+                            v.reservation_venue_venue_id,
+                            venue.ven_name,
+                            venue.ven_occupancy,
+                            venue.ven_operating_hours,
+                            IFNULL(venue.ven_pic,'')
                         )
                     ) AS venue_data,
+    
+                    -- Vehicles
                     GROUP_CONCAT(DISTINCT
-                        CONCAT(
-                            ve.reservation_vehicle_vehicle_id, ':',
-                            vm.vehicle_license, ':',
+                        CONCAT_WS(':',
+                            ve.reservation_vehicle_vehicle_id,
+                            vm.vehicle_license,
                             vmm.vehicle_model_name
                         )
                     ) AS vehicle_data,
+    
+                    -- Equipment
                     GROUP_CONCAT(DISTINCT
-                        CONCAT(
-                            e.reservation_equipment_equip_id, ':',
-                            equip.equip_name, ':',
+                        CONCAT_WS(':',
+                            e.reservation_equipment_equip_id,
+                            equip.equip_name,
                             e.reservation_equipment_quantity
                         )
                     ) AS equipment_data,
+    
+                    -- Reservation_driver fields
+                    d.reservation_driver_id,
                     d.reservation_driver_user_id AS driver_id,
-                    drv.driver_first_name,
-                    drv.driver_middle_name,
-                    drv.driver_last_name,
+                    CONCAT_WS(' ',
+                        drv.driver_first_name,
+                        drv.driver_middle_name,
+                        drv.driver_last_name
+                    ) AS driver_name,
                     d.is_accepted_trip,
+    
+                    -- Passengers
                     GROUP_CONCAT(DISTINCT
-                        CONCAT(
-                            p.reservation_passenger_id, ':',
+                        CONCAT_WS(':',
+                            p.reservation_passenger_id,
                             p.reservation_passenger_name
                         )
                     ) AS passenger_data
+    
                 FROM tbl_reservation r
-                LEFT JOIN tbl_users u_req ON r.reservation_user_id = u_req.users_id
-                LEFT JOIN tbl_user_level ul ON u_req.users_user_level_id = ul.user_level_id
-                LEFT JOIN tbl_departments dep ON u_req.users_department_id = dep.departments_id
-                LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
-                LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
-                LEFT JOIN tbl_reservation_vehicle ve ON r.reservation_id = ve.reservation_reservation_id
-                LEFT JOIN tbl_vehicle vm ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
-                LEFT JOIN tbl_vehicle_model vmm ON vm.vehicle_model_id = vmm.vehicle_model_id
-                LEFT JOIN tbl_reservation_equipment e ON r.reservation_id = e.reservation_reservation_id
-                LEFT JOIN tbl_equipments equip ON e.reservation_equipment_equip_id = equip.equip_id
-                LEFT JOIN tbl_reservation_driver d ON r.reservation_id = d.reservation_reservation_id
-                LEFT JOIN tbl_driver drv ON d.reservation_driver_user_id = drv.driver_id
-                LEFT JOIN tbl_reservation_passenger p ON r.reservation_id = p.reservation_reservation_id
+                LEFT JOIN tbl_users u_req 
+                  ON r.reservation_user_id = u_req.users_id
+                LEFT JOIN tbl_departments dep 
+                  ON u_req.users_department_id = dep.departments_id
+                LEFT JOIN tbl_reservation_status rs 
+                  ON r.reservation_id = rs.reservation_reservation_id
+                LEFT JOIN tbl_reservation_venue v 
+                  ON r.reservation_id = v.reservation_reservation_id
+                LEFT JOIN tbl_venue venue 
+                  ON v.reservation_venue_venue_id = venue.ven_id
+                LEFT JOIN tbl_reservation_vehicle ve 
+                  ON r.reservation_id = ve.reservation_reservation_id
+                LEFT JOIN tbl_vehicle vm 
+                  ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
+                LEFT JOIN tbl_vehicle_model vmm 
+                  ON vm.vehicle_model_id = vmm.vehicle_model_id
+                LEFT JOIN tbl_reservation_equipment e 
+                  ON r.reservation_id = e.reservation_reservation_id
+                LEFT JOIN tbl_equipments equip 
+                  ON e.reservation_equipment_equip_id = equip.equip_id
+                LEFT JOIN tbl_reservation_driver d 
+                  ON r.reservation_id = d.reservation_reservation_id
+                LEFT JOIN tbl_driver drv 
+                  ON d.reservation_driver_user_id = drv.driver_id
+                LEFT JOIN tbl_reservation_passenger p 
+                  ON r.reservation_id = p.reservation_reservation_id
+    
                 WHERE
                     (
-                        (:department_id = 29 AND u_req.users_user_level_id IN (16, 17))
+                        (:department_id = 29 AND u_req.users_user_level_id IN (16,17))
                         OR
-                        (:department_id != 29 AND u_req.users_department_id = :department_id AND u_req.users_user_level_id NOT IN (16, 17))
+                        (:department_id != 29 
+                          AND u_req.users_department_id = :department_id
+                          AND u_req.users_user_level_id NOT IN (16,17)
+                        )
                     )
                     AND EXISTS (
                         SELECT 1
                         FROM tbl_reservation_status rs1
                         WHERE
                             rs1.reservation_reservation_id = r.reservation_id
-                            AND rs1.reservation_status_status_id = 1
-                            AND rs1.reservation_active = 1
+                          AND rs1.reservation_status_status_id = 1
+                          AND rs1.reservation_active = 1
                     )
                     AND NOT EXISTS (
                         SELECT 1
                         FROM tbl_reservation_status rs2
                         WHERE
                             rs2.reservation_reservation_id = r.reservation_id
-                            AND rs2.reservation_status_status_id IN (2,3,4,5,6)
+                          AND rs2.reservation_status_status_id IN (2,3,4,5,6)
                     )
                 GROUP BY r.reservation_id
-                ";
+            ";
     
             $stmt = $this->conn->prepare($sql);
             $stmt->execute(['department_id' => $departmentId]);
     
             $result = [];
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                // Process venues
-                $venues = [];
-                if (!empty($row['venue_data'])) {
-                    foreach(explode(',', $row['venue_data']) as $venueStr) {
-                        $venueParts = explode(':', $venueStr);
-                        if (count($venueParts) >= 5) {
-                            $venues[] = [
-                                'venue_id' => $venueParts[0],
-                                'venue_name' => $venueParts[1],
-                                'occupancy' => $venueParts[2],
-                                'operating_hours' => $venueParts[3],
-                                'picture' => $venueParts[4]
-                            ];
-                        }
-                    }
-                }
-
-                // Process vehicles
-                $vehicles = [];
-                if (!empty($row['vehicle_data'])) {
-                    foreach(explode(',', $row['vehicle_data']) as $vehicleStr) {
-                        $vehicleParts = explode(':', $vehicleStr);
-                        if (count($vehicleParts) >= 3) {
-                            $vehicles[] = [
-                                'vehicle_id' => $vehicleParts[0],
-                                'license' => $vehicleParts[1],
-                                'model' => $vehicleParts[2]
-                            ];
-                        }
-                    }
-                }
-
-                // Process equipment
-                $equipment = [];
-                if (!empty($row['equipment_data'])) {
-                    foreach(explode(',', $row['equipment_data']) as $equipStr) {
-                        $equipParts = explode(':', $equipStr);
-                        if (count($equipParts) >= 3) {
-                            $equipment[] = [
-                                'equipment_id' => $equipParts[0],
-                                'name' => $equipParts[1],
-                                'quantity' => $equipParts[2]
-                            ];
-                        }
-                    }
-                }
-
-                // Process drivers
-                if ($row['driver_id']) {
-                    $drivers[] = [
-                        'driver_id' => $row['driver_id'],
-                        'name' => trim($row['driver_first_name'] . ' ' . $row['driver_middle_name'] . ' ' . $row['driver_last_name']),
-                        'is_accepted_trip' => $row['is_accepted_trip']
-                    ];
-                } else {
-                    $drivers[] = [
-                        'driver_id' => null,
-                        'name' => null,
-                        'is_accepted_trip' => null
-                    ];
-                }
-
-                // Process passengers
+                // reset per‐row lists
+                $venues     = [];
+                $vehicles   = [];
+                $equipment  = [];
+                $drivers    = [];
                 $passengers = [];
-                if (!empty($row['passenger_data'])) {
-                    foreach(explode(',', $row['passenger_data']) as $passengerStr) {
-                        $passengerParts = explode(':', $passengerStr);
-                        if (count($passengerParts) >= 2) {
-                            $passengers[] = [
-                                'passenger_id' => $passengerParts[0],
-                                'name' => $passengerParts[1]
-                            ];
-                        }
+    
+                // venues
+                if (!empty($row['venue_data'])) {
+                    foreach (explode(',', $row['venue_data']) as $str) {
+                        list($vid,$vname,$occ,$hours,$pic) = explode(':', $str) + [null,null,null,null,null];
+                        $venues[] = [
+                            'venue_id'        => $vid,
+                            'venue_name'      => $vname,
+                            'occupancy'       => $occ,
+                            'operating_hours' => $hours,
+                            'picture'         => $pic
+                        ];
                     }
                 }
-
-                // Construct the response object
+    
+                // vehicles
+                if (!empty($row['vehicle_data'])) {
+                    foreach (explode(',', $row['vehicle_data']) as $str) {
+                        list($vid,$license,$model) = explode(':', $str) + [null,null,null];
+                        $vehicles[] = [
+                            'vehicle_id' => $vid,
+                            'license'    => $license,
+                            'model'      => $model
+                        ];
+                    }
+                }
+    
+                // equipment
+                if (!empty($row['equipment_data'])) {
+                    foreach (explode(',', $row['equipment_data']) as $str) {
+                        list($eid,$ename,$qty) = explode(':', $str) + [null,null,null];
+                        $equipment[] = [
+                            'equipment_id' => $eid,
+                            'name'         => $ename,
+                            'quantity'     => $qty
+                        ];
+                    }
+                }
+    
+                // drivers — include as long as reservation_driver_id is not null
+                if (!empty($row['reservation_driver_id'])) {
+                    $drivers[] = [
+                        'reservation_driver_id' => $row['reservation_driver_id'],
+                        'driver_id'             => $row['driver_id'],       // may be null
+                        'name'                  => $row['driver_name'],     // may be empty
+                        'is_accepted_trip'      => (int)$row['is_accepted_trip']
+                    ];
+                }
+    
+                // passengers
+                if (!empty($row['passenger_data'])) {
+                    foreach (explode(',', $row['passenger_data']) as $str) {
+                        list($pid,$pname) = explode(':', $str) + [null,null];
+                        $passengers[] = [
+                            'passenger_id' => $pid,
+                            'name'         => $pname
+                        ];
+                    }
+                }
+    
                 $result[] = [
-                    'reservation_id' => $row['reservation_id'],
-                    'reservation_created_at' => $row['reservation_created_at'],
-                    'reservation_title' => $row['reservation_title'],
-                    'reservation_description' => $row['reservation_description'],
-                    'reservation_start_date' => $row['reservation_start_date'],
-                    'reservation_end_date' => $row['reservation_end_date'],
+                    'reservation_id'           => $row['reservation_id'],
+                    'reservation_created_at'   => $row['reservation_created_at'],
+                    'reservation_title'        => $row['reservation_title'],
+                    'reservation_description'  => $row['reservation_description'],
+                    'reservation_start_date'   => $row['reservation_start_date'],
+                    'reservation_end_date'     => $row['reservation_end_date'],
                     'reservation_participants' => $row['reservation_participants'],
-                    'reservation_user_id' => $row['reservation_user_id'],
-                    'status_id' => $row['status_id'],
-                    'active' => $row['active'],
-                    'requester_name' => $row['requester_name'],
-                    'department_name' => $row['department_name'],
-                    'venues' => $venues,
-                    'vehicles' => $vehicles,
-                    'equipment' => $equipment,
-                    'drivers' => $drivers,
-                    'passengers' => $passengers
+                    'reservation_user_id'      => $row['reservation_user_id'],
+                    'status_id'                => $row['status_id'],
+                    'active'                   => $row['active'],
+                    'requester_name'           => $row['requester_name'],
+                    'department_name'          => $row['department_name'],
+                    'venues'                   => $venues,
+                    'vehicles'                 => $vehicles,
+                    'equipment'                => $equipment,
+                    'drivers'                  => $drivers,
+                    'passengers'               => $passengers
                 ];
             }
     
-            return json_encode(['status' => 'success', 'data' => $result]);
+            return json_encode(['status'=>'success','data'=>$result]);
     
         } catch (PDOException $e) {
-            error_log("Database error: " . $e->getMessage());
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+            error_log("Database error: ".$e->getMessage());
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Database error: '.$e->getMessage()
+            ]);
         }
     }
+    
 
     
 

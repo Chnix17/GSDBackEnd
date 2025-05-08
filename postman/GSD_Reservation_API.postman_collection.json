@@ -1,0 +1,57 @@
+{
+    "info": {
+        "name": "GSD Reservation API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Fetch Request By ID",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"operation\": \"fetchRequestById\",\n    \"reservation_id\": 1\n}"
+                },
+                "url": {
+                    "raw": "http://localhost/coc/gsd/process_reservation.php",
+                    "protocol": "http",
+                    "host": ["localhost"],
+                    "path": ["coc", "gsd", "process_reservation.php"]
+                },
+                "description": "Fetches a specific reservation request by its ID"
+            },
+            "response": [
+                {
+                    "name": "Success Response",
+                    "originalRequest": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"operation\": \"fetchRequestById\",\n    \"reservation_id\": 1\n}"
+                        },
+                        "url": {
+                            "raw": "http://localhost/coc/gsd/process_reservation.php"
+                        }
+                    },
+                    "status": "OK",
+                    "code": 200,
+                    "_postman_previewlanguage": "json",
+                    "header": [
+                        {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ],
+                    "body": "{\n    \"status\": \"success\",\n    \"data\": {\n        \"reservation_id\": \"1\",\n        \"reservation_created_at\": \"2024-02-15 10:30:00\",\n        \"reservation_title\": \"Sample Reservation\",\n        \"reservation_description\": \"Description of the reservation\",\n        \"reservation_start_date\": \"2024-02-16 09:00:00\",\n        \"reservation_end_date\": \"2024-02-16 17:00:00\",\n        \"reservation_participants\": \"50\",\n        \"status_id\": \"1\",\n        \"active\": \"1\",\n        \"reservation_user_id\": \"123\",\n        \"requester_name\": \"John Doe\",\n        \"department_name\": \"IT Department\",\n        \"user_level_name\": \"Faculty\",\n        \"venues\": [\n            {\n                \"venue_id\": \"1\",\n                \"venue_name\": \"Conference Room A\",\n                \"occupancy\": \"100\",\n                \"operating_hours\": \"8:00-17:00\",\n                \"picture\": \"venue_picture.jpg\"\n            }\n        ],\n        \"vehicles\": [\n            {\n                \"vehicle_id\": \"1\",\n                \"license\": \"ABC-123\",\n                \"model\": \"Toyota Hiace\"\n            }\n        ],\n        \"equipment\": [\n            {\n                \"equipment_id\": \"1\",\n                \"name\": \"Projector\",\n                \"quantity\": \"2\"\n            }\n        ],\n        \"drivers\": [\n            {\n                \"reservation_driver_id\": \"1\",\n                \"driver_id\": \"1\",\n                \"name\": \"Driver Name\",\n                \"is_accepted_trip\": \"1\"\n            }\n        ],\n        \"passengers\": [\n            {\n                \"passenger_id\": \"1\",\n                \"name\": \"Passenger Name\"\n            }\n        ]\n    }\n}"
+                }
+            ]
+        }
+    ]
+}
