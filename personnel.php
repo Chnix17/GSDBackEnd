@@ -32,7 +32,6 @@ class User {
         }
     
         try {
-            // Prepare the final response array
             $reservations = [];
     
             // 1) Venue checklist items
@@ -44,8 +43,10 @@ class User {
                     rv.reservation_reservation_id,
                     rv.reservation_venue_id,
                     rv.reservation_venue_venue_id,
-                    v.ven_name AS venue_name,
-                    cvc.checklist_name AS checklist_venue_name
+                    rv.is_released      AS venue_is_released,
+                    rv.is_returned      AS venue_is_returned,
+                    v.ven_name          AS venue_name,
+                    cvc.checklist_name  AS checklist_venue_name
                 FROM tbl_reservation_checklist_venue rc_venue
                 INNER JOIN tbl_reservation_venue rv 
                     ON rc_venue.reservation_venue_id = rv.reservation_venue_id
@@ -57,13 +58,13 @@ class User {
                     ON rv.reservation_reservation_id = r.reservation_id
                 INNER JOIN tbl_reservation_status rs 
                     ON r.reservation_id = rs.reservation_reservation_id
-                WHERE rc_venue.personnel_id       = :personnel_id
+                WHERE rc_venue.personnel_id          = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active        = 1
+                  AND rs.reservation_active           = 1
             ";
-            $stmtVenue = $this->conn->prepare($sqlVenue);
+            $stmtVenue   = $this->conn->prepare($sqlVenue);
             $stmtVenue->execute(['personnel_id' => $personnel_id]);
-            $venueData = $stmtVenue->fetchAll(PDO::FETCH_ASSOC);
+            $venueData   = $stmtVenue->fetchAll(PDO::FETCH_ASSOC);
     
             // 2) Vehicle checklist items
             $sqlVehicle = "
@@ -74,6 +75,8 @@ class User {
                     rv.reservation_reservation_id,
                     rv.reservation_vehicle_id,
                     rv.reservation_vehicle_vehicle_id,
+                    rv.is_released      AS vehicle_is_released,
+                    rv.is_returned      AS vehicle_is_returned,
                     vm.vehicle_license,
                     vm.vehicle_model_id,
                     cvcv.checklist_name AS checklist_vehicle_name
@@ -88,15 +91,15 @@ class User {
                     ON rv.reservation_reservation_id = r.reservation_id
                 INNER JOIN tbl_reservation_status rs 
                     ON r.reservation_id = rs.reservation_reservation_id
-                WHERE rc_vehicle.personnel_id       = :personnel_id
+                WHERE rc_vehicle.personnel_id          = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active        = 1
+                  AND rs.reservation_active           = 1
             ";
             $stmtVehicle = $this->conn->prepare($sqlVehicle);
             $stmtVehicle->execute(['personnel_id' => $personnel_id]);
             $vehicleData = $stmtVehicle->fetchAll(PDO::FETCH_ASSOC);
     
-            // 3) Equipment checklist items (with quantity)
+            // 3) Equipment checklist items
             $sqlEquipment = "
                 SELECT 
                     rc_equipment.checklist_equipment_id,
@@ -105,9 +108,11 @@ class User {
                     re.reservation_reservation_id,
                     re.reservation_equipment_id,
                     re.reservation_equipment_equip_id,
-                    re.reservation_equipment_quantity    AS quantity,
+                    re.reservation_equipment_quantity       AS quantity,
+                    re.is_released      AS equipment_is_released,
+                    re.is_returned      AS equipment_is_returned,
                     e.equip_name,
-                    cvce.checklist_name                AS checklist_equipment_name
+                    cvce.checklist_name                     AS checklist_equipment_name
                 FROM tbl_reservation_checklist_equipment rc_equipment
                 INNER JOIN tbl_reservation_equipment re 
                     ON rc_equipment.reservation_equipment_id = re.reservation_equipment_id
@@ -119,20 +124,18 @@ class User {
                     ON re.reservation_reservation_id = r.reservation_id
                 INNER JOIN tbl_reservation_status rs 
                     ON r.reservation_id = rs.reservation_reservation_id
-                WHERE rc_equipment.personnel_id       = :personnel_id
+                WHERE rc_equipment.personnel_id          = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active        = 1
+                  AND rs.reservation_active           = 1
             ";
-            $stmtEquipment = $this->conn->prepare($sqlEquipment);
+            $stmtEquipment  = $this->conn->prepare($sqlEquipment);
             $stmtEquipment->execute(['personnel_id' => $personnel_id]);
-            $equipmentData = $stmtEquipment->fetchAll(PDO::FETCH_ASSOC);
+            $equipmentData  = $stmtEquipment->fetchAll(PDO::FETCH_ASSOC);
     
-            // Merge all checklist rows
+            // Merge all checklist rows into $reservations
             foreach (array_merge($venueData, $vehicleData, $equipmentData) as $row) {
                 $rid = $row['reservation_reservation_id'];
-    
                 if (!isset($reservations[$rid])) {
-                    // initialize
                     $reservations[$rid] = [
                         'reservation_id'          => $rid,
                         'reservation_title'       => '',
@@ -141,81 +144,65 @@ class User {
                         'reservation_end_date'    => '',
                         'reservation_participants'=> '',
                         'reservation_user_id'     => '',
-                        'user_details'            => [
-                            'full_name'  => '',
-                            'department' => '',
-                            'role'       => ''
-                        ],
-                        'venue' => [
-                            'reservation_venue_id'        => null,
-                            'reservation_venue_venue_id'  => null,
-                            'name'                        => '',
-                            'checklists'                  => []
-                        ],
-                        'vehicle' => [
-                            'reservation_vehicle_id'        => null,
-                            'reservation_vehicle_vehicle_id'=> null,
-                            'vehicle_license'               => '',
-                            'vehicle_model_id'              => null,
-                            'checklists'                    => []
-                        ],
-                        'equipment' => [
-                            'reservation_equipment_id'      => null,
-                            'reservation_equipment_equip_id' => null,
-                            'name'                          => '',
-                            'quantity'                      => null,
-                            'checklists'                    => []
-                        ]
+                        'user_details'            => [],
+                        'venue'     => ['checklists'=> [], 'is_released'=> null, 'is_returned'=> null],
+                        'vehicle'   => ['checklists'=> [], 'is_released'=> null, 'is_returned'=> null],
+                        'equipment' => ['checklists'=> [], 'is_released'=> null, 'is_returned'=> null],
                     ];
                 }
     
                 // venue
-                if (isset($row['reservation_venue_venue_id'])) {
+                if (isset($row['reservation_venue_id'])) {
                     $reservations[$rid]['venue']['reservation_venue_id']       = $row['reservation_venue_id'];
                     $reservations[$rid]['venue']['reservation_venue_venue_id'] = $row['reservation_venue_venue_id'];
-                    $reservations[$rid]['venue']['name']                       = $row['venue_name'];
+                    $reservations[$rid]['venue']['name']                      = $row['venue_name'];
+                    $reservations[$rid]['venue']['is_released']               = $row['venue_is_released'] !== null ? (int)$row['venue_is_released'] : null;
+                    $reservations[$rid]['venue']['is_returned']               = $row['venue_is_returned'] !== null ? (int)$row['venue_is_returned'] : null;
                     $reservations[$rid]['venue']['checklists'][] = [
                         'checklist_venue_id'            => $row['checklist_venue_id'],
                         'reservation_checklist_venue_id'=> $row['reservation_checklist_venue_id'],
                         'checklist_name'                => $row['checklist_venue_name'],
-                        'isChecked'                     => $row['venue_isChecked']
+                        'isChecked'                     => (int)$row['venue_isChecked']
                     ];
                 }
     
                 // vehicle
-                if (isset($row['reservation_vehicle_vehicle_id'])) {
+                if (isset($row['reservation_vehicle_id'])) {
                     $reservations[$rid]['vehicle']['reservation_vehicle_id']         = $row['reservation_vehicle_id'];
                     $reservations[$rid]['vehicle']['reservation_vehicle_vehicle_id'] = $row['reservation_vehicle_vehicle_id'];
-                    $reservations[$rid]['vehicle']['vehicle_license']                = $row['vehicle_license'];
-                    $reservations[$rid]['vehicle']['vehicle_model_id']               = $row['vehicle_model_id'];
+                    $reservations[$rid]['vehicle']['vehicle_license']               = $row['vehicle_license'];
+                    $reservations[$rid]['vehicle']['vehicle_model_id']              = $row['vehicle_model_id'];
+                    $reservations[$rid]['vehicle']['is_released']                   = $row['vehicle_is_released'] !== null ? (int)$row['vehicle_is_released'] : null;
+                    $reservations[$rid]['vehicle']['is_returned']                   = $row['vehicle_is_returned'] !== null ? (int)$row['vehicle_is_returned'] : null;
                     $reservations[$rid]['vehicle']['checklists'][] = [
                         'checklist_vehicle_id'               => $row['checklist_vehicle_id'],
                         'reservation_checklist_vehicle_id'   => $row['reservation_checklist_vehicle_id'],
                         'checklist_name'                     => $row['checklist_vehicle_name'],
-                        'isChecked'                          => $row['vehicle_isChecked']
+                        'isChecked'                          => (int)$row['vehicle_isChecked']
                     ];
                 }
     
                 // equipment
-                if (isset($row['reservation_equipment_equip_id'])) {
+                if (isset($row['reservation_equipment_id'])) {
                     $reservations[$rid]['equipment']['reservation_equipment_id']      = $row['reservation_equipment_id'];
                     $reservations[$rid]['equipment']['reservation_equipment_equip_id'] = $row['reservation_equipment_equip_id'];
                     $reservations[$rid]['equipment']['name']                          = $row['equip_name'];
                     $reservations[$rid]['equipment']['quantity']                      = $row['quantity'];
+                    $reservations[$rid]['equipment']['is_released']                   = $row['equipment_is_released'] !== null ? (int)$row['equipment_is_released'] : null;
+                    $reservations[$rid]['equipment']['is_returned']                   = $row['equipment_is_returned'] !== null ? (int)$row['equipment_is_returned'] : null;
                     $reservations[$rid]['equipment']['checklists'][] = [
                         'checklist_equipment_id'               => $row['checklist_equipment_id'],
                         'reservation_checklist_equipment_id'   => $row['reservation_checklist_equipment_id'],
                         'checklist_name'                       => $row['checklist_equipment_name'],
-                        'isChecked'                            => $row['equipment_isChecked']
+                        'isChecked'                            => (int)$row['equipment_isChecked']
                     ];
                 }
             }
     
-            // Now fetch header & user info for each reservation
+            // 4) Fetch reservation header & user info
             foreach ($reservations as $rid => &$res) {
                 $sqlR = "
                     SELECT 
-                        r.reservation_id, 
                         r.reservation_title,
                         r.reservation_description,
                         r.reservation_start_date,
@@ -275,6 +262,7 @@ class User {
             ]);
         }
     }
+    
     
  
     
@@ -872,6 +860,66 @@ public function updateReservationStatus($reservation_id) {
     }
 }
 
+public function updateRelease($type, $reservation_id, $status) {
+    try {
+        $status = (int)$status;
+
+        switch ($type) {
+            case 'venue':
+                $sql = "UPDATE tbl_reservation_venue SET is_released = :status WHERE reservation_venue_id = :reservation_id";
+                break;
+            case 'vehicle':
+                $sql = "UPDATE tbl_reservation_vehicle SET is_released = :status WHERE reservation_vehicle_id = :reservation_id";
+                break;
+            case 'equipment':
+                $sql = "UPDATE tbl_reservation_equipment SET is_released = :status WHERE reservation_equipment_id = :reservation_id";
+                break;
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid type']);
+        }
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([
+            'status' => $status,
+            'reservation_id' => $reservation_id
+        ]);
+
+        return json_encode(['status' => 'success', 'message' => 'Release status updated']);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function updateReturn($type, $reservation_id, $status) {
+    try {
+        $status = (int)$status;
+
+        switch ($type) {
+            case 'venue':
+                $sql = "UPDATE tbl_reservation_venue SET is_returned = :status WHERE reservation_venue_id = :reservation_id";
+                break;
+            case 'vehicle':
+                $sql = "UPDATE tbl_reservation_vehicle SET is_returned = :status WHERE reservation_vehicle_id = :reservation_id";
+                break;
+            case 'equipment':
+                $sql = "UPDATE tbl_reservation_equipment SET is_returned = :status WHERE reservation_equipment_id = :reservation_id";
+                break;
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid type']);
+        }
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([
+            'status' => $status,
+            'reservation_id' => $reservation_id
+        ]);
+
+        return json_encode(['status' => 'success', 'message' => 'Return status updated']);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 }
 
 // Handle the request
@@ -975,6 +1023,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]));
             }
             echo $user->updateReservationStatus($reservation_id);
+            break;
+        case 'updateRelease':
+            $type = $jsonInput['type'] ?? null;
+            $reservation_id = $jsonInput['reservation_id'] ?? null;
+            $status = $jsonInput['status'] ?? null;
+            if (!$type || !$reservation_id || !isset($status)) {
+                die(json_encode([
+                    'status' => 'error',
+                    'message' => 'Type, Reservation ID, and Status are required',
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]));
+            }
+            echo $user->updateRelease($type, $reservation_id, $status);
+            break;
+        case 'updateReturn':
+            $type = $jsonInput['type'] ?? null;
+            $reservation_id = $jsonInput['reservation_id'] ?? null;
+            $status = $jsonInput['status'] ?? null;
+            if (!$type || !$reservation_id || !isset($status)) {
+                die(json_encode([
+                    'status' => 'error',
+                    'message' => 'Type, Reservation ID, and Status are required',
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]));
+            }
+            echo $user->updateReturn($type, $reservation_id, $status);
             break;
     
         default:

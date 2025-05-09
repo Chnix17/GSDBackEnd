@@ -447,6 +447,53 @@ class User {
         }
     }
 
+    public function saveHoliday($data) {
+        try {
+            // If data is a JSON string, decode it
+            if (is_string($data)) {
+                $data = json_decode($data, true);
+            }
+
+            // Validate decoded data
+            if (!$data || !is_array($data)) {
+                return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+            }
+
+            // Check required fields
+            if (!isset($data['holiday_name']) || !isset($data['holiday_date'])) {
+                return json_encode(['status' => 'error', 'message' => 'Holiday name and date are required']);
+            }
+
+            // Check if holiday already exists on the same date
+            $checkSql = "SELECT COUNT(*) FROM tbl_holidays WHERE holiday_date = :holiday_date";
+            $checkStmt = $this->conn->prepare($checkSql);
+            $checkStmt->bindParam(':holiday_date', $data['holiday_date']);
+            $checkStmt->execute();
+            
+            if ($checkStmt->fetchColumn() > 0) {
+                return json_encode(['status' => 'error', 'message' => 'A holiday already exists on this date']);
+            }
+
+            // Insert the holiday
+            $sql = "INSERT INTO tbl_holidays (holiday_name, holiday_date) VALUES (:name, :date)";
+            $stmt = $this->conn->prepare($sql);
+            
+            $stmt->bindParam(':name', $data['holiday_name'], PDO::PARAM_STR);
+            $stmt->bindParam(':date', $data['holiday_date'], PDO::PARAM_STR);
+
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Holiday added successfully'
+                ]);
+            }
+
+            return json_encode(['status' => 'error', 'message' => 'Failed to add holiday']);
+        } catch(PDOException $e) {
+            error_log("Database error in saveHoliday: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
 }
 
 // Handle the request
@@ -471,6 +518,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             case "saveEquipment": 
                 echo $user->saveEquipment(json_encode($data));
+                break;
+            case "saveHoliday":
+                echo $user->saveHoliday($data);
                 break;
             default:
                 echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

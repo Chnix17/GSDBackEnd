@@ -151,6 +151,12 @@ class VehicleMake {
         unset($this->conn); // Clean up the database connection
     }
 
+    public function fetchHoliday() {
+        $sql = "SELECT `holiday_id`, `holiday_name`, `holiday_date` FROM `tbl_holidays` WHERE 1";
+        return $this->executeQuery($sql);
+    }
+
+
     // New method to fetch equipment by ID and join with equipment category
     public function fetchEquipmentById($id) {
         $sql = "
@@ -543,6 +549,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'userid parameter is missing']);
             }
+            break;
+        case "fetchHoliday":
+            echo $vehicleMake->fetchHoliday(); // Fetch all holidays
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

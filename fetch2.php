@@ -559,7 +559,7 @@ class User {
 
     public function getReservedById($reservation_id) {
         try {
-            // 1. Fetch the reservation details (main table)
+            // 1. Fetch the reservation details
             $reservationSql = "
                 SELECT 
                     reservation_id,
@@ -579,20 +579,19 @@ class User {
             $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
             $stmt->execute();
             $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
-            
+    
             if (!$reservation) {
                 return json_encode(['status' => 'error', 'message' => 'Reservation not found']);
             }
-            
-            // Initialize result array with reservation data and empty arrays for venues, vehicles, and equipment
+    
             $result = [
                 'reservation' => $reservation,
                 'venues'      => [],
                 'vehicles'    => [],
                 'equipments'  => []
             ];
-            
-            // 2. Fetch all associated venues for the reservation
+    
+            // 2. Fetch venues
             $venueSql = "
                 SELECT 
                     rv.reservation_venue_id, 
@@ -606,41 +605,36 @@ class User {
             $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
             $stmt->execute();
             $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            if ($venues) {
-                foreach ($venues as $venueRow) {
-                    $venueDetail = [];
-                    $venueDetail['reservation_venue_id'] = $venueRow['reservation_venue_id'];
-                    $venueDetail['venue_id'] = $venueRow['venue_id'];
-                    
-                    // Get venue name
-                    $venNameSql = "
-                        SELECT ven_name 
-                        FROM tbl_venue 
-                        WHERE ven_id = :venue_id
-                    ";
-                    $stmtName = $this->conn->prepare($venNameSql);
-                    $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
-                    $stmtName->execute();
-                    $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
-                    $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
-                    
-                    // Get checklist items for this venue
-                    $checklistVenueSql = "
-                        SELECT checklist_venue_id, checklist_name 
-                        FROM tbl_checklist_venue_master 
-                        WHERE checklist_venue_ven_id = :venue_id
-                    ";
-                    $stmtChecklist = $this->conn->prepare($checklistVenueSql);
-                    $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
-                    $stmtChecklist->execute();
-                    $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    $result['venues'][] = $venueDetail;
-                }
+    
+            foreach ($venues as $venueRow) {
+                $venueDetail = [
+                    'reservation_venue_id' => $venueRow['reservation_venue_id'],
+                    'venue_id' => $venueRow['venue_id'],
+                    'name' => null,
+                    'checklists' => []
+                ];
+    
+                $venNameSql = "SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id";
+                $stmtName = $this->conn->prepare($venNameSql);
+                $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtName->execute();
+                $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
+                $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
+    
+                $checklistVenueSql = "
+                    SELECT checklist_venue_id, checklist_name 
+                    FROM tbl_checklist_venue_master 
+                    WHERE checklist_venue_ven_id = :venue_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistVenueSql);
+                $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['venues'][] = $venueDetail;
             }
-            
-            // 3. Fetch all associated vehicles for the reservation
+    
+            // 3. Fetch vehicles
             $vehicleSql = "
                 SELECT 
                     rvh.reservation_vehicle_id, 
@@ -654,48 +648,51 @@ class User {
             $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
             $stmt->execute();
             $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            if ($vehicles) {
-                foreach ($vehicles as $vehicleRow) {
-                    $vehicleDetail = [];
-                    $vehicleDetail['reservation_vehicle_id'] = $vehicleRow['reservation_vehicle_id'];
-                    $vehicleDetail['vehicle_id'] = $vehicleRow['vehicle_id'];
-                    
-                    // Get vehicle details (model and license)
-                    $vehicleDetailSql = "
-                        SELECT 
-                            v.vehicle_model_name, 
-                            v.vehicle_license 
-                        FROM 
-                            tbl_vehicle v
-                        LEFT JOIN 
-                            tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
-                        WHERE 
-                            v.vehicle_id = :vehicle_id
-                    ";
-                    $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
-                    $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
-                    $stmtVehicle->execute();
-                    $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
-                    $vehicleDetail['model'] = $vehicleInfo ? $vehicleInfo['vehicle_model_name'] : null;
-                    $vehicleDetail['license'] = $vehicleInfo ? $vehicleInfo['vehicle_license'] : null;
-                    
-                    // Get checklist items for this vehicle
-                    $checklistVehicleSql = "
-                        SELECT checklist_vehicle_id, checklist_name 
-                        FROM tbl_checklist_vehicle_master 
-                        WHERE checklist_vehicle_vehicle_id = :vehicle_id
-                    ";
-                    $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
-                    $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
-                    $stmtChecklist->execute();
-                    $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    $result['vehicles'][] = $vehicleDetail;
+    
+            foreach ($vehicles as $vehicleRow) {
+                $vehicleDetail = [
+                    'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
+                    'vehicle_id' => $vehicleRow['vehicle_id'],
+                    'model' => null,
+                    'license' => null,
+                    'checklists' => []
+                ];
+    
+                $vehicleDetailSql = "
+                    SELECT 
+                        vm.vehicle_model_name, 
+                        v.vehicle_license 
+                    FROM 
+                        tbl_vehicle v
+                    LEFT JOIN 
+                        tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                    WHERE 
+                        v.vehicle_id = :vehicle_id
+                ";
+                $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
+                $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtVehicle->execute();
+                $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
+    
+                if ($vehicleInfo) {
+                    $vehicleDetail['model'] = $vehicleInfo['vehicle_model_name'];
+                    $vehicleDetail['license'] = $vehicleInfo['vehicle_license'];
                 }
+    
+                $checklistVehicleSql = "
+                    SELECT checklist_vehicle_id, checklist_name 
+                    FROM tbl_checklist_vehicle_master 
+                    WHERE checklist_vehicle_vehicle_id = :vehicle_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
+                $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['vehicles'][] = $vehicleDetail;
             }
-            
-            // 4. Fetch all associated equipment for the reservation
+    
+            // 4. Fetch equipments
             $equipmentSql = "
                 SELECT 
                     re.reservation_equipment_id, 
@@ -710,47 +707,43 @@ class User {
             $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
             $stmt->execute();
             $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            if ($equipments) {
-                foreach ($equipments as $equipRow) {
-                    $equipmentDetail = [];
-                    $equipmentDetail['reservation_equipment_id'] = $equipRow['reservation_equipment_id'];
-                    $equipmentDetail['equipment_id'] = $equipRow['equipment_id'];
-                    $equipmentDetail['quantity'] = $equipRow['reservation_equipment_quantity'];
-                    
-                    // Get equipment name
-                    $equipNameSql = "
-                        SELECT equip_name 
-                        FROM tbl_equipments 
-                        WHERE equip_id = :equipment_id
-                    ";
-                    $stmtEquip = $this->conn->prepare($equipNameSql);
-                    $stmtEquip->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
-                    $stmtEquip->execute();
-                    $equipInfo = $stmtEquip->fetch(PDO::FETCH_ASSOC);
-                    $equipmentDetail['name'] = $equipInfo ? $equipInfo['equip_name'] : null;
-                    
-                    // Get checklist items for this equipment
-                    $checklistEquipSql = "
-                        SELECT checklist_equipment_id, checklist_name 
-                        FROM tbl_checklist_equipment_master 
-                        WHERE checklist_equipment_equip_id = :equipment_id
-                    ";
-                    $stmtChecklist = $this->conn->prepare($checklistEquipSql);
-                    $stmtChecklist->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
-                    $stmtChecklist->execute();
-                    $equipmentDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    $result['equipments'][] = $equipmentDetail;
-                }
+    
+            foreach ($equipments as $equipRow) {
+                $equipmentDetail = [
+                    'reservation_equipment_id' => $equipRow['reservation_equipment_id'],
+                    'equipment_id' => $equipRow['equipment_id'],
+                    'quantity' => $equipRow['reservation_equipment_quantity'],
+                    'name' => null,
+                    'checklists' => []
+                ];
+    
+                $equipNameSql = "SELECT equip_name FROM tbl_equipments WHERE equip_id = :equipment_id";
+                $stmtEquip = $this->conn->prepare($equipNameSql);
+                $stmtEquip->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+                $stmtEquip->execute();
+                $equipInfo = $stmtEquip->fetch(PDO::FETCH_ASSOC);
+                $equipmentDetail['name'] = $equipInfo ? $equipInfo['equip_name'] : null;
+    
+                $checklistEquipSql = "
+                    SELECT checklist_equipment_id, checklist_name 
+                    FROM tbl_checklist_equipment_master 
+                    WHERE checklist_equipment_equip_id = :equipment_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistEquipSql);
+                $stmtChecklist->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $equipmentDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['equipments'][] = $equipmentDetail;
             }
-            
+    
             return json_encode(['status' => 'success', 'data' => $result]);
-            
+    
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
+    
     
     
     

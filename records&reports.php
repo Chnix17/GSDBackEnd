@@ -274,7 +274,6 @@ class ReservationDetails {
                 WHERE 
                     (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
                     AND r.reservation_id IS NOT NULL
-                    AND rp.reservation_passenger_id IS NULL
                     AND NOT EXISTS (
                         SELECT 1
                         FROM tbl_reservation_checklist_venue cv 
