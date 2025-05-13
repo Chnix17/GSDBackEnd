@@ -150,27 +150,32 @@ class Vehicle {
 
     // Insert vehicle make
     public function saveMakeData($json) {
-        $json = json_decode($json, true);
-        
-        // Log the incoming data
-        error_log("Incoming data for make: " . print_r($json, true));
-    
-        if ($this->makeExists($json['vehicle_make_name'])) {
-            return json_encode(['status' => 'error', 'message' => 'Make already exists.']);
-        }
-    
-        try {
-            $sql = "INSERT INTO tbl_vehicle_make (vehicle_make_name) VALUES (:name)";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $json['vehicle_make_name']);
-            $stmt->execute();
-            return json_encode(['status' => 'success', 'message' => 'Make added successfully.']);
-        } catch(PDOException $e) {
-            // Log the error message
-            error_log("Error inserting make: " . $e->getMessage());
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
-        }
+    // Check if $json is already an array
+    if (is_array($json)) {
+        $data = $json;
+    } else {
+        $data = json_decode($json, true);
     }
+    
+    // Log the incoming data
+    error_log("Incoming data for make: " . print_r($data, true));
+
+    if ($this->makeExists($data['vehicle_make_name'])) {
+        return json_encode(['status' => 'error', 'message' => 'Make already exists.']);
+    }
+
+    try {
+        $sql = "INSERT INTO tbl_vehicle_make (vehicle_make_name) VALUES (:name)";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['vehicle_make_name']);
+        $stmt->execute();
+        return json_encode(['status' => 'success', 'message' => 'Make added successfully.']);
+    } catch(PDOException $e) {
+        // Log the error message
+        error_log("Error inserting make: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
 
 
 // Check if equipment category exists
@@ -186,26 +191,25 @@ public function equipmentCategoryExists($categoryName) {
     }
 }
 
-// Insert equipment category
+
 public function saveEquipmentCategory($json) {
-    $json = json_decode($json, true);
+    // Handle both string and array inputs
+    $data = is_array($json) ? $json : json_decode($json, true);
     
     // Check if category name is set
-    if (!isset($json['equipments_category_name'])) {
+    if (!isset($data['equipments_category_name'])) {
         return json_encode(['status' => 'error', 'message' => 'Category name is required.']);
     }
 
-    if ($this->equipmentCategoryExists($json['equipments_category_name'])) {
+    if ($this->equipmentCategoryExists($data['equipments_category_name'])) {
         return json_encode(['status' => 'error', 'message' => 'Equipment category already exists.']);
     }
 
     try {
-        // Set admin ID to 1
-
         $sql = "INSERT INTO tbl_equipment_category (equipments_category_name) 
                 VALUES (:name)";
         $stmt = $this->conn->prepare($sql);
-        $stmt->bindParam(':name', $json['equipments_category_name']); // Use admin ID of 1
+        $stmt->bindParam(':name', $data['equipments_category_name']);
         $stmt->execute();
         return json_encode(['status' => 'success', 'message' => 'Equipment category added successfully.']);
     } catch(PDOException $e) {
@@ -258,23 +262,29 @@ public function departmentExists($departmentName) {
 }
 
 // Insert department
+
 public function saveDepartmentData($json) {
-    $json = json_decode($json, true); // Decode the incoming JSON
+    // Check if $json is already an array
+    if (is_array($json)) {
+        $data = $json;
+    } else {
+        $data = json_decode($json, true);
+    }
 
     // Check if the department name exists in the input
-    if (!isset($json['departments_name'])) {
+    if (!isset($data['departments_name'])) {
         return json_encode(['status' => 'error', 'message' => 'Department name is required.']);
     }
 
     // Check if the department already exists
-    if ($this->departmentExists($json['departments_name'])) {
+    if ($this->departmentExists($data['departments_name'])) {
         return json_encode(['status' => 'error', 'message' => 'Department already exists.']);
     }
 
     try {
         $sql = "INSERT INTO tbl_departments (departments_name) VALUES (:name)";
         $stmt = $this->conn->prepare($sql);
-        $stmt->bindParam(':name', $json['departments_name']);
+        $stmt->bindParam(':name', $data['departments_name']);
         $stmt->execute();
         return json_encode(['status' => 'success', 'message' => 'Department added successfully.']);
     } catch (PDOException $e) {

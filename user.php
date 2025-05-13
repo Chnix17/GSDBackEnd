@@ -41,22 +41,6 @@ class User {
         ]);
     }
 
-    public function editProfile($data) {
-        $sql = "UPDATE tbl_admin SET 
-                admin_name = :name,
-                admin_school_id = :schoolId,
-                admin_contact_number = :contact,
-                admin_username = :username
-                WHERE admin_id = :userId";
-        
-        return $this->executeQuery($sql, [
-            ':name' => $data['name'],
-            ':schoolId' => $data['schoolId'],
-            ':contact' => $data['contact'],
-            ':username' => $data['username'],
-            ':userId' => $data['userId']
-        ]);
-    }
 
     public function fetchUserProfile($userId) {
         $sql = "SELECT admin_id, admin_name, admin_school_id, admin_contact_number, admin_level, admin_username 
@@ -872,7 +856,141 @@ class User {
         }
     }
 
-    
+    public function updatePassword($userId, $oldPassword, $newPassword){
+        try {
+            // First, get the user's current password
+            $sql = "SELECT users_password FROM tbl_users WHERE users_id = :userId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute(['userId' => $userId]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$user) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'User not found'
+                ]);
+            }            // Verify old password
+            if (!password_verify($oldPassword, $user['users_password'])) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Current password is incorrect'
+                ]);
+            }
+
+            // Check if new password is same as old password
+            if (password_verify($newPassword, $user['users_password'])) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'New password cannot be the same as current password'
+                ]);
+            }
+
+            // Hash new password
+            $hashedNewPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+
+            // Update password
+            $updateSql = "UPDATE tbl_users SET users_password = :newPassword WHERE users_id = :userId";
+            $updateStmt = $this->conn->prepare($updateSql);
+            $success = $updateStmt->execute([
+                'newPassword' => $hashedNewPassword,
+                'userId' => $userId
+            ]);
+
+            if ($success) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Password updated successfully'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Failed to update password'
+                ]);
+            }
+
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function updateProfile($userData){
+        try {
+            // Define allowed fields to update
+            $allowedFields = [
+                'users_fname',
+                'users_mname',
+                'users_lname',
+                'users_email',
+                'users_school_id',
+                'users_contact_number',
+                'users_department_id',
+                'users_pic'
+            ];
+
+            // Build update query dynamically based on provided data
+            $updateFields = [];
+            $params = [];
+            
+            foreach ($allowedFields as $field) {
+                if (isset($userData[$field])) {
+                    $updateFields[] = "$field = :$field";
+                    $params[$field] = $userData[$field];
+                }
+            }
+
+            // Add updated_at timestamp
+            $updateFields[] = "users_updated_at = CURRENT_TIMESTAMP";
+
+            // If no fields to update, return error
+            if (empty($updateFields)) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'No valid fields to update'
+                ]);
+            }
+
+            // Add user ID to params
+            $params['userId'] = $userData['users_id'];
+
+            // Construct and execute update query
+            $sql = "UPDATE tbl_users SET " . implode(', ', $updateFields) . " WHERE users_id = :userId";
+            $stmt = $this->conn->prepare($sql);
+            $success = $stmt->execute($params);
+
+            if ($success) {
+                // Fetch updated user data
+                $selectSql = "SELECT users_id, users_fname, users_mname, users_lname, users_email, 
+                                    users_school_id, users_contact_number, users_department_id, 
+                                    users_pic, users_updated_at 
+                             FROM tbl_users 
+                             WHERE users_id = :userId";
+                $selectStmt = $this->conn->prepare($selectSql);
+                $selectStmt->execute(['userId' => $userData['users_id']]);
+                $updatedUser = $selectStmt->fetch(PDO::FETCH_ASSOC);
+
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Profile updated successfully',
+                    'data' => $updatedUser
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Failed to update profile'
+                ]);
+            }
+
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
 }
 
 // Handle the request
@@ -920,9 +1038,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "fetchUserProfile":
             $userId = $_POST['userId'] ?? null; 
             echo $user->fetchUserProfile($userId);
-            break;
-        case "editProfile":
-            echo $user->editProfile($json);
             break;
         case "fetchVenue": 
             echo $user->fetchVenue();
@@ -1009,6 +1124,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
         case "getInUse":
             echo $user->getInUse();
+            break;
+        case "updatePassword":
+            $userId = $input['userId'] ?? null;
+            $oldPassword = $input['oldPassword'] ?? null;
+            $newPassword = $input['newPassword'] ?? null;
+            
+            if (!$userId || !$oldPassword || !$newPassword) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+                break;
+            }
+            
+            echo $user->updatePassword($userId, $oldPassword, $newPassword);
+            break;
+        case "updateProfile":
+            echo $user->updateProfile($input);
             break;
     
         default:

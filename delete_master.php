@@ -459,7 +459,7 @@ public function deleteModel($modelId) {
 
 public function deleteCondition($conditionId) {
         try {
-            $sql = "DELETE FROM tbl_condition_master WHERE condition_id = :conditionId";
+            $sql = "DELETE FROM tbl_condition WHERE id = :conditionId";
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':conditionId', $conditionId, PDO::PARAM_INT);
 

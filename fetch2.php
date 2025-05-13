@@ -891,12 +891,78 @@ class User {
             ]);
         }
     }
-    
-    
-    
-    
-    
-    
+
+    public function updateChecklist($data) {
+        try {
+            if (empty($data['checklist_updates']) || !is_array($data['checklist_updates'])) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Missing or invalid checklist updates.'
+                ]);
+            }
+
+            $this->conn->beginTransaction();
+            $results = [];
+
+            foreach ($data['checklist_updates'] as $update) {
+                if (empty($update['type']) || !isset($update['id']) || empty($update['checklist_name'])) {
+                    continue;
+                }
+
+                $updateSql = '';
+                $params = [
+                    ':id' => $update['id'],
+                    ':name' => $update['checklist_name']
+                ];
+
+                switch ($update['type']) {
+                    case 'venue':
+                        $updateSql = "UPDATE tbl_checklist_venue_master 
+                                    SET checklist_name = :name 
+                                    WHERE checklist_venue_id = :id";
+                        break;
+
+                    case 'vehicle':
+                        $updateSql = "UPDATE tbl_checklist_vehicle_master 
+                                    SET checklist_name = :name 
+                                    WHERE checklist_vehicle_id = :id";
+                        break;
+
+                    case 'equipment':
+                        $updateSql = "UPDATE tbl_checklist_equipment_master 
+                                    SET checklist_name = :name 
+                                    WHERE checklist_equipment_id = :id";
+                        break;
+
+                    default:
+                        continue 2;
+                }
+
+                $stmt = $this->conn->prepare($updateSql);
+                $success = $stmt->execute($params);
+                $results[] = [
+                    'id' => $update['id'],
+                    'type' => $update['type'],
+                    'success' => $success
+                ];
+            }
+
+            $this->conn->commit();
+
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Checklists updated successfully.',
+                'updates' => $results
+            ]);
+
+        } catch (PDOException $e) {
+            $this->conn->rollBack();
+            return json_encode([
+                'status' => 'error', 
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
 }
 
 // Handle the request
@@ -980,6 +1046,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $type = $jsonInput['type'] ?? '';
             $id = $jsonInput['id'] ?? 0;
             echo $user->saveMasterChecklist($checklistNames, $type, $id);
+            break;
+        case "updateChecklist":
+            $data = $jsonInput['data'] ?? null;
+            if (!$data) {
+                echo json_encode(['status' => 'error', 'message' => 'No data provided']);
+                break;
+            }
+            echo $user->updateChecklist($data);
             break;
 
         default:
