@@ -464,16 +464,22 @@ class User {
             
             // Get file data and type from base64 string
             $image_parts = explode(";base64,", $vehicleData['vehicle_pic']);
-            $image_type_aux = explode("image/", $image_parts[0]);
-            $image_type = $image_type_aux[1];
-            $image_base64 = base64_decode($image_parts[1]);
             
-            // Generate unique filename
-            $filename = 'vehicle_' . time() . '.' . $image_type;
-            $picPath = $uploadDir . $filename;
-            
-            file_put_contents($picPath, $image_base64);
-            $vehicleData['vehicle_pic'] = $picPath;
+            // Validate that we have the expected parts
+            if (count($image_parts) === 2) {
+                $image_type_aux = explode("image/", $image_parts[0]);
+                if (count($image_type_aux) === 2) {
+                    $image_type = $image_type_aux[1];
+                    $image_base64 = base64_decode($image_parts[1]);
+                    
+                    // Generate unique filename
+                    $filename = 'vehicle_' . time() . '.' . $image_type;
+                    $picPath = $uploadDir . $filename;
+                    
+                    file_put_contents($picPath, $image_base64);
+                    $vehicleData['vehicle_pic'] = $picPath;
+                }
+            }
         }
 
         $sql = "UPDATE tbl_vehicle 
