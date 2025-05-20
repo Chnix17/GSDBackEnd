@@ -257,27 +257,87 @@ class User {
     }
 
     public function fetchEquipmentsWithStatus() {
-        $sql = "SELECT 
-                    e.equip_id, 
-                    e.equip_name, 
-                    e.equip_quantity, 
-                    e.equip_created_at, 
-                    e.equip_updated_at,
-                    e.equip_pic,
-                    e.equipment_equipment_category_id,
-                    sa.status_availability_name,
-                    e.is_active
+    // Fetch all active equipments
+    $sql = "SELECT 
+                e.equip_id, 
+                e.equip_name, 
+                e.equip_quantity, 
+                e.equip_created_at, 
+                e.equip_updated_at,
+                e.equip_pic,
+                e.equipment_equipment_category_id,
+                ec.equipments_category_name,
+                sa.status_availability_name AS equipment_status_name,
+                e.is_active
+            FROM 
+                tbl_equipments e
+            INNER JOIN 
+                tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id
+            LEFT JOIN 
+                tbl_equipment_category ec ON e.equipment_equipment_category_id = ec.equipments_category_id
+            WHERE
+                e.is_active = 1
+            ORDER BY
+                e.equip_id";
+
+    $stmt = $this->conn->prepare($sql);
+    $stmt->execute();
+    $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Fetch all active units related to equipment
+    $unitSql = "SELECT 
+                    eu.unit_id, 
+                    eu.equip_id, 
+                    eu.serial_number, 
+                    sua.status_availability_name AS availability_status
                 FROM 
-                    tbl_equipments e
-                INNER JOIN 
-                    tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id
-                WHERE
-                    e.is_active = 1
-                ORDER BY
-                    e.equip_id";
-    
-        return $this->executeQuery($sql);
+                    tbl_equipment_unit eu
+                LEFT JOIN 
+                    tbl_status_availability sua ON eu.status_availability_id = sua.status_availability_id
+                WHERE 
+                    eu.is_active = 1"; // <-- Only active units
+
+    $unitStmt = $this->conn->prepare($unitSql);
+    $unitStmt->execute();
+    $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Group units by equip_id
+    $unitMap = [];
+    foreach ($allUnits as $unit) {
+        $equipId = $unit['equip_id'];
+        if (!isset($unitMap[$equipId])) {
+            $unitMap[$equipId] = [];
+        }
+        $unitMap[$equipId][] = [
+            'unit_id' => $unit['unit_id'],
+            'serial_number' => $unit['serial_number'],
+            'availability_status' => $unit['availability_status']
+        ];
     }
+
+    // Assemble final response
+    $response = [];
+    foreach ($equipments as $equip) {
+        $equipId = $equip['equip_id'];
+        $units = $unitMap[$equipId] ?? [];
+
+        $response[] = [
+            'equip_id' => (int)$equip['equip_id'],
+            'equip_name' => $equip['equip_name'],
+            'equip_quantity' => $equip['equip_quantity'] !== null ? (int)$equip['equip_quantity'] : count($units),
+            'equipment_status_name' => $equip['equipment_status_name'],
+            'equip_pic' => $equip['equip_pic'],
+            'equipment_equipment_category_id' => $equip['equipment_equipment_category_id'],
+            'equipments_category_name' => $equip['equipments_category_name'],
+            'equip_created_at' => $equip['equip_created_at'],            
+            'equip_updated_at' => $equip['equip_updated_at'],
+            'units' => $units
+        ];
+    }
+
+    return json_encode(['status' => 'success', 'data' => $response]);
+}
+
     
     public function fetchUserByEmailOrFullname($searchTerm) {
         $sql = "SELECT 
@@ -413,71 +473,52 @@ class User {
             WHERE u.is_active = 1";
         
         return $this->executeQuery($sql);
-    }
-
-    public function checkUniqueEmailAndSchoolId($email, $schoolId, $excludeId = null, $excludeType = null) {
+    }    public function checkUniqueEmailAndSchoolId($email, $schoolId, $excludeId = null, $excludeType = null) {
         try {
-            // Check in tbl_users
-            $usersSql = "SELECT 'user' as type, users_id as id, users_email as email, users_school_id as school_id 
-                        FROM tbl_users 
-                        WHERE (users_email = :email OR users_school_id = :schoolId)";
-            if ($excludeType === 'user' && $excludeId) {
-                $usersSql .= " AND users_id != :excludeId";
+            // Only check in tbl_users
+            $sql = "SELECT users_id as id, users_email as email, users_school_id as school_id 
+                   FROM tbl_users 
+                   WHERE (users_email = :email OR users_school_id = :schoolId)
+                   AND is_active = 1";
+            
+            // Add exclusion if we're updating an existing user
+            if ($excludeId) {
+                $sql .= " AND users_id != :excludeId";
             }
-
-            // Check in tbl_dept
-            $deptSql = "SELECT 'dean_sec' as type, dept_id as id, dept_email as email, dept_school_id as school_id 
-                       FROM tbl_dept 
-                       WHERE (dept_email = :email OR dept_school_id = :schoolId)";
-            if ($excludeType === 'dean_sec' && $excludeId) {
-                $deptSql .= " AND dept_id != :excludeId";
-            }
-
-            // Check in tbl_admin
-            $adminSql = "SELECT 'admin' as type, admin_id as id, admin_email as email, admin_school_id as school_id 
-                        FROM tbl_admin 
-                        WHERE (admin_email = :email OR admin_school_id = :schoolId)";
-            if ($excludeType === 'admin' && $excludeId) {
-                $adminSql .= " AND admin_id != :excludeId";
-            }
-
-            // Check in tbl_driver
-            $driverSql = "SELECT 'driver' as type, driver_id as id, driver_email as email, driver_school_id as school_id 
-                         FROM tbl_driver 
-                         WHERE (driver_email = :email OR driver_school_id = :schoolId)";
-            if ($excludeType === 'driver' && $excludeId) {
-                $driverSql .= " AND driver_id != :excludeId";
-            }
-
-            // Combine all queries
-            $sql = "($usersSql) UNION ALL ($deptSql) UNION ALL ($adminSql) UNION ALL ($driverSql)";
             
             $stmt = $this->conn->prepare($sql);
             $params = [':email' => $email, ':schoolId' => $schoolId];
             
-            if ($excludeId && in_array($excludeType, ['user', 'dean_sec', 'admin', 'driver'])) {
+            if ($excludeId) {
                 $params[':excludeId'] = $excludeId;
             }
             
             $stmt->execute($params);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $response = ['status' => 'success', 'exists' => false, 'duplicates' => []];
+            $response = [
+                'status' => 'success',
+                'exists' => false,
+                'duplicates' => []
+            ];
             
             if (!empty($results)) {
                 $response['exists'] = true;
                 foreach ($results as $result) {
-                    $duplicate = [];
                     if ($result['email'] === $email) {
-                        $duplicate['field'] = 'email';
-                        $duplicate['value'] = $email;
+                        $response['duplicates'][] = [
+                            'field' => 'email',
+                            'value' => $email,
+                            'message' => 'Email already exists'
+                        ];
                     }
                     if ($result['school_id'] === $schoolId) {
-                        $duplicate['field'] = 'school_id';
-                        $duplicate['value'] = $schoolId;
+                        $response['duplicates'][] = [
+                            'field' => 'school_id',
+                            'value' => $schoolId,
+                            'message' => 'School ID already exists'
+                        ];
                     }
-                    $duplicate['type'] = $result['type'];
-                    $response['duplicates'][] = $duplicate;
                 }
             }
 
@@ -489,118 +530,194 @@ class User {
     }
 
     public function fetchAvailability($itemType, $itemId, $inputQuantities = []) {
-        try {
-            $itemIds = is_array($itemId) ? $itemId : [$itemId];
-            $placeholders = implode(',', array_fill(0, count($itemIds), '?'));
-    
-            if ($itemType === 'venue') {
-                $sql = "
-                    SELECT 
-                        v.ven_id,
-                        v.ven_name,
-                        v.ven_occupancy,
-                        r.reservation_id,
-                        r.reservation_title,
-                        r.reservation_start_date,
-                        r.reservation_end_date,
-                        rs.reservation_status_status_id
-                    FROM tbl_venue v
-                    LEFT JOIN tbl_reservation_venue rv ON v.ven_id = rv.reservation_venue_venue_id
-                    LEFT JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE v.ven_id IN ($placeholders)
-                    AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
-                    AND rs.reservation_active = 1
-                    GROUP BY v.ven_id, v.ven_name, v.ven_occupancy, r.reservation_id, r.reservation_title, 
-                             r.reservation_start_date, r.reservation_end_date, rs.reservation_status_status_id";
-    
-                $stmt = $this->conn->prepare($sql);
-                $stmt->execute($itemIds);
-                
-            } elseif ($itemType === 'vehicle') {
-                $sql = "
-                    SELECT 
-                        v.vehicle_id,
-                        v.vehicle_license,
-                        vm.vehicle_make_name,
-                        vmd.vehicle_model_name,
-                        r.reservation_id,
-                        r.reservation_title,
-                        r.reservation_start_date,
-                        r.reservation_end_date,
-                        rs.reservation_status_status_id
-                    FROM tbl_vehicle v
-                    LEFT JOIN tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
-                    LEFT JOIN tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
-                    LEFT JOIN tbl_reservation_vehicle rv ON v.vehicle_id = rv.reservation_vehicle_vehicle_id
-                    LEFT JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE v.vehicle_id IN ($placeholders)
-                    AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
-                    AND rs.reservation_active = 1
-                    GROUP BY v.vehicle_id, v.vehicle_license, vm.vehicle_make_name, vmd.vehicle_model_name,
-                             r.reservation_id, r.reservation_title, r.reservation_start_date, r.reservation_end_date,
-                             rs.reservation_status_status_id";
-    
-                $stmt = $this->conn->prepare($sql);
-                $stmt->execute($itemIds);
-    
-            } elseif ($itemType === 'equipment') {
-                // For equipment type, handle quantities
-                $sql = "
-                    SELECT 
-                        e.equip_id,
-                        e.equip_name,
-                        e.equip_quantity AS current_quantity,
-                        COALESCE(SUM(re.reservation_equipment_quantity), 0) AS total_reserved,
-                        (e.equip_quantity - COALESCE(SUM(re.reservation_equipment_quantity), 0)) AS total_available,
-                        r.reservation_start_date,
-                        r.reservation_end_date
-                    FROM tbl_equipments e
-                    LEFT JOIN tbl_reservation_equipment re ON e.equip_id = re.reservation_equipment_equip_id
-                    LEFT JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE e.equip_id IN ($placeholders)
-                    AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
-                    AND rs.reservation_active = 1
-                    GROUP BY e.equip_id, e.equip_name, e.equip_quantity, r.reservation_start_date, r.reservation_end_date";
-    
-                $stmt = $this->conn->prepare($sql);
-                $stmt->execute($itemIds);
-                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                
-                // Process quantities for equipment without subtracting the inputted quantity from the current quantity.
-                foreach ($results as &$result) {
-                    $equipId = $result['equip_id'];
-                    $inputQty = isset($inputQuantities[$equipId]) ? (int)$inputQuantities[$equipId] : 0;
-                    $result['inputted_quantity'] = $inputQty;
-                    // Note: Do NOT subtract the inputted quantity from total_available.
-                }
-                
-                return json_encode([
-                    'status' => 'success',
-                    'data' => $results
-                ]);
-            }
-    
-            // For venue and vehicle types
+    try {
+        $itemIds = is_array($itemId) ? $itemId : [$itemId];
+        $placeholders = implode(',', array_fill(0, count($itemIds), '?'));
+
+        if ($itemType === 'venue') {
+            $sql = "
+                SELECT 
+                    v.ven_id,
+                    v.ven_name,
+                    v.ven_occupancy,
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    rs.reservation_status_status_id
+                FROM tbl_venue v
+                LEFT JOIN tbl_reservation_venue rv 
+                    ON v.ven_id = rv.reservation_venue_venue_id
+                LEFT JOIN tbl_reservation r 
+                    ON rv.reservation_reservation_id = r.reservation_id
+                LEFT JOIN tbl_reservation_status rs 
+                    ON r.reservation_id = rs.reservation_reservation_id
+                WHERE v.ven_id IN ($placeholders)
+                  AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
+                  AND rs.reservation_active = 1
+                GROUP BY 
+                    v.ven_id, v.ven_name, v.ven_occupancy,
+                    r.reservation_id, r.reservation_title,
+                    r.reservation_start_date, r.reservation_end_date,
+                    rs.reservation_status_status_id
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute($itemIds);
+
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            if ($itemType === 'venue' || $itemType === 'vehicle') {
-                foreach ($results as &$result) {
-                    $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
-                    $result['reservation_status'] = ($result['reservation_status_status_id'] === 6) ? 'Reserved' : 'Available';
-                }
+            foreach ($results as &$result) {
+                $result['is_available']    = ($result['reservation_status_status_id'] !== 6);
+                $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
+                    ? 'Reserved' : 'Available';
             }
-            
-            return json_encode([
-                'status' => 'success',
-                'data' => $results
-            ]);
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+
+        } elseif ($itemType === 'vehicle') {
+            $sql = "
+                SELECT 
+                    v.vehicle_id,
+                    v.vehicle_license,
+                    vm.vehicle_make_name,
+                    vmd.vehicle_model_name,
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    rs.reservation_status_status_id
+                FROM tbl_vehicle v
+                LEFT JOIN tbl_vehicle_model vmd 
+                    ON v.vehicle_model_id = vmd.vehicle_model_id
+                LEFT JOIN tbl_vehicle_make vm 
+                    ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
+                LEFT JOIN tbl_reservation_vehicle rv 
+                    ON v.vehicle_id = rv.reservation_vehicle_vehicle_id
+                LEFT JOIN tbl_reservation r 
+                    ON rv.reservation_reservation_id = r.reservation_id
+                LEFT JOIN tbl_reservation_status rs 
+                    ON r.reservation_id = rs.reservation_reservation_id
+                WHERE v.vehicle_id IN ($placeholders)
+                  AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
+                  AND rs.reservation_active = 1
+                GROUP BY 
+                    v.vehicle_id, v.vehicle_license,
+                    vm.vehicle_make_name, vmd.vehicle_model_name,
+                    r.reservation_id, r.reservation_title,
+                    r.reservation_start_date, r.reservation_end_date,
+                    rs.reservation_status_status_id
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute($itemIds);
+
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($results as &$result) {
+                $result['is_available']    = ($result['reservation_status_status_id'] !== 6);
+                $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
+                    ? 'Reserved' : 'Available';
+            }
+
+        } elseif ($itemType === 'equipment') {
+            // Combined equipment query using sub-queries for unit count and reserved sum
+            $sql = "
+                SELECT 
+                    e.equip_id,
+                    e.equip_name,
+
+                    /* Total on hand */
+                    CASE
+                        WHEN e.equip_quantity IS NOT NULL THEN e.equip_quantity
+                        ELSE COALESCE(u.unit_count, 0)
+                    END AS current_quantity,
+
+                    /* Total reserved */
+                    COALESCE(r.reserved_qty, 0) AS total_reserved,
+
+                    /* Available = on hand - reserved */
+                    (
+                        CASE
+                            WHEN e.equip_quantity IS NOT NULL THEN e.equip_quantity
+                            ELSE COALESCE(u.unit_count, 0)
+                        END
+                        - COALESCE(r.reserved_qty, 0)
+                    ) AS total_available,
+
+                    /* Reservation window */
+                    r.min_start_date  AS reservation_start_date,
+                    r.max_end_date    AS reservation_end_date,
+
+                    e.equip_pic,
+                    e.equip_created_at,
+                    e.equip_updated_at,
+                    e.status_availability_id,
+                    sa.status_availability_name,
+                    e.equipment_equipment_category_id,
+                    ec.equipments_category_name
+                FROM tbl_equipments e
+
+                /* Sub-query: count available units */
+                LEFT JOIN (
+                    SELECT 
+                        equip_id,
+                        COUNT(*) AS unit_count
+                    FROM tbl_equipment_unit
+                    WHERE status_availability_id = 1
+                    GROUP BY equip_id
+                ) AS u 
+                  ON e.equip_id = u.equip_id
+
+                /* Sub-query: sum reserved quantities + dates */
+                LEFT JOIN (
+                    SELECT
+                        re.reservation_equipment_equip_id   AS equip_id,
+                        SUM(re.reservation_equipment_quantity) AS reserved_qty,
+                        MIN(r.reservation_start_date)       AS min_start_date,
+                        MAX(r.reservation_end_date)         AS max_end_date
+                    FROM tbl_reservation_equipment re
+                    JOIN tbl_reservation r 
+                      ON r.reservation_id = re.reservation_reservation_id
+                    JOIN tbl_reservation_status rs 
+                      ON rs.reservation_reservation_id = r.reservation_id
+                     AND rs.reservation_active = 1
+                     AND rs.reservation_status_status_id = 6
+                    WHERE re.reservation_equipment_equip_id IN ($placeholders)
+                    GROUP BY re.reservation_equipment_equip_id
+                ) AS r 
+                  ON e.equip_id = r.equip_id
+
+                /* Lookups */
+                LEFT JOIN tbl_status_availability sa 
+                  ON e.status_availability_id = sa.status_availability_id
+                LEFT JOIN tbl_equipment_category ec 
+                  ON e.equipment_equipment_category_id = ec.equipments_category_id
+
+                WHERE e.equip_id IN ($placeholders)
+                ORDER BY e.equip_name
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            // Bind twice for the two IN-clauses
+            $stmt->execute(array_merge($itemIds, $itemIds));
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Add inputted_quantity without altering total_available
+            foreach ($results as &$result) {
+                $eid = $result['equip_id'];
+                $result['inputted_quantity'] = isset($inputQuantities[$eid])
+                    ? (int)$inputQuantities[$eid]
+                    : 0;
+            }
         }
+
+        return json_encode([
+            'status' => 'success',
+            'data'   => $results
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status'  => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
     }
+}
+
     
 
     public function fetchDriver($startDateTime = null, $endDateTime = null) {
@@ -916,6 +1033,31 @@ class User {
         }
     }
 
+    public function getUnitById($unitId) {
+        $sql = "SELECT 
+                    eu.unit_id,
+                    eu.equip_id,
+                    eu.serial_number,
+                    eu.status_availability_id,
+                    sa.status_availability_name,
+                    e.equip_name,
+                    e.equip_pic,
+                    e.equipment_equipment_category_id,
+                    ec.equipments_category_name
+                FROM 
+                    tbl_equipment_unit eu
+                LEFT JOIN 
+                    tbl_status_availability sa ON eu.status_availability_id = sa.status_availability_id
+                LEFT JOIN 
+                    tbl_equipments e ON eu.equip_id = e.equip_id
+                LEFT JOIN 
+                    tbl_equipment_category ec ON e.equipment_equipment_category_id = ec.equipments_category_id
+                WHERE 
+                    eu.unit_id = :unitId";
+
+        return $this->executeQuery($sql, [':unitId' => $unitId]);
+    }
+
     public function updateProfile($userData){
         try {
             // Define allowed fields to update
@@ -1139,6 +1281,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
         case "updateProfile":
             echo $user->updateProfile($input);
+            break;
+        case "getUnitById":
+            $unitId = $input['unitId'] ?? null;
+            if ($unitId) {
+                echo $user->getUnitById($unitId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Unit ID is required']);
+            }
             break;
     
         default:

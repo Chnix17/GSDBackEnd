@@ -264,18 +264,21 @@ class VehicleMake {
         }
 
         $sql = "SELECT 
-                    d.*,
-                    dep.departments_name,
-                    ul.user_level_name
+                    d.*
                 FROM 
                     tbl_driver d
-                LEFT JOIN 
-                    tbl_departments dep ON d.driver_department_id = dep.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON d.driver_user_level_id = ul.user_level_id
                 WHERE 
                     d.driver_id = :id";
         return $this->executeQuery($sql, [':id' => $id]);
+    }
+
+    public function fetchDriver() {
+        $sql = "SELECT `driver_id`, `driver_first_name`, `driver_middle_name`, `driver_last_name`, `driver_suffix`, `employee_id`, `driver_birthdate`, `user_admin_id`, `is_active`, `driver_contact_number`, `driver_address`, `created_at`, `updated_at` FROM `tbl_driver` WHERE `is_active` = 1";
+        return $this->executeQuery($sql);
+    }
+    public function fetchInactiveDriver() {
+        $sql = "SELECT `driver_id`, `driver_first_name`, `driver_middle_name`, `driver_last_name`, `driver_suffix`, `employee_id`, `driver_birthdate`, `user_admin_id`, `is_active`, `driver_contact_number`, `driver_address`, `created_at`, `updated_at` FROM `tbl_driver` WHERE `is_active` = 0";
+        return $this->executeQuery($sql);
     }
 
     public function fetchPersonnelById($id) {
@@ -401,6 +404,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
             $vehicleId = $input['id'] ?? ($_POST['id'] ?? null);
             if ($vehicleId) {
                 echo $vehicleMake->fetchVehicleById($vehicleId); // Fetch vehicle by ID
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
+            }
+            break;
+            
+        case "fetchDriverById":
+            $driverId = $input['id'] ?? ($_POST['id'] ?? null);
+            if ($driverId) {
+                echo $vehicleMake->fetchDriverById($driverId);
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
             }
@@ -552,6 +564,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
             break;
         case "fetchHoliday":
             echo $vehicleMake->fetchHoliday(); // Fetch all holidays
+            break;
+        case "fetchDriver":
+            echo $vehicleMake->fetchDriver(); // Fetch all drivers
+            break;
+        case "fetchInactiveDriver":
+            echo $vehicleMake->fetchInactiveDriver(); // Fetch all inactive drivers
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

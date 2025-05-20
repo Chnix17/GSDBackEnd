@@ -61,128 +61,157 @@ class User {
     }
 
     public function fetchEquipments($startDateTime = null, $endDateTime = null) {
-        header('Content-Type: application/json');
-        
-        if ($startDateTime !== null && $endDateTime !== null) {
-            if (!strtotime($startDateTime) || !strtotime($endDateTime)) {
-                http_response_code(400);
-                die(json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid date format',
-                    'timestamp' => date('Y-m-d H:i:s')
-                ]));
-            }
-        }
-    
-        $baseQuery = "SELECT 
-                        e.equip_id, 
-                        e.equip_name, 
-                        e.equip_quantity,
-                        e.equip_pic,
-                        e.equip_created_at, 
-                        e.equip_updated_at, 
-                        e.status_availability_id, 
-                        sa.status_availability_name,
-                        e.equipment_equipment_category_id,
-                        ec.equipments_category_name
-                    FROM 
-                        tbl_equipments e
-                    INNER JOIN 
-                        tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id 
-                    INNER JOIN
-                        tbl_equipment_category ec ON e.equipment_equipment_category_id = ec.equipments_category_id";
-    
-        try {
-            if ($startDateTime === null || $endDateTime === null) {
-                $sql = $baseQuery . " WHERE e.status_availability_id = 1 ORDER BY e.equip_name";
-                $stmt = $this->conn->prepare($sql);
-                $stmt->execute();
-                $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } else {
-                // Check for reservations with status 3 within the date range
-                $reserved = $this->conn->prepare(
-                    "SELECT 
-                        re.reservation_equipment_id, 
-                        re.reservation_equipment_quantity,
-                        re.reservation_equipment_equip_id,  -- Ensure this column is selected
-                        SUM(re.reservation_equipment_quantity) as reserved_quantity
-                    FROM 
-                        tbl_reservation_equipment re
-                    INNER JOIN 
-                        tbl_reservation r ON r.reservation_id = re.reservation_reservation_id
-                    INNER JOIN 
-                        tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE 
-                        rs.reservation_status_status_id = 6
-                    AND (
-                        (r.reservation_start_date BETWEEN :startDateTime AND :endDateTime)
-                        OR
-                        (r.reservation_end_date BETWEEN :startDateTime AND :endDateTime)
-                        OR
-                        (:startDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                        OR
-                        (:endDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                    )
-                    AND rs.reservation_active = 1
-                    GROUP BY 
-                        re.reservation_equipment_equip_id"  
-                );
-    
-                $reserved->execute([
-                    ':startDateTime' => $startDateTime,
-                    ':endDateTime' => $endDateTime
-                ]);
-                
-                $reservedQuantities = [];
-                while ($row = $reserved->fetch(PDO::FETCH_ASSOC)) {
-                    // Safely check if the key exists before accessing it
-                    $equipId = isset($row['reservation_equipment_equip_id']) ? $row['reservation_equipment_equip_id'] : null;
-                    if ($equipId !== null) {
-                        $reservedQuantities[$equipId] = (int)$row['reserved_quantity'];
-                    }
-                }
-    
-                // Fetch all available equipment
-                $stmt = $this->conn->prepare($baseQuery . " WHERE e.status_availability_id = 1 ORDER BY e.equip_name");
-                $stmt->execute();
-                $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-                // Adjust available quantities
-                foreach ($result as $key => $equipment) {
-                    $equipId = $equipment['equip_id'];
-                    $reservedQty = isset($reservedQuantities[$equipId]) ? $reservedQuantities[$equipId] : 0;
-                    $availableQty = (int)$equipment['equip_quantity'] - $reservedQty;
-                    
-                    // Keep the equipment in the result but update its quantity
-                    $result[$key]['equip_quantity'] = $availableQty;
-                    // Add reserved quantity for reference
-                    $result[$key]['reserved_quantity'] = $reservedQty;
-                }
-            }
-    
-            http_response_code(200);
+    header('Content-Type: application/json');
+
+    // 1. Validate date inputs (if provided)
+    if ($startDateTime !== null && $endDateTime !== null) {
+        if (!strtotime($startDateTime) || !strtotime($endDateTime)) {
+            http_response_code(400);
             die(json_encode([
-                'status' => 'success',
-                'data' => $result,
-                'timestamp' => date('Y-m-d H:i:s')
-            ]));
-            
-        } catch (PDOException $e) {
-            http_response_code(500);
-            die(json_encode([
-                'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage(),
-                'timestamp' => date('Y-m-d H:i:s')
-            ]));
-        } catch (Exception $e) {
-            http_response_code(500);
-            die(json_encode([
-                'status' => 'error',
-                'message' => 'General error: ' . $e->getMessage(),
+                'status'    => 'error',
+                'message'   => 'Invalid date format',
                 'timestamp' => date('Y-m-d H:i:s')
             ]));
         }
     }
+
+    try {
+        // 2. Build reserved-quantity map if date range provided
+        $reservedQuantities = [];
+        if ($startDateTime !== null && $endDateTime !== null) {
+            $reservedStmt = $this->conn->prepare("
+                SELECT 
+                    re.reservation_equipment_equip_id AS equip_id,
+                    SUM(re.reservation_equipment_quantity) AS reserved_quantity
+                FROM tbl_reservation_equipment re
+                INNER JOIN tbl_reservation r 
+                    ON r.reservation_id = re.reservation_reservation_id
+                INNER JOIN tbl_reservation_status rs 
+                    ON rs.reservation_reservation_id = r.reservation_id
+                WHERE 
+                    rs.reservation_status_status_id = 6
+                    AND rs.reservation_active = 1
+                    AND (
+                        (r.reservation_start_date BETWEEN :start AND :end)
+                        OR (r.reservation_end_date BETWEEN :start AND :end)
+                        OR (:start BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                        OR (:end BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                    )
+                GROUP BY re.reservation_equipment_equip_id
+            ");
+            $reservedStmt->execute([
+                ':start' => $startDateTime,
+                ':end'   => $endDateTime
+            ]);
+            while ($row = $reservedStmt->fetch(PDO::FETCH_ASSOC)) {
+                $reservedQuantities[(int)$row['equip_id']] = (int)$row['reserved_quantity'];
+            }
+        }
+
+        // 3. Query for non-serialized equipment (quantity-based)
+        $nonSerialQuery = "
+            SELECT 
+                e.equip_id, 
+                e.equip_name, 
+                e.equip_quantity,
+                e.equip_pic,
+                e.equip_created_at, 
+                e.equip_updated_at, 
+                e.status_availability_id, 
+                sa.status_availability_name,
+                e.equipment_equipment_category_id,
+                ec.equipments_category_name,
+                0 AS is_serialized
+            FROM tbl_equipments e
+            LEFT JOIN tbl_status_availability sa 
+                ON e.status_availability_id = sa.status_availability_id 
+            LEFT JOIN tbl_equipment_category ec 
+                ON e.equipment_equipment_category_id = ec.equipments_category_id
+            WHERE e.equip_quantity IS NOT NULL
+            AND e.equip_quantity > 0
+            ORDER BY e.equip_name
+        ";
+
+        // 4. Query for serialized equipment (unit-based with status_availability_id = 1)
+        $serialQuery = "
+            SELECT 
+                e.equip_id, 
+                e.equip_name, 
+                COUNT(eu.unit_id) AS equip_quantity,
+                e.equip_pic,
+                e.equip_created_at, 
+                e.equip_updated_at, 
+                e.status_availability_id, 
+                sa.status_availability_name,
+                e.equipment_equipment_category_id,
+                ec.equipments_category_name,
+                1 AS is_serialized
+            FROM tbl_equipments e
+            LEFT JOIN tbl_status_availability sa 
+                ON e.status_availability_id = sa.status_availability_id 
+            LEFT JOIN tbl_equipment_category ec 
+                ON e.equipment_equipment_category_id = ec.equipments_category_id
+            LEFT JOIN tbl_equipment_unit eu
+                ON e.equip_id = eu.equip_id
+            WHERE eu.status_availability_id = 1
+            GROUP BY e.equip_id
+            ORDER BY e.equip_name
+        ";
+
+        // 5. Execute both queries
+        $nonSerialStmt = $this->conn->prepare($nonSerialQuery);
+        $nonSerialStmt->execute();
+        $nonSerialResult = $nonSerialStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $serialStmt = $this->conn->prepare($serialQuery);
+        $serialStmt->execute();
+        $serialResult = $serialStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // 6. Combine results
+        $combinedResult = array_merge($nonSerialResult, $serialResult);
+
+        // 7. Process reserved quantities
+        foreach ($combinedResult as $idx => $equip) {
+            $id = (int)$equip['equip_id'];
+            $quantity = (int)$equip['equip_quantity'];
+            $reserved = $reservedQuantities[$id] ?? 0;
+            $available = max(0, $quantity - $reserved);
+
+            if ($available > 0) {
+                $combinedResult[$idx]['equip_quantity'] = $available;
+                $combinedResult[$idx]['reserved_quantity'] = $reserved;
+            } else {
+                unset($combinedResult[$idx]);
+            }
+        }
+
+        // Re-index array
+        $combinedResult = array_values($combinedResult);
+
+        // 8. Return JSON
+        http_response_code(200);
+        echo json_encode([
+            'status'    => 'success',
+            'data'      => $combinedResult,
+            'timestamp' => date('Y-m-d H:i:s')
+        ], JSON_UNESCAPED_SLASHES);
+
+    } catch (PDOException $e) {
+        http_response_code(500);
+        echo json_encode([
+            'status'    => 'error',
+            'message'   => 'Database error: ' . $e->getMessage(),
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode([
+            'status'    => 'error',
+            'message'   => 'General error: ' . $e->getMessage(),
+            'timestamp' => date('Y-m-d H:i:s')
+        ]);
+    }
+}
    
     public function fetchVenue() {
         $sql = "SELECT 
@@ -475,69 +504,77 @@ class User {
         }, $groupedData);
     }
 
-    public function fetchChecklistById($type, $id) {
-        try {
-            // Check if the ID is valid
-            if (empty($type) || empty($id)) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Type or ID is missing.'
-                ]);
-            }
-    
-            // Initialize the SQL query and table names based on the type
-            $sql = '';
-            $idColumn = '';
-            $checklistTable = '';
-            
-            // Determine which table and ID column to query based on the type
-            switch ($type) {
-                case 'vehicle':
-                    $checklistTable = 'tbl_checklist_vehicle_master';
-                    $idColumn = 'checklist_vehicle_vehicle_id';
-                    break;
-                case 'venue':
-                    $checklistTable = 'tbl_checklist_venue_master';
-                    $idColumn = 'checklist_venue_ven_id';
-                    break;
-                case 'equipment':
-                    $checklistTable = 'tbl_checklist_equipment_master';
-                    $idColumn = 'checklist_equipment_equip_id';
-                    break;
-                default:
-                    return json_encode([
-                        'status' => 'error',
-                        'message' => 'Invalid type specified.'
-                    ]);
-            }
-    
-            $sql = "
-                SELECT checklist_name
-                FROM $checklistTable
-                WHERE $idColumn = :id
-            ";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([':id' => $id]);
-            $checklists = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            if (empty($checklists)) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'No checklists found for the given ID.'
-                ]);
-            }
-    
-            // Return the result in JSON format
-            return json_encode([
-                'status' => 'success',
-                'data' => $checklists
-            ]);
-        } catch (PDOException $e) {
+   public function fetchChecklistById($type, $id) {
+    try {
+        if (empty($type) || empty($id)) {
             return json_encode([
                 'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage()
+                'message' => 'Type or ID is missing.'
             ]);
         }
+
+        $sql = '';
+        $idColumn = '';
+        $checklistTable = '';
+        $checklistIdColumn = '';
+
+        switch ($type) {
+            case 'vehicle':
+                $checklistTable = 'tbl_checklist_vehicle_master';
+                $idColumn = 'checklist_vehicle_vehicle_id';
+                $checklistIdColumn = 'checklist_vehicle_id';
+                break;
+            case 'venue':
+                $checklistTable = 'tbl_checklist_venue_master';
+                $idColumn = 'checklist_venue_ven_id';
+                $checklistIdColumn = 'checklist_venue_id';
+                break;
+            case 'equipment':
+                $checklistTable = 'tbl_checklist_equipment_master';
+                $idColumn = 'checklist_equipment_equip_id';
+                $checklistIdColumn = 'checklist_equipment_id';
+                break;
+            default:
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid type specified.'
+                ]);
+        }
+
+        $sql = "
+            SELECT 
+                $checklistIdColumn AS checklist_id,
+                checklist_name,
+                $idColumn AS foreign_id
+            FROM 
+                $checklistTable
+            WHERE 
+                $idColumn = :id
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':id' => $id]);
+        $checklists = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($checklists)) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'No checklists found for the given ID.'
+            ]);
+        }
+
+        return json_encode([
+            'status' => 'success',
+            'data' => $checklists
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
     }
+}
+
     
     public function fetchPersonnel() {
         $sql = "SELECT users_id,
@@ -839,12 +876,7 @@ class User {
 
     public function saveMasterChecklist($checklistNames, $type, $id) {
         try {
-            if (empty($checklistNames) || !is_array($checklistNames)) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Checklist names must be an array'
-                ]);
-            }
+
 
             $this->conn->beginTransaction();
 
@@ -963,6 +995,57 @@ class User {
             ]);
         }
     }
+
+    public function deleteChecklist($type, $id) {
+        try {
+            if (empty($type) || empty($id)) {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Type and ID are required.'
+                ]);
+            }
+
+            $this->conn->beginTransaction();
+
+            $sql = '';
+            switch ($type) {
+                case 'venue':
+                    $sql = "DELETE FROM tbl_checklist_venue_master WHERE checklist_venue_id = :id";
+                    break;
+
+                case 'vehicle':
+                    $sql = "DELETE FROM tbl_checklist_vehicle_master WHERE checklist_vehicle_id = :id";
+                    break;
+
+                case 'equipment':
+                    $sql = "DELETE FROM tbl_checklist_equipment_master WHERE checklist_equipment_id = :id";
+                    break;
+
+                default:
+                    return json_encode([
+                        'status' => 'error',
+                        'message' => 'Invalid type specified.'
+                    ]);
+            }
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':id' => $id]);
+
+            $this->conn->commit();
+
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Checklist deleted successfully.'
+            ]);
+
+        } catch (PDOException $e) {
+            $this->conn->rollBack();
+            return json_encode([
+                'status' => 'error', 
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
 }
 
 // Handle the request
@@ -1055,7 +1138,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             echo $user->updateChecklist($data);
             break;
-
+        case "deleteChecklist":
+            $type = $jsonInput['type'] ?? '';
+            $id = $jsonInput['id'] ?? 0;
+            echo $user->deleteChecklist($type, $id);
+            break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;

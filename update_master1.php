@@ -508,7 +508,187 @@ class User {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
+
+    public function updateEquipmentUnit($unit_id, $equip_id, $serial_number, $status_availability_id) {
+    try {
+        // Validate required fields
+        if (empty($unit_id) || empty($serial_number) || empty($status_availability_id)) {
+            return [
+                "status" => "error",
+                "message" => "All fields are required (unit_id, serial_number, status_availability_id)"
+            ];
+        }
+
+        // Begin transaction
+        $this->conn->beginTransaction();
+
+        // Check if the unit exists
+        $checkStmt = $this->conn->prepare("SELECT unit_id FROM tbl_equipment_unit WHERE unit_id = :unit_id FOR UPDATE");
+        $checkStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
+        $checkStmt->execute();
+        
+        if (!$checkStmt->fetch(PDO::FETCH_ASSOC)) {
+            $this->conn->rollBack();
+            return [
+                "status" => "error",
+                "message" => "Equipment unit not found"
+            ];
+        }
+
+        // Check if equip_id exists in tbl_equipments
+        if (!empty($equip_id)) {
+            $checkEquipStmt = $this->conn->prepare("SELECT equip_id FROM tbl_equipments WHERE equip_id = :equip_id");
+            $checkEquipStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+            $checkEquipStmt->execute();
+            
+            if (!$checkEquipStmt->fetch(PDO::FETCH_ASSOC)) {
+                $this->conn->rollBack();
+                return [
+                    "status" => "error",
+                    "message" => "Equipment ID not found"
+                ];
+            }
+        }
+
+        // Check for duplicate serial number (excluding current unit)
+        $checkSerialStmt = $this->conn->prepare("
+            SELECT unit_id FROM tbl_equipment_unit 
+            WHERE serial_number = :serial_number 
+            AND unit_id != :unit_id
+            LIMIT 1
+        ");
+        $checkSerialStmt->bindParam(':serial_number', $serial_number, PDO::PARAM_STR);
+        $checkSerialStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
+        
+        if ($checkSerialStmt->fetch(PDO::FETCH_ASSOC)) {
+            $this->conn->rollBack();
+            return [
+                "status" => "error",
+                "message" => "Serial number already exists for another unit"
+            ];
+        }
+
+        // Update the equipment unit
+        $sql = "UPDATE tbl_equipment_unit SET serial_number = :serial_number, status_availability_id = :status_availability_id, unit_updated_at = NOW()";
+        if (!empty($equip_id)) {
+            $sql .= ", equip_id = :equip_id";
+        }
+        $sql .= " WHERE unit_id = :unit_id";
+        
+        $updateStmt = $this->conn->prepare($sql);
+        
+        // Always bind these parameters
+        $updateStmt->bindParam(':serial_number', $serial_number, PDO::PARAM_STR);
+        $updateStmt->bindParam(':status_availability_id', $status_availability_id, PDO::PARAM_INT);
+        $updateStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
+        
+        // Only bind equip_id if it's provided
+        if (!empty($equip_id)) {
+            $updateStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+        }
+        
+        $updateStmt->execute();
+
+        $this->conn->commit();
+
+        if ($updateStmt->rowCount() > 0) {
+            return [
+                "status" => "success",
+                "message" => "Equipment unit updated successfully",
+                "unit_id" => $unit_id,
+                "changes" => $updateStmt->rowCount()
+            ];
+        } else {
+            return [
+                "status" => "success",
+                "message" => "No changes were made to the equipment unit",
+                "unit_id" => $unit_id
+            ];
+        }
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        error_log("Database error in updateEquipmentUnit: " . $e->getMessage());
+        return [
+            "status" => "error",
+            "message" => "Database error: " . $e->getMessage(),
+            "error_code" => $e->getCode()
+        ];
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        error_log("Error in updateEquipmentUnit: " . $e->getMessage());
+        return [
+            "status" => "error",
+            "message" => "An unexpected error occurred: " . $e->getMessage()
+        ];
+    }
 }
+
+public function updateDriver($driverData) {
+        try {
+            // Handle driver picture upload if present
+           
+
+            $sql = "UPDATE tbl_driver SET 
+                    driver_first_name = :firstName,
+                    driver_middle_name = :middleName,
+                    driver_last_name = :lastName,
+                    driver_suffix = :suffix,
+                    employee_id = :employeeId,
+                    driver_birthdate = :birthdate,
+                    driver_contact_number = :contactNumber,
+                    driver_address = :address,
+                    is_active = :isActive,
+                    updated_at = NOW()";
+
+            // Add picture update only if a new picture was uploaded
+            
+            $sql .= " WHERE driver_id = :driverId";
+
+            $stmt = $this->conn->prepare($sql);
+
+            // Bind the parameters
+            $stmt->bindParam(':firstName', $driverData['first_name']);
+            $stmt->bindParam(':middleName', $driverData['middle_name']);
+            $stmt->bindParam(':lastName', $driverData['last_name']);
+            $stmt->bindParam(':suffix', $driverData['suffix']);
+            $stmt->bindParam(':employeeId', $driverData['employee_id']);
+            $stmt->bindParam(':birthdate', $driverData['birthdate']);
+            $stmt->bindParam(':contactNumber', $driverData['contact_number']);
+            $stmt->bindParam(':address', $driverData['address']);
+            $stmt->bindParam(':isActive', $driverData['is_active'], PDO::PARAM_BOOL);
+            $stmt->bindParam(':driverId', $driverData['driver_id'], PDO::PARAM_INT);
+
+
+
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Driver updated successfully',
+                    'driver_id' => $driverData['driver_id']
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Could not update driver'
+                ]);
+            }
+        } catch (PDOException $e) {
+            error_log("PDO Exception in updateDriver: " . $e->getMessage());
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        } catch (Exception $e) {
+            error_log("General Exception in updateDriver: " . $e->getMessage());
+            return json_encode([
+                'status' => 'error',
+                'message' => 'An unexpected error occurred: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+}
+
 
 // Handle the request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -606,6 +786,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "updateVehicleLicense":
             $vehicleData = $jsonInput['vehicleData'] ?? [];
             echo $user->updateVehicleLicense($vehicleData);
+            break;
+        case "updateEquipmentUnit":
+            $unit_id = $jsonInput['unit_id'] ?? '';
+            $equip_id = $jsonInput['equip_id'] ?? '';
+            $serial_number = $jsonInput['serial_number'] ?? '';
+            $status_availability_id = $jsonInput['status_availability_id'] ?? '';
+
+            echo json_encode($user->updateEquipmentUnit($unit_id, $equip_id, $serial_number, $status_availability_id));
+            break;
+
+        case "updateDriver":
+            echo $user->updateDriver($jsonInput['driverData'] ?? []);
             break;
 
         default:

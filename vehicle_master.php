@@ -85,22 +85,46 @@ class Vehicle {
     }
 
     public function saveModelData($json) {
-        $json = json_decode($json, true);
-        error_log(print_r($json, true)); 
-        try {
-            $sql = "INSERT INTO tbl_vehicle_model (vehicle_model_name, vehicle_category_id, vehicle_model_vehicle_make_id) 
-                    VALUES (:name, :category_id, :make_id)";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $json['name']);
-            $stmt->bindParam(':category_id', $json['category_id']);
-            $stmt->bindParam(':make_id', $json['make_id']);
-            $stmt->execute();
-    
-            return json_encode(['status' => 'success', 'message' => 'Model added successfully.']);
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    $json = json_decode($json, true);
+    error_log(print_r($json, true)); 
+
+    try {
+        // Check if the model already exists for the same category and make
+        $checkSql = "SELECT COUNT(*) FROM tbl_vehicle_model 
+                     WHERE vehicle_model_name = :name 
+                     AND vehicle_category_id = :category_id 
+                     AND vehicle_model_vehicle_make_id = :make_id";
+        $checkStmt = $this->conn->prepare($checkSql);
+        
+        // Prepare bind variables
+        $name = $json['name'];
+        $category_id = $json['category_id'];
+        $make_id = $json['make_id'];
+
+        $checkStmt->bindParam(':name', $name, PDO::PARAM_STR);
+        $checkStmt->bindParam(':category_id', $category_id, PDO::PARAM_INT);
+        $checkStmt->bindParam(':make_id', $make_id, PDO::PARAM_INT);
+        $checkStmt->execute();
+
+        if ($checkStmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'This vehicle model already exists under the same category and make.']);
         }
+
+        // Insert if not existing
+        $sql = "INSERT INTO tbl_vehicle_model (vehicle_model_name, vehicle_category_id, vehicle_model_vehicle_make_id) 
+                VALUES (:name, :category_id, :make_id)";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $name, PDO::PARAM_STR);
+        $stmt->bindParam(':category_id', $category_id, PDO::PARAM_INT);
+        $stmt->bindParam(':make_id', $make_id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return json_encode(['status' => 'success', 'message' => 'Model added successfully.']);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
     
 
     // Check if vehicle category exists

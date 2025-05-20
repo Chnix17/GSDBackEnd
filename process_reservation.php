@@ -833,16 +833,39 @@ class User {
                 SELECT 
                     e.equip_id,
                     e.equip_name,
-                    SUM(re.reservation_equipment_quantity) AS reserved_quantity
-                FROM tbl_reservation r
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                INNERJOIN tbl_reservation_equipment re ON r.reservation_id = re.reservation_reservation_id
-                INNER JOIN tbl_equipments e ON re.reservation_equipment_equip_id = e.equip_id
-                WHERE r.reservation_start_date <= :endDate 
-                AND r.reservation_end_date >= :startDate
-                AND rs.reservation_status_status_id = 6
-                AND rs.reservation_active = 1
-                GROUP BY e.equip_id, e.equip_name
+                    
+                    -- Use either equip_quantity (non-serialized) or count from units (serialized)
+                    CASE
+                        WHEN e.equip_quantity IS NOT NULL THEN e.equip_quantity
+                        ELSE (
+                            SELECT COUNT(*) 
+                            FROM tbl_equipment_unit u
+                            WHERE u.equip_id = e.equip_id 
+                            AND u.status_availability_id = 1
+                        )
+                    END AS total_quantity,
+
+                    -- Total reserved quantity within date range
+                    COALESCE(SUM(re.reservation_equipment_quantity), 0) AS reserved_quantity
+
+                FROM tbl_equipments e
+
+                LEFT JOIN tbl_reservation_equipment re 
+                    ON e.equip_id = re.reservation_equipment_equip_id
+
+                LEFT JOIN tbl_reservation r 
+                    ON r.reservation_id = re.reservation_reservation_id
+
+                LEFT JOIN tbl_reservation_status rs 
+                    ON rs.reservation_reservation_id = r.reservation_id
+
+                WHERE 
+                    (r.reservation_start_date <= :endDate AND r.reservation_end_date >= :startDate)
+                    AND rs.reservation_status_status_id = 6
+                    AND rs.reservation_active = 1
+
+                GROUP BY e.equip_id, e.equip_name, e.equip_quantity
+
             ";
             $stmt = $this->conn->prepare($equipmentQuery);
             $stmt->execute([

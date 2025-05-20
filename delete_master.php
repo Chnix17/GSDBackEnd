@@ -20,23 +20,14 @@ class User {
             $query = "";
             
             switch ($userType) {
-                case 'admin':
-                    $query = "UPDATE tbl_admin SET is_active = 0 WHERE admin_id = :userId";
-                    break;
                 case 'user':
                     $query = "UPDATE tbl_users SET is_active = 0 WHERE users_id = :userId";
                     break;
                 case 'driver':
                     $query = "UPDATE tbl_driver SET is_active = 0 WHERE driver_id = :userId";
                     break;
-                case 'dept':
-                    $query = "UPDATE tbl_dept SET is_active = 0 WHERE dept_id = :userId";
-                    break;
-                case 'personel':
-                    $query = "UPDATE tbl_personel SET is_active = 0 WHERE jo_personel_id = :userId";
-                    break;
                 default:
-                    return json_encode(array('message' => 'Invalid user type.'));
+                    return json_encode(array('message' => 'Invalid user type. Only user and driver types are supported.'));
             }
             $stmt = $this->conn->prepare($query);
             $stmt->bindParam(':userId', $userId);
@@ -57,23 +48,14 @@ class User {
             }
             $query = "";
             switch ($userType) {
-                case 'admin':
-                    $query = "UPDATE tbl_admin SET is_active = 1 WHERE admin_id = :userId";
-                    break;
                 case 'user':
                     $query = "UPDATE tbl_users SET is_active = 1 WHERE users_id = :userId";
                     break;
                 case 'driver':
                     $query = "UPDATE tbl_driver SET is_active = 1 WHERE driver_id = :userId";
                     break;
-                case 'dept':
-                    $query = "UPDATE tbl_dept SET is_active = 1 WHERE dept_id = :userId";
-                    break;
-                case 'personel':
-                    $query = "UPDATE tbl_personel SET is_active = 1 WHERE jo_personel_id = :userId";
-                    break;
                 default:
-                    return json_encode(array('message' => 'Invalid user type.'));
+                    return json_encode(array('message' => 'Invalid user type. Only user and driver types are supported.'));
             }
             $stmt = $this->conn->prepare($query);
             $stmt->bindParam(':userId', $userId);
@@ -125,185 +107,110 @@ class User {
                     tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                 WHERE u.is_active = 0";
 
-            // Fetch Dean/Secretary
-            $deanSecSql = "SELECT 
-                    'dean_sec' as type,
-                    d.dept_id as id,
-                    d.dept_fname as fname,
-                    d.dept_mname as mname,
-                    d.dept_lname as lname,
-                    d.dept_email as email,
-                    d.dept_school_id as school_id,
-                    d.dept_contact_number as contact_number,
-                    d.dept_department_id as department_id,
-                    d.dept_pic as pic,
-                    d.dept_created_at as created_at,
-                    d.dept_updated_at as updated_at,
-                    d.is_active,
-                    dp.departments_name,
-                    ul.user_level_name,
-                    '' as user_level_desc
-                FROM 
-                    tbl_dept d
-                LEFT JOIN 
-                    tbl_departments dp ON d.dept_department_id = dp.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON d.dept_user_level_id = ul.user_level_id
-                WHERE d.is_active = 0";
-
-            // Fetch Admin
-            $adminSql = "SELECT 
-                    'admin' as type,
-                    a.admin_id as id,
-                    a.admin_fname as fname,
-                    a.admin_mname as mname,
-                    a.admin_lname as lname,
-                    a.admin_email as email,
-                    a.admin_school_id as school_id,
-                    a.admin_contact_number as contact_number,
-                    a.admin_department_id as department_id,
-                    a.admin_pic as pic,
-                    a.admin_created_at as created_at,
-                    a.admin_updated_at as updated_at,
-                    a.is_active,
-                    d.departments_name,
-                    ul.user_level_name,
-                    '' as user_level_desc
-                FROM 
-                    tbl_admin a
-                LEFT JOIN 
-                    tbl_departments d ON a.admin_department_id = d.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON a.admin_user_level_id = ul.user_level_id
-                WHERE a.is_active = 0";
-
-            // Fetch Drivers
-            $driverSql = "SELECT 
-                    'driver' as type,
-                    d.driver_id as id,
-                    d.driver_full_name as fname,
-                    '' as mname,
-                    '' as lname,
-                    d.driver_email as email,
-                    d.driver_school_id as school_id,
-                    d.driver_contact_number as contact_number,
-                    d.driver_department_id as department_id,
-                    d.driver_pic as pic,
-                    d.driver_created_at as created_at,
-                    d.driver_updated_at as updated_at,
-                    d.is_active,
-                    dp.departments_name,
-                    ul.user_level_name,
-                    '' as user_level_desc
-                FROM 
-                    tbl_driver d
-                LEFT JOIN 
-                    tbl_departments dp ON d.driver_department_id = dp.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON d.driver_user_level_id = ul.user_level_id
-                WHERE d.is_active = 0";
-
-            // Fetch Personnel
-            $personnelSql = "SELECT 
-                    'personnel' as type,
-                    p.jo_personel_id as id,
-                    p.jo_personel_fname as fname,
-                    p.jo_personel_mname as mname,
-                    p.jo_personel_lname as lname,
-                    '' as email,
-                    p.jo_personel_school_id as school_id,
-                    p.jo_personel_contact_number as contact_number,
-                    p.jo_personel_department_id as department_id,
-                    p.jo_personel_pic as pic,
-                    p.jo_personel_created_at as created_at,
-                    p.jo_personel_updated_at as updated_at,
-                    p.is_active,
-                    d.departments_name,
-                    ul.user_level_name,
-                    '' as user_level_desc
-                FROM 
-                    tbl_personel p
-                LEFT JOIN 
-                    tbl_departments d ON p.jo_personel_department_id = d.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON p.jo_user_level_id = ul.user_level_id
-                WHERE p.is_active = 0";
+            
 
             // Combine all results and execute
-            $sql = "($usersSql) UNION ALL ($deanSecSql) UNION ALL ($adminSql) UNION ALL ($driverSql) UNION ALL ($personnelSql) ORDER BY type, lname";
+            $sql = "($usersSql) ORDER BY type, lname";
             return $this->executeQuery($sql);
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
 
-    public function archiveResource($resourceType, $resourceId) {
-        try {
-            if (empty($resourceType) || empty($resourceId)) {
-                return json_encode(array('status' => 'error', 'message' => 'Resource type and ID are required.'));
-            }
+    public function archiveResource($resourceType, $resourceId, $is_serialize = false) {
+    try {
+        if (empty($resourceType) || empty($resourceId)) {
+            return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
+        }
 
-            $query = "";
-            switch ($resourceType) {
-                case 'vehicle':
-                    $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id = :resourceId";
-                    break;
-                case 'venue':
-                    $query = "UPDATE tbl_venue SET is_active = 0 WHERE ven_id = :resourceId";
-                    break;
-                case 'equipment':
+        $query = "";
+        
+        switch ($resourceType) {
+            case 'vehicle':
+                $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id = :resourceId";
+                break;
+
+            case 'venue':
+                $query = "UPDATE tbl_venue SET is_active = 0 WHERE ven_id = :resourceId";
+                break;
+
+            case 'equipment':
+                if ($is_serialize) {
+                    // Archive serialized unit
+                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id = :resourceId";
+                } else {
+                    // Archive equipment item
                     $query = "UPDATE tbl_equipments SET is_active = 0 WHERE equip_id = :resourceId";
-                    break;
-                default:
-                    return json_encode(array('message' => 'Invalid resource type.'));
-            }
+                }
+                break;
 
-            $stmt = $this->conn->prepare($query);
-            $stmt->bindParam(':resourceId', $resourceId);
-
-            if ($stmt->execute()) {
-                return json_encode(array('status' => 'success', 'message' => 'Resource archived successfully.'));
-            } else {
-                return json_encode(array('status' => 'error', 'message' => 'Error archiving resource.'));
-            }
-        } catch (PDOException $e) {
-            return json_encode(array('status' => 'error', 'message' => 'Database error: ' . $e->getMessage()));
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid resource type.']);
         }
+
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':resourceId', $resourceId);
+
+        if ($stmt->execute()) {
+            return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
+        }
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
     }
+}
 
-    public function unarchiveResource($resourceType, $resourceId) {
-        try {
-            if (empty($resourceType) || empty($resourceId)) {
-                return json_encode(array('status' => 'error', 'message' => 'Resource type and ID are required.'));
-            }
+    public function unarchiveResource($resourceType, $resourceId, $is_serialize = false) {
+    try {
+        if (empty($resourceType) || empty($resourceId)) {
+            return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
+        }
 
-            $query = "";
-            switch ($resourceType) {
-                case 'vehicle':
-                    $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id = :resourceId";
-                    break;
-                case 'venue':
-                    $query = "UPDATE tbl_venue SET is_active = 1 WHERE ven_id = :resourceId";
-                    break;
-                case 'equipment':
+        $query = "";
+        
+        switch ($resourceType) {
+            case 'vehicle':
+                $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id = :resourceId";
+                break;
+
+            case 'venue':
+                $query = "UPDATE tbl_venue SET is_active = 1 WHERE ven_id = :resourceId";
+                break;
+
+            case 'equipment':
+                if ($is_serialize) {
+                    // Archive serialized unit
+                    $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id = :resourceId";
+                } else {
+                    // Archive equipment item
                     $query = "UPDATE tbl_equipments SET is_active = 1 WHERE equip_id = :resourceId";
-                    break;
-                default:
-                    return json_encode(array('message' => 'Invalid resource type.'));
-            }
+                }
+                break;
 
-            $stmt = $this->conn->prepare($query);
-            $stmt->bindParam(':resourceId', $resourceId);
-
-            if ($stmt->execute()) {
-                return json_encode(array('status' => 'success', 'message' => 'Resource unarchived successfully.'));
-            } else {
-                return json_encode(array('status' => 'error', 'message' => 'Error unarchiving resource.'));
-            }
-        } catch (PDOException $e) {
-            return json_encode(array('status' => 'error', 'message' => 'Database error: ' . $e->getMessage()));
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid resource type.']);
         }
+
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':resourceId', $resourceId);
+
+        if ($stmt->execute()) {
+            return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
+        }
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
     }
+}
+
+
+
+    
+
     public function fetchAllVehicles() {
         $sql = "SELECT  
                     v.vehicle_id,
@@ -332,28 +239,64 @@ class User {
         return $this->executeQuery($sql);
     }
 
-    public function fetchEquipmentsWithStatus() {
-        $sql = "SELECT 
-                    e.equip_id, 
-                    e.equip_name, 
-                    e.equip_quantity, 
-                    e.equip_created_at, 
-                    e.equip_updated_at,
-                    e.equip_pic,
-                    e.equipment_equipment_category_id,
-                    sa.status_availability_name,
-                    e.is_active
+        public function fetchEquipmentAndInactiveUnits() {
+    // Fetch all equipment that is inactive
+    $equipmentSql = "SELECT 
+                        e.equip_id, 
+                        e.equip_name
+                     FROM 
+                        tbl_equipments e
+                     WHERE 
+                        e.is_active = 0";
+
+    $stmt = $this->conn->prepare($equipmentSql);
+    $stmt->execute();
+    $inactiveEquipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Fetch all inactive units and join with their parent equipment (active or inactive)
+    $unitSql = "SELECT 
+                    eu.unit_id, 
+                    eu.equip_id, 
+                    eu.serial_number, 
+                    e.equip_name
                 FROM 
-                    tbl_equipments e
+                    tbl_equipment_unit eu
                 INNER JOIN 
-                    tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id
-                WHERE
-                    e.is_active = 0
-                ORDER BY
-                    e.equip_id";
-    
-        return $this->executeQuery($sql);
+                    tbl_equipments e ON e.equip_id = eu.equip_id
+                WHERE 
+                    eu.is_active = 0";
+
+    $unitStmt = $this->conn->prepare($unitSql);
+    $unitStmt->execute();
+    $inactiveUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $response = [];
+
+    // Add all inactive equipment (even without serialized units)
+    foreach ($inactiveEquipments as $equip) {
+        $response[] = [
+            'equip_id' => (int)$equip['equip_id'],
+            'equip_name' => $equip['equip_name'],
+            'unit_id' => null,
+            'serial_number' => null
+        ];
     }
+
+    // Add all inactive units (whether parent equipment is active or not)
+    foreach ($inactiveUnits as $unit) {
+        $response[] = [
+            'equip_id' => (int)$unit['equip_id'],
+            'equip_name' => $unit['equip_name'],
+            'unit_id' => (int)$unit['unit_id'],
+            'serial_number' => $unit['serial_number']
+        ];
+    }
+
+    return json_encode(['status' => 'success', 'data' => $response]);
+}
+
+
+
 
     public function fetchVenue() {
         $sql = "SELECT 
@@ -477,8 +420,90 @@ public function deleteCondition($conditionId) {
         }
     }
 
+    public function deleteVenue($venueId) {
+        try {
+            $sql = "DELETE FROM tbl_venue WHERE ven_id = :venueId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':venueId', $venueId);
+            $stmt->execute();
 
+            if ($stmt->rowCount() > 0) {
+                return json_encode(['status' => 'success', 'message' => 'Venue deleted successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'No venue found with the given ID.']);
+            }
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Could not delete venue: ' . $e->getMessage()]);
+        }
+    }
 
+    public function deleteEquipment($equipmentId) {
+        try {
+            $sql = "DELETE FROM tbl_equipments WHERE equip_id = :equipmentId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':equipmentId', $equipmentId);
+            $stmt->execute();
+
+            if ($stmt->rowCount() > 0) {
+                return json_encode(['status' => 'success', 'message' => 'Equipment deleted successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'No equipment found with the given ID.']);
+            }
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Could not delete equipment: ' . $e->getMessage()]);
+        }
+    }
+
+    public function deleteVehicle($vehicleId) {
+        try {
+            $sql = "DELETE FROM tbl_vehicle WHERE vehicle_id = :vehicleId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':vehicleId', $vehicleId);
+            $stmt->execute();
+
+            if ($stmt->rowCount() > 0) {
+                return json_encode(['status' => 'success', 'message' => 'Vehicle deleted successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'No vehicle found with the given ID.']);
+            }
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Could not delete vehicle: ' . $e->getMessage()]);
+        }
+    }
+
+    public function deleteUser($userId) {
+        try {
+            $sql = "DELETE FROM tbl_users WHERE users_id = :userId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':userId', $userId);
+            $stmt->execute();
+
+            if ($stmt->rowCount() > 0) {
+                return json_encode(['status' => 'success', 'message' => 'User deleted successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'No user found with the given ID.']);
+            }
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Could not delete user: ' . $e->getMessage()]);
+        }
+    }
+
+    public function deleteDriver($driverId) {
+        try {
+            $sql = "DELETE FROM tbl_driver WHERE driver_id = :driverId";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':driverId', $driverId);
+            $stmt->execute();
+
+            if ($stmt->rowCount() > 0) {
+                return json_encode(['status' => 'success', 'message' => 'Driver deleted successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'No driver found with the given ID.']);
+            }
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Could not delete driver: ' . $e->getMessage()]);
+        }
+    }
     
 }
 
@@ -514,23 +539,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 break;
             case 'archiveResource':
                 if (isset($data['resourceType']) && isset($data['resourceId'])) {
-                    echo $user->archiveResource($data['resourceType'], $data['resourceId']);
+                    $is_serialize = isset($data['is_serialize']) ? $data['is_serialize'] : false;
+                    echo $user->archiveResource($data['resourceType'], $data['resourceId'], $is_serialize);
                 } else {
                     echo json_encode(array('status' => 'error', 'message' => 'Missing required parameters.'));
                 }
                 break;
             case 'unarchiveResource':
                 if (isset($data['resourceType']) && isset($data['resourceId'])) {
-                    echo $user->unarchiveResource($data['resourceType'], $data['resourceId']);
+                    $is_serialize = isset($data['is_serialize']) ? $data['is_serialize'] : false;
+                    echo $user->unarchiveResource($data['resourceType'], $data['resourceId'], $is_serialize);
                 } else {
                     echo json_encode(array('status' => 'error', 'message' => 'Missing required parameters.'));
                 }
                 break;
+                
             case 'fetchAllVehicles':
                 echo $user->fetchAllVehicles();
                 break;
-            case 'fetchEquipmentsWithStatus':
-                echo $user->fetchEquipmentsWithStatus();
+            case 'fetchEquipmentAndInactiveUnits':
+                echo $user->fetchEquipmentAndInactiveUnits();
                 break;
             case 'fetchVenue': 
                 echo $user->fetchVenue();
@@ -575,6 +603,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     echo $user->deleteVehicleMake($data['vehicleMakeId']);
                 } else {
                     echo json_encode(['status' => 'error', 'message' => 'Missing vehicle make ID']);
+                }
+                break;
+            case 'deleteVenue':
+                if (isset($data['venueId'])) {
+                    echo $user->deleteVenue($data['venueId']);
+                } else {
+                    echo json_encode(['status' => 'error', 'message' => 'Missing venue ID']);
+                }
+                break;
+            case 'deleteEquipment':
+                if (isset($data['equipmentId'])) {
+                    echo $user->deleteEquipment($data['equipmentId']);
+                } else {
+                    echo json_encode(['status' => 'error', 'message' => 'Missing equipment ID']);
+                }
+                break;
+            case 'deleteVehicle':
+                if (isset($data['vehicleId'])) {
+                    echo $user->deleteVehicle($data['vehicleId']);
+                } else {
+                    echo json_encode(['status' => 'error', 'message' => 'Missing vehicle ID']);
+                }
+                break;
+            case 'deleteUser':
+                if (isset($data['userId'])) {
+                    echo $user->deleteUser($data['userId']);
+                } else {
+                    echo json_encode(['status' => 'error', 'message' => 'Missing user ID']);
+                }
+                break;
+            case 'deleteDriver':
+                if (isset($data['driverId'])) {
+                    echo $user->deleteDriver($data['driverId']);
+                } else {
+                    echo json_encode(['status' => 'error', 'message' => 'Missing driver ID']);
                 }
                 break;
             default:
