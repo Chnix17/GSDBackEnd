@@ -932,6 +932,111 @@ class User {
             ]);
         }
     }
+    
+    public function insertUnits($equipIds, $quantities, $reservationId) {
+    try {
+        $this->conn->beginTransaction();
+
+        $results = [];
+
+        for ($i = 0; $i < count($equipIds); $i++) {
+            $equipId = $equipIds[$i];
+            $quantity = $quantities[$i];
+
+            // Get reservation_equipment_id for this equip and reservation
+            $sqlReservation = "SELECT reservation_equipment_id 
+                               FROM tbl_reservation_equipment 
+                               WHERE reservation_equipment_equip_id = :equip_id 
+                               AND reservation_reservation_id = :reservation_id";
+            $stmtReservation = $this->conn->prepare($sqlReservation);
+            $stmtReservation->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+            $stmtReservation->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmtReservation->execute();
+            $reservationEquip = $stmtReservation->fetch(PDO::FETCH_ASSOC);
+
+            if (!$reservationEquip) {
+                throw new Exception("No reservation_equipment found for equip_id $equipId and reservation_id $reservationId");
+            }
+            $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
+
+            // Check equipment type (quantity or serialized)
+            $sqlEquip = "SELECT equip_quantity FROM tbl_equipments WHERE equip_id = :equip_id";
+            $stmtEquip = $this->conn->prepare($sqlEquip);
+            $stmtEquip->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+            $stmtEquip->execute();
+            $equip = $stmtEquip->fetch(PDO::FETCH_ASSOC);
+
+            if (!$equip) {
+                throw new Exception("Equipment with ID $equipId not found.");
+            }
+
+            if ($equip['equip_quantity'] !== null) {
+                // Quantity-based: no unit insertion
+                $results[] = [
+                    'equip_id' => $equipId,
+                    'reservation_equipment_id' => $reservationEquipmentId,
+                    'type' => 'quantity',
+                    'message' => 'Quantity-based equipment: no units inserted'
+                ];
+                continue;
+            }
+
+            // Serialized equipment: get available units
+            $sqlUnits = "SELECT unit_id, serial_number 
+                         FROM tbl_equipment_unit 
+                         WHERE equip_id = :equip_id 
+                         AND status_availability_id = 1 
+                         AND is_active = 1 
+                         LIMIT :quantity";
+            $stmtUnits = $this->conn->prepare($sqlUnits);
+            $stmtUnits->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+            $stmtUnits->bindValue(':quantity', (int)$quantity, PDO::PARAM_INT);
+            $stmtUnits->execute();
+            $units = $stmtUnits->fetchAll(PDO::FETCH_ASSOC);
+
+            if (count($units) < $quantity) {
+                throw new Exception("Not enough available units for serialized equipment ID $equipId");
+            }
+
+            // Insert units into tbl_reservation_unit
+            $insertSql = "INSERT INTO tbl_reservation_unit 
+                          (reservation_equipment_id, unit_id, is_released, is_returned) 
+                          VALUES (:reservation_equipment_id, :unit_id, 0, 0)";
+            $insertStmt = $this->conn->prepare($insertSql);
+
+            foreach ($units as $unit) {
+                $insertStmt->bindParam(':reservation_equipment_id', $reservationEquipmentId, PDO::PARAM_INT);
+                $insertStmt->bindParam(':unit_id', $unit['unit_id'], PDO::PARAM_INT);
+                $insertStmt->execute();
+            }
+
+            $results[] = [
+                'equip_id' => $equipId,
+                'reservation_equipment_id' => $reservationEquipmentId,
+                'type' => 'serialized',
+                'units_inserted' => count($units),
+                'units' => $units
+            ];
+        }
+
+        $this->conn->commit();
+
+        return json_encode([
+            'operation' => 'insertUnits',
+            'status' => 'success',
+            'data' => $results
+        ]);
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'operation' => 'insertUnits',
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
+    }
+}
+
+
 
 }
 
@@ -1040,6 +1145,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case "fetchApprovalNotification":
             echo $user->fetchApprovalNotification();
+            break;
+        case "insertUnits":
+            $equipIds = $data['equip_ids'] ?? null;
+            $quantities = $data['quantities'] ?? null;
+            $reservationId = $data['reservation_id'] ?? null;
+
+            if ($equipIds === null || $quantities === null || $reservationId === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Equip IDs, Quantities, and Reservation ID are required']);
+                break;
+            }
+
+            echo $user->insertUnits($equipIds, $quantities, $reservationId);
             break;
 
         default:

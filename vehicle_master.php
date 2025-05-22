@@ -375,18 +375,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'saveModelData':
                 echo $vehicle->saveModelData($data['json']);
                 break;
-                case 'saveEquipmentCategory':  // New case for saving equipment category
-                    echo $vehicle->saveEquipmentCategory($data['json']);
-                    break;
-            
-         case 'savePosition':  // New case for saving equipment category
-        echo $vehicle->savePositionData($data['json']);
-            break;
-
-
+            case 'saveEquipmentCategory':  // New case for saving equipment category
+                echo $vehicle->saveEquipmentCategory($data['json']);
+                break;
+            case 'savePosition':  // New case for saving equipment category
+                echo $vehicle->savePositionData($data['json']);
+                break;
             case 'saveUserLevelData':
-            echo $vehicle->saveUserLevelData($data['json']);
-            break;
+                echo $vehicle->saveUserLevelData($data['json']);
+                break;
             case 'saveConditionData':
                 echo $vehicle->saveConditionData($data['json']);
                 break;
