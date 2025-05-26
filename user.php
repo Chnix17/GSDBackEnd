@@ -255,83 +255,96 @@ class User {
     }
 
     public function fetchEquipmentsWithStatus() {
-        // 1) Get only equipments that have at least one active unit
-        $sql = "
-            SELECT 
-                e.equip_id,
-                e.equip_name,
-                e.category_name,
-                e.equip_pic,
-                e.user_admin_id,
-                e.equip_created_at,
-                e.is_active
-            FROM tbl_equipments AS e
-            WHERE 
-                e.is_active = 1
-                AND EXISTS (
-                    SELECT 1 
-                    FROM tbl_equipment_unit AS eu
-                    WHERE eu.equip_id = e.equip_id
-                    AND eu.is_active = 1
-                )
-            ORDER BY e.equip_id
-        ";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->execute();
-        $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // 1) Get only equipments that have at least one active unit
+    $sql = "
+        SELECT 
+            e.equip_id,
+            e.equip_name,
+            e.category_name,
+            e.equip_pic,
+            e.user_admin_id,
+            e.equip_created_at,
+            e.is_active
+        FROM tbl_equipments AS e
+        WHERE 
+            e.is_active = 1
+            AND EXISTS (
+                SELECT 1 
+                FROM tbl_equipment_unit AS eu
+                WHERE eu.equip_id = e.equip_id
+                AND eu.is_active = 1
+            )
+        ORDER BY e.equip_id
+    ";
+    $stmt = $this->conn->prepare($sql);
+    $stmt->execute();
+    $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // 2) Fetch all active units (so we can group them)
-        $unitSql = "
-            SELECT 
-                eu.unit_id,
-                eu.equip_id,
-                eu.serial_number,
-                eu.quantity,
-                sua.status_availability_name AS availability_status,
-                eu.unit_created_at
-            FROM tbl_equipment_unit AS eu
-            LEFT JOIN tbl_status_availability AS sua 
-            ON eu.status_availability_id = sua.status_availability_id
-            WHERE eu.is_active = 1
-        ";
-        $unitStmt = $this->conn->prepare($unitSql);
-        $unitStmt->execute();
-        $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+    // 2) Fetch all active units (so we can group them)
+    $unitSql = "
+        SELECT 
+            eu.unit_id,
+            eu.equip_id,
+            eu.serial_number,
+            eu.quantity,
+            sua.status_availability_name AS availability_status,
+            eu.unit_created_at
+        FROM tbl_equipment_unit AS eu
+        LEFT JOIN tbl_status_availability AS sua 
+        ON eu.status_availability_id = sua.status_availability_id
+        WHERE eu.is_active = 1
+    ";
+    $unitStmt = $this->conn->prepare($unitSql);
+    $unitStmt->execute();
+    $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // 3) Group units by equip_id
-        $unitMap = [];
-        foreach ($allUnits as $unit) {
-            $unitMap[$unit['equip_id']][] = [
-                'unit_id'            => (int)$unit['unit_id'],
-                'serial_number'      => $unit['serial_number'],
-                'quantity'           => (int)$unit['quantity'],
-                'availability_status'=> $unit['availability_status'],
-                'unit_created_at'    => $unit['unit_created_at'],
-            ];
-        }
-
-        // 4) Assemble the final response
-        $response = [];
-        foreach ($equipments as $e) {
-            $id    = $e['equip_id'];
-            $units = $unitMap[$id] ?? [];
-
-            $response[] = [
-                'equip_id'                => (int)$id,
-                'equip_name'              => $e['equip_name'],
-                'category_name'           => $e['category_name'],
-                'equip_pic'               => $e['equip_pic'],
-                'user_admin_id'           => (int)$e['user_admin_id'],
-                'equip_created_at'        => $e['equip_created_at'],
-                'is_active'               => (bool)$e['is_active'],
-                // compute quantity as # of active units
-                'equip_quantity'          => count($units),
-                'units'                   => $units,
-            ];
-        }
-
-        return json_encode(['status' => 'success', 'data' => $response]);
+    // 3) Group units by equip_id
+    $unitMap = [];
+    foreach ($allUnits as $unit) {
+        $unitMap[$unit['equip_id']][] = [
+            'unit_id'            => (int)$unit['unit_id'],
+            'serial_number'      => $unit['serial_number'],
+            'quantity'           => (int)$unit['quantity'],
+            'availability_status'=> $unit['availability_status'],
+            'unit_created_at'    => $unit['unit_created_at'],
+        ];
     }
+
+    // 4) Assemble the final response
+    $response = [];
+    foreach ($equipments as $e) {
+        $id    = $e['equip_id'];
+        $units = $unitMap[$id] ?? [];
+
+        $totalQuantity = 0;
+        $countSerials = 0;
+
+        foreach ($units as $unit) {
+            $totalQuantity += $unit['quantity'];
+            if (!is_null($unit['serial_number']) && $unit['serial_number'] !== '') {
+                $countSerials++;
+            }
+        }
+
+        // If total quantity > 0, use it; otherwise count serial numbers
+        $equipQuantity = $totalQuantity > 0 ? $totalQuantity : $countSerials;
+
+        $response[] = [
+            'equip_id'         => (int)$id,
+            'equip_name'       => $e['equip_name'],
+            'category_name'    => $e['category_name'],
+            'equip_pic'        => $e['equip_pic'],
+            'user_admin_id'    => (int)$e['user_admin_id'],
+            'equip_created_at' => $e['equip_created_at'],
+            'is_active'        => (bool)$e['is_active'],
+            'equip_quantity'   => $equipQuantity,
+            'units'            => $units,
+        ];
+    }
+
+    return json_encode(['status' => 'success', 'data' => $response]);
+}
+
 
 
     

@@ -124,7 +124,7 @@ class User {
         }
 
         $query = "";
-        
+
         switch ($resourceType) {
             case 'vehicle':
                 $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id = :resourceId";
@@ -135,12 +135,12 @@ class User {
                 break;
 
             case 'equipment':
-                if ($is_serialize) {
-                    // Archive serialized unit
-                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id = :resourceId";
+                // Handle array of equipment IDs
+                if (is_array($resourceId)) {
+                    $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
+                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id IN ($placeholders)";
                 } else {
-                    // Archive equipment item
-                    $query = "UPDATE tbl_equipments SET is_active = 0 WHERE equip_id = :resourceId";
+                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id = :resourceId";
                 }
                 break;
 
@@ -149,27 +149,36 @@ class User {
         }
 
         $stmt = $this->conn->prepare($query);
-        $stmt->bindParam(':resourceId', $resourceId);
 
-        if ($stmt->execute()) {
-            return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+        if ($resourceType === 'equipment' && is_array($resourceId)) {
+            // Execute with array of equipment IDs
+            if ($stmt->execute($resourceId)) {
+                return json_encode(['status' => 'success', 'message' => 'Resources archived successfully.']);
+            }
         } else {
-            return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
+            // Execute with single ID
+            $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
+            if ($stmt->execute()) {
+                return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+            }
         }
+
+        return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
 
     } catch (PDOException $e) {
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
     }
 }
 
-    public function unarchiveResource($resourceType, $resourceId, $is_serialize = false) {
+
+    public function unarchiveResource($resourceType, $resourceId) {
     try {
         if (empty($resourceType) || empty($resourceId)) {
             return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
         }
 
         $query = "";
-        
+
         switch ($resourceType) {
             case 'vehicle':
                 $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id = :resourceId";
@@ -180,13 +189,8 @@ class User {
                 break;
 
             case 'equipment':
-                if ($is_serialize) {
-                    // Archive serialized unit
-                    $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id = :resourceId";
-                } else {
-                    // Archive equipment item
-                    $query = "UPDATE tbl_equipments SET is_active = 1 WHERE equip_id = :resourceId";
-                }
+                // Always unarchive only the unit
+                $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id = :resourceId";
                 break;
 
             default:
@@ -194,12 +198,12 @@ class User {
         }
 
         $stmt = $this->conn->prepare($query);
-        $stmt->bindParam(':resourceId', $resourceId);
+        $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
 
         if ($stmt->execute()) {
-            return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+            return json_encode(['status' => 'success', 'message' => 'Resource unarchived successfully.']);
         } else {
-            return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
+            return json_encode(['status' => 'error', 'message' => 'Error unarchiving resource.']);
         }
 
     } catch (PDOException $e) {
@@ -209,55 +213,41 @@ class User {
 
 
 
+
     
 
     public function fetchAllVehicles() {
-        $sql = "SELECT  
-                    v.vehicle_id,
-                    v.vehicle_license,
-                    v.year,
-                    v.vehicle_pic,
-                    v.status_availability_id,
-                    vm.vehicle_make_name, 
-                    vc.vehicle_category_name,
-                    vmd.vehicle_model_name,
-                    sa.status_availability_name,
-                    v.is_active
-                FROM 
-                    tbl_vehicle_model vmd 
-                INNER JOIN 
-                    tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
-                INNER JOIN 
-                    tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id 
-                INNER JOIN 
-                    tbl_vehicle v ON vmd.vehicle_model_id = v.vehicle_model_id
-                INNER JOIN
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-                WHERE 
-                    v.is_active = 0";
-    
-        return $this->executeQuery($sql);
-    }
+    $sql = "SELECT  
+                v.vehicle_id,
+                v.vehicle_license,
+                v.year,
+                v.vehicle_pic,
+                v.status_availability_id,
+                v.vehicle_make_name, 
+                v.vehicle_category_name,
+                vmd.vehicle_model_name,
+                sa.status_availability_name,
+                v.is_active
+            FROM 
+                tbl_vehicle v
+            INNER JOIN
+                tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
+            INNER JOIN
+                tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+            WHERE 
+                v.is_active = 0";
+
+    return $this->executeQuery($sql);
+}
+
 
         public function fetchEquipmentAndInactiveUnits() {
-    // Fetch all equipment that is inactive
-    $equipmentSql = "SELECT 
-                        e.equip_id, 
-                        e.equip_name
-                     FROM 
-                        tbl_equipments e
-                     WHERE 
-                        e.is_active = 0";
-
-    $stmt = $this->conn->prepare($equipmentSql);
-    $stmt->execute();
-    $inactiveEquipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Fetch all inactive units and join with their parent equipment (active or inactive)
+    // Fetch only inactive units, but include their equipment name
     $unitSql = "SELECT 
                     eu.unit_id, 
                     eu.equip_id, 
-                    eu.serial_number, 
+                    eu.serial_number,
+                    eu.quantity,
                     e.equip_name
                 FROM 
                     tbl_equipment_unit eu
@@ -266,34 +256,25 @@ class User {
                 WHERE 
                     eu.is_active = 0";
 
-    $unitStmt = $this->conn->prepare($unitSql);
-    $unitStmt->execute();
-    $inactiveUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $this->conn->prepare($unitSql);
+    $stmt->execute();
+    $inactiveUnits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $response = [];
 
-    // Add all inactive equipment (even without serialized units)
-    foreach ($inactiveEquipments as $equip) {
-        $response[] = [
-            'equip_id' => (int)$equip['equip_id'],
-            'equip_name' => $equip['equip_name'],
-            'unit_id' => null,
-            'serial_number' => null
-        ];
-    }
-
-    // Add all inactive units (whether parent equipment is active or not)
     foreach ($inactiveUnits as $unit) {
         $response[] = [
             'equip_id' => (int)$unit['equip_id'],
             'equip_name' => $unit['equip_name'],
             'unit_id' => (int)$unit['unit_id'],
-            'serial_number' => $unit['serial_number']
+            'serial_number' => $unit['serial_number'] ?? null,
+            'quantity' => isset($unit['quantity']) ? (int)$unit['quantity'] : null
         ];
     }
 
     return json_encode(['status' => 'success', 'data' => $response]);
 }
+
 
 
 
