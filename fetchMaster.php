@@ -109,16 +109,12 @@ class VehicleMake {
     public function fetchModels() {
         $sql = "
             SELECT 
-                vm.vehicle_model_id, 
-                vm.vehicle_model_name, 
-                vm_make.vehicle_make_name, 
-                vm_category.vehicle_category_name 
+                vm.vehicle_model_id,
+                vm.vehicle_model_name
             FROM 
                 tbl_vehicle_model vm
-            INNER JOIN 
-                tbl_vehicle_make vm_make ON vm.vehicle_model_vehicle_make_id = vm_make.vehicle_make_id
-            INNER JOIN 
-                tbl_vehicle_category vm_category ON vm.vehicle_category_id = vm_category.vehicle_category_id
+            ORDER BY 
+                vm.vehicle_model_name
         ";
     
         return $this->executeQuery($sql);
@@ -159,43 +155,103 @@ class VehicleMake {
 
     // New method to fetch equipment by ID and join with equipment category
     public function fetchEquipmentById($id) {
-        $sql = "
-            SELECT e.equip_id, e.equip_name, e.equip_quantity, e.equip_created_at, e.equip_updated_at,
-                e.status_availability_id, e.equipment_equipment_category_id,
-                ec.equipments_category_name,
-                sa.status_availability_name
-            FROM tbl_equipments e
-            INNER JOIN tbl_equipment_category ec ON e.equipment_equipment_category_id = ec.equipments_category_id
-            INNER JOIN tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id
-            WHERE e.equip_id = :id
-        ";
-        return $this->executeQuery($sql, [':id' => $id]);
-    }
+            // 1) Fetch the equipment
+            $sql = "
+                SELECT 
+                    e.equip_id,
+                    e.equip_name,
+                    e.category_name,
+                    e.equip_pic,
+                    e.is_active,
+                    e.user_admin_id,
+                    e.equip_created_at
+                FROM tbl_equipments AS e
+                WHERE e.equip_id = :id
+                AND e.is_active = 1
+                LIMIT 1
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':id' => $id]);
+            $equip = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (! $equip) {
+                return json_encode([
+                    'status'  => 'error',
+                    'message' => 'Equipment not found or inactive.'
+                ]);
+            }
+
+            // 2) Fetch its active units, with status names
+            $unitSql = "
+                SELECT
+                    eu.unit_id,
+                    eu.serial_number,
+                    eu.quantity,
+                    eu.unit_created_at,
+                    sua.status_availability_name AS availability_status
+                FROM tbl_equipment_unit AS eu
+                LEFT JOIN tbl_status_availability AS sua
+                ON eu.status_availability_id = sua.status_availability_id
+                WHERE eu.equip_id   = :id
+                AND eu.is_active  = 1
+                ORDER BY eu.unit_id
+            ";
+            $unitStmt = $this->conn->prepare($unitSql);
+            $unitStmt->execute([':id' => $id]);
+            $units = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 3) Compute displayed equip_quantity
+            $displayQty = count($units);
+
+            // 4) Build response
+            $response = [
+                'equip_id'        => (int)$equip['equip_id'],
+                'equip_name'      => $equip['equip_name'],
+                'category_name'   => $equip['category_name'],
+                'equip_pic'       => $equip['equip_pic'],
+                'user_admin_id'   => (int)$equip['user_admin_id'],
+                'equip_created_at'=> $equip['equip_created_at'],
+                'is_active'       => (bool)$equip['is_active'],
+                'equip_quantity'  => $displayQty,
+                'units'           => array_map(function($u) {
+                    return [
+                        'unit_id'            => (int)$u['unit_id'],
+                        'serial_number'      => $u['serial_number'],
+                        'quantity'           => (int)$u['quantity'],
+                        'availability_status'=> $u['availability_status'],
+                        'unit_created_at'    => $u['unit_created_at'],
+                    ];
+                }, $units),
+            ];
+
+            return json_encode([
+                'status' => 'success',
+                'data'   => $response
+            ]);
+        }
+
 
     public function fetchVehicleById($id) {
-        $sql = "SELECT 
-                    vm.vehicle_model_name, 
-                    vmake.vehicle_make_name, 
-                    vc.vehicle_category_name, 
-                    v.vehicle_license,
-                    sa.status_availability_name,
-                    v.year,
-                    v.vehicle_pic
-                FROM 
-                    tbl_vehicle v
-                JOIN 
-                    tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
-                JOIN 
-                    tbl_vehicle_make vmake ON vm.vehicle_model_vehicle_make_id = vmake.vehicle_make_id
-                JOIN 
-                    tbl_vehicle_category vc ON vm.vehicle_category_id = vc.vehicle_category_id
-                INNER JOIN 
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-                WHERE 
-                    v.vehicle_id = :id";
-    
-        return $this->executeQuery($sql, [':id' => $id]);
+    $sql = "
+        SELECT 
+            vmd.vehicle_model_name,
+            v.vehicle_make_name,
+            v.vehicle_category_name,
+            v.vehicle_license,
+            sa.status_availability_name,
+            v.year,
+            v.vehicle_pic
+        FROM tbl_vehicle v
+        JOIN tbl_vehicle_model vmd 
+            ON v.vehicle_model_id = vmd.vehicle_model_id
+        JOIN tbl_status_availability sa 
+            ON v.status_availability_id = sa.status_availability_id
+        WHERE v.vehicle_id = :id
+    ";
+
+    return $this->executeQuery($sql, [':id' => $id]);
     }
+
 
     public function fetchConditions() {
         $sql = "SELECT `id`, `condition_name` FROM `tbl_condition` WHERE 1";

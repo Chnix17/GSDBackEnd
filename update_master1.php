@@ -264,67 +264,93 @@ class User {
     
     
 
+    
     public function updateEquipment($equipmentData) {
         try {
-            // Handle equipment picture upload
-            $picPath = null;
+            $this->conn->beginTransaction();
+
+            // Handle equipment picture upload if present
             if (isset($equipmentData['equip_pic']) && !empty($equipmentData['equip_pic'])) {
                 $uploadDir = 'uploads/equipment/';
                 if (!file_exists($uploadDir)) {
                     mkdir($uploadDir, 0777, true);
                 }
-                
-                // Get file data and type from base64 string
+
+                // Validate the image data format
                 $image_parts = explode(";base64,", $equipmentData['equip_pic']);
+                if (count($image_parts) !== 2) {
+                    throw new Exception('Invalid image format');
+                }
+
                 $image_type_aux = explode("image/", $image_parts[0]);
+                if (count($image_type_aux) !== 2) {
+                    throw new Exception('Invalid image type');
+                }
+
                 $image_type = $image_type_aux[1];
+                if (!in_array($image_type, ['jpeg', 'jpg', 'png', 'gif'])) {
+                    throw new Exception('Unsupported image type');
+                }
+
                 $image_base64 = base64_decode($image_parts[1]);
-                
-                // Generate unique filename
+                if ($image_base64 === false) {
+                    throw new Exception('Invalid base64 encoding');
+                }
+
                 $filename = 'equipment_' . time() . '.' . $image_type;
                 $picPath = $uploadDir . $filename;
-                
-                file_put_contents($picPath, $image_base64);
+
+                if (!file_put_contents($picPath, $image_base64)) {
+                    throw new Exception('Failed to save image');
+                }
+
+                $sql = "UPDATE tbl_equipments SET 
+                            equip_name = :name, 
+                            category_name = :categoryName,
+                            equip_pic = :picPath
+                        WHERE equip_id = :equipmentId";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':picPath', $picPath);
+            } else {
+                $sql = "UPDATE tbl_equipments SET 
+                            equip_name = :name, 
+                            category_name = :categoryName
+                        WHERE equip_id = :equipmentId";
+                $stmt = $this->conn->prepare($sql);
             }
 
-            // Prepare the SQL statement for updating equipment details
-            $sql = "UPDATE tbl_equipments SET 
-                        equip_name = :name, 
-                        equip_quantity = :quantity, 
-                        equipment_equipment_category_id = :categoryId,
-                        status_availability_id = :statusId";
-            
-            // Add picture update only if a new picture was uploaded
-            if ($picPath !== null) {
-                $sql .= ", equip_pic = :picPath";
-            }
-            
-            $sql .= " WHERE equip_id = :equipmentId";
-    
-            $stmt = $this->conn->prepare($sql);
-            
-            // Bind parameters to prevent SQL injection
+            // Bind common parameters
             $stmt->bindParam(':name', $equipmentData['name']);
-            $stmt->bindParam(':quantity', $equipmentData['quantity']);
-            $stmt->bindParam(':categoryId', $equipmentData['categoryId'], PDO::PARAM_INT);
-            $stmt->bindParam(':statusId', $equipmentData['statusId'], PDO::PARAM_INT);
+            $stmt->bindParam(':categoryName', $equipmentData['category_name']);
             $stmt->bindParam(':equipmentId', $equipmentData['equipmentId'], PDO::PARAM_INT);
-            
-            // Bind picture path if it exists
-            if ($picPath !== null) {
-                $stmt->bindParam(':picPath', $picPath);
+
+            if (!$stmt->execute()) {
+                throw new Exception('Could not update equipment');
             }
-    
-            // Execute the statement and return success or error message
-            if ($stmt->execute()) {
-                return json_encode(['status' => 'success', 'message' => 'Equipment updated successfully']);
-            } else {
-                return json_encode(['status' => 'error', 'message' => 'Could not update equipment']);
+
+            // Now update quantity in tbl_equipment_unit
+            if (isset($equipmentData['quantity'])) {
+                $updateQuantitySQL = "UPDATE tbl_equipment_unit 
+                                    SET quantity = :quantity 
+                                    WHERE equip_id = :equipmentId";
+                $qtyStmt = $this->conn->prepare($updateQuantitySQL);
+                $qtyStmt->bindParam(':quantity', $equipmentData['quantity'], PDO::PARAM_INT);
+                $qtyStmt->bindParam(':equipmentId', $equipmentData['equipmentId'], PDO::PARAM_INT);
+
+                if (!$qtyStmt->execute()) {
+                    throw new Exception('Could not update equipment quantity');
+                }
             }
+
+            $this->conn->commit();
+            return json_encode(['status' => 'success', 'message' => 'Equipment and quantity updated successfully']);
         } catch (Exception $e) {
+            $this->conn->rollBack();
+            error_log('Error in updateEquipment: ' . $e->getMessage());
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
+
     public function updateUserLevel($userLevelData) {
         try {
             $sql = "UPDATE tbl_user_level SET 
@@ -454,65 +480,94 @@ class User {
     }
 
     public function updateVehicleLicense($vehicleData) {
-        // Handle vehicle picture upload
-        $picPath = null;
-        if (isset($vehicleData['vehicle_pic']) && !empty($vehicleData['vehicle_pic'])) {
-            $uploadDir = 'uploads/vehicles/';
-            if (!file_exists($uploadDir)) {
-                mkdir($uploadDir, 0777, true);
-            }
-            
-            // Get file data and type from base64 string
-            $image_parts = explode(";base64,", $vehicleData['vehicle_pic']);
-            
-            // Validate that we have the expected parts
-            if (count($image_parts) === 2) {
-                $image_type_aux = explode("image/", $image_parts[0]);
-                if (count($image_type_aux) === 2) {
-                    $image_type = $image_type_aux[1];
-                    $image_base64 = base64_decode($image_parts[1]);
-                    
-                    // Generate unique filename
-                    $filename = 'vehicle_' . time() . '.' . $image_type;
-                    $picPath = $uploadDir . $filename;
-                    
-                    file_put_contents($picPath, $image_base64);
-                    $vehicleData['vehicle_pic'] = $picPath;
-                }
-            }
+    try {
+        $this->conn->beginTransaction();
+
+        // Extract values
+        $modelName            = trim($vehicleData['vehicle_model_name'] ?? '');
+        $vehicleLicense       = trim($vehicleData['vehicle_license'] ?? '');
+        $year                 = trim($vehicleData['year'] ?? '');
+        $vehicleId            = intval($vehicleData['vehicle_id'] ?? 0);
+        $statusAvailabilityId = intval($vehicleData['status_availability_id'] ?? 0);
+        $categoryName         = trim($vehicleData['vehicle_category_name'] ?? '');
+        $makeName             = trim($vehicleData['vehicle_make_name'] ?? '');
+
+        if (!$modelName || !$vehicleLicense || !$year || !$vehicleId || !$statusAvailabilityId || !$categoryName || !$makeName) {
+            return json_encode(['status' => 'error', 'message' => 'All fields are required.']);
         }
 
-        $sql = "UPDATE tbl_vehicle 
-                SET vehicle_model_id = :modelId,
+        // 1. Check or insert vehicle model name
+        $sql = "SELECT vehicle_model_id FROM tbl_vehicle_model WHERE vehicle_model_name = :modelName LIMIT 1";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':modelName' => $modelName]);
+
+        if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $vehicleModelId = $row['vehicle_model_id'];
+        } else {
+            $sql = "INSERT INTO tbl_vehicle_model (vehicle_model_name, vehicle_model_created_at, vehicle_model_updated_at)
+                    VALUES (:modelName, NOW(), NOW())";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':modelName' => $modelName]);
+            $vehicleModelId = $this->conn->lastInsertId();
+        }
+
+        // 2. Optional: Handle vehicle picture upload
+        $picPath = null;
+        if (!empty($vehicleData['vehicle_pic'])) {
+            $uploadDir = 'uploads/vehicles/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            list($meta, $b64) = explode(';base64,', $vehicleData['vehicle_pic']);
+            $ext = str_replace('data:image/', '', $meta);
+            $filename = 'vehicle_' . time() . '.' . $ext;
+            $picPath = $uploadDir . $filename;
+            file_put_contents($picPath, base64_decode($b64));
+        }
+
+        // 3. Update the vehicle
+        $sql = "UPDATE tbl_vehicle SET
+                    vehicle_model_id = :modelId,
                     vehicle_license = :license,
                     year = :year,
                     status_availability_id = :statusId,
-                    vehicle_pic = :pic
-                WHERE vehicle_id = :id";
-        
-        try {
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':modelId', $vehicleData['vehicle_model_id'], PDO::PARAM_INT);
-            $stmt->bindParam(':license', $vehicleData['vehicle_license']);
-            $stmt->bindParam(':year', $vehicleData['year']);
-            $stmt->bindParam(':statusId', $vehicleData['status_availability_id'], PDO::PARAM_INT);
-            $stmt->bindParam(':pic', $vehicleData['vehicle_pic']);
-            $stmt->bindParam(':id', $vehicleData['vehicle_id'], PDO::PARAM_INT);
-            
-            if ($stmt->execute()) {
-                return json_encode(['status' => 'success', 'message' => 'Vehicle details updated successfully']);
-            } else {
-                return json_encode(['status' => 'error', 'message' => 'Could not update vehicle details']);
-            }
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+                    vehicle_category_name = :category,
+                    vehicle_make_name = :make"
+                . (!empty($picPath) ? ", vehicle_pic = :pic" : "") .
+               " WHERE vehicle_id = :id";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':modelId', $vehicleModelId, PDO::PARAM_INT);
+        $stmt->bindParam(':license', $vehicleLicense);
+        $stmt->bindParam(':year', $year);
+        $stmt->bindParam(':statusId', $statusAvailabilityId, PDO::PARAM_INT);
+        $stmt->bindParam(':category', $categoryName);
+        $stmt->bindParam(':make', $makeName);
+        $stmt->bindParam(':id', $vehicleId, PDO::PARAM_INT);
+        if (!empty($picPath)) {
+            $stmt->bindParam(':pic', $picPath);
         }
+
+        $stmt->execute();
+        $this->conn->commit();
+
+        return json_encode(['status' => 'success', 'message' => 'Vehicle updated successfully.']);
+
+    } catch (PDOException $e) {
+        if ($this->conn->inTransaction()) {
+            $this->conn->rollBack();
+        }
+        return json_encode(['status' => 'error', 'message' => 'DB error: ' . $e->getMessage()]);
     }
+}
+
+
 
     public function updateEquipmentUnit($unit_id, $equip_id, $serial_number, $status_availability_id) {
     try {
         // Validate required fields
         if (empty($unit_id) || empty($serial_number) || empty($status_availability_id)) {
+            error_log("Missing required fields: unit_id=$unit_id, serial_number=$serial_number, status_availability_id=$status_availability_id");
             return [
                 "status" => "error",
                 "message" => "All fields are required (unit_id, serial_number, status_availability_id)"
@@ -535,54 +590,28 @@ class User {
             ];
         }
 
-        // Check if equip_id exists in tbl_equipments
-        if (!empty($equip_id)) {
-            $checkEquipStmt = $this->conn->prepare("SELECT equip_id FROM tbl_equipments WHERE equip_id = :equip_id");
-            $checkEquipStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
-            $checkEquipStmt->execute();
-            
-            if (!$checkEquipStmt->fetch(PDO::FETCH_ASSOC)) {
-                $this->conn->rollBack();
-                return [
-                    "status" => "error",
-                    "message" => "Equipment ID not found"
-                ];
-            }
-        }
-
-        // Check for duplicate serial number (excluding current unit)
-        $checkSerialStmt = $this->conn->prepare("
-            SELECT unit_id FROM tbl_equipment_unit 
-            WHERE serial_number = :serial_number 
-            AND unit_id != :unit_id
-            LIMIT 1
-        ");
-        $checkSerialStmt->bindParam(':serial_number', $serial_number, PDO::PARAM_STR);
-        $checkSerialStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
-        
-        if ($checkSerialStmt->fetch(PDO::FETCH_ASSOC)) {
-            $this->conn->rollBack();
-            return [
-                "status" => "error",
-                "message" => "Serial number already exists for another unit"
-            ];
-        }
-
         // Update the equipment unit
-        $sql = "UPDATE tbl_equipment_unit SET serial_number = :serial_number, status_availability_id = :status_availability_id, unit_updated_at = NOW()";
+        $sql = "UPDATE tbl_equipment_unit 
+                SET serial_number = :serial_number, 
+                    status_availability_id = :status_availability_id";
+
+        // Add equip_id to update if provided
         if (!empty($equip_id)) {
             $sql .= ", equip_id = :equip_id";
         }
+
         $sql .= " WHERE unit_id = :unit_id";
+
+        error_log("SQL Query: " . $sql);
+        error_log("Parameters: unit_id=$unit_id, serial_number=$serial_number, status_availability_id=$status_availability_id, equip_id=$equip_id");
         
         $updateStmt = $this->conn->prepare($sql);
         
-        // Always bind these parameters
+        // Bind parameters
         $updateStmt->bindParam(':serial_number', $serial_number, PDO::PARAM_STR);
         $updateStmt->bindParam(':status_availability_id', $status_availability_id, PDO::PARAM_INT);
         $updateStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
         
-        // Only bind equip_id if it's provided
         if (!empty($equip_id)) {
             $updateStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
         }
@@ -592,15 +621,23 @@ class User {
         $this->conn->commit();
 
         if ($updateStmt->rowCount() > 0) {
+            // Verify the update
+            $verifyStmt = $this->conn->prepare("SELECT * FROM tbl_equipment_unit WHERE unit_id = :unit_id");
+            $verifyStmt->bindParam(':unit_id', $unit_id, PDO::PARAM_INT);
+            $verifyStmt->execute();
+            $updatedData = $verifyStmt->fetch(PDO::FETCH_ASSOC);
+            
+            error_log("Updated data: " . print_r($updatedData, true));
+            
             return [
                 "status" => "success",
                 "message" => "Equipment unit updated successfully",
                 "unit_id" => $unit_id,
-                "changes" => $updateStmt->rowCount()
+                "updated_data" => $updatedData
             ];
         } else {
             return [
-                "status" => "success",
+                "status" => "info",
                 "message" => "No changes were made to the equipment unit",
                 "unit_id" => $unit_id
             ];

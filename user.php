@@ -129,34 +129,32 @@ class User {
     }
 
     public function fetchAllVehicles() {
-        $sql = "SELECT  
-                    v.vehicle_id,
-                    v.vehicle_license,
-                    v.year,
-                    v.vehicle_pic,
-                    v.status_availability_id,
-                    vm.vehicle_make_name, 
-                    vc.vehicle_category_name,
-                    vmd.vehicle_model_name,
-                    sa.status_availability_name,
-                    v.is_active
-                FROM 
-                    tbl_vehicle_model vmd 
-                INNER JOIN 
-                    tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
-                INNER JOIN 
-                    tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id 
-                INNER JOIN 
-                    tbl_vehicle v ON vmd.vehicle_model_id = v.vehicle_model_id
-                INNER JOIN
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-                WHERE 
-                    v.is_active = 1";
-    
-        return $this->executeQuery($sql);
-    }
+    $sql = "
+        SELECT  
+            v.vehicle_id,
+            v.vehicle_license,
+            v.year,
+            v.vehicle_pic,
+            v.status_availability_id,
+            v.vehicle_make_name,       -- now stored on tbl_vehicle
+            v.vehicle_category_name,   -- now stored on tbl_vehicle
+            vmd.vehicle_model_name,
+            sa.status_availability_name,
+            v.is_active
+        FROM tbl_vehicle v
+        INNER JOIN tbl_vehicle_model vmd 
+            ON v.vehicle_model_id = vmd.vehicle_model_id
+        INNER JOIN tbl_status_availability sa 
+            ON v.status_availability_id = sa.status_availability_id
+        WHERE v.is_active = 1
+    ";
+
+    return $this->executeQuery($sql);
+}
+
 
     public function fetchCategoriesAndModels($makeId) {
+        
         $categoriesSql = "SELECT DISTINCT vc.vehicle_category_id, vc.vehicle_category_name 
                           FROM tbl_vehicle_category vc
                           INNER JOIN tbl_vehicle_model vm ON vc.vehicle_category_id = vm.vehicle_category_id
@@ -257,86 +255,84 @@ class User {
     }
 
     public function fetchEquipmentsWithStatus() {
-    // Fetch all active equipments
-    $sql = "SELECT 
-                e.equip_id, 
-                e.equip_name, 
-                e.equip_quantity, 
-                e.equip_created_at, 
-                e.equip_updated_at,
+        // 1) Get only equipments that have at least one active unit
+        $sql = "
+            SELECT 
+                e.equip_id,
+                e.equip_name,
+                e.category_name,
                 e.equip_pic,
-                e.equipment_equipment_category_id,
-                ec.equipments_category_name,
-                sa.status_availability_name AS equipment_status_name,
+                e.user_admin_id,
+                e.equip_created_at,
                 e.is_active
-            FROM 
-                tbl_equipments e
-            INNER JOIN 
-                tbl_status_availability sa ON e.status_availability_id = sa.status_availability_id
-            LEFT JOIN 
-                tbl_equipment_category ec ON e.equipment_equipment_category_id = ec.equipments_category_id
-            WHERE
+            FROM tbl_equipments AS e
+            WHERE 
                 e.is_active = 1
-            ORDER BY
-                e.equip_id";
+                AND EXISTS (
+                    SELECT 1 
+                    FROM tbl_equipment_unit AS eu
+                    WHERE eu.equip_id = e.equip_id
+                    AND eu.is_active = 1
+                )
+            ORDER BY e.equip_id
+        ";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $stmt = $this->conn->prepare($sql);
-    $stmt->execute();
-    $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // 2) Fetch all active units (so we can group them)
+        $unitSql = "
+            SELECT 
+                eu.unit_id,
+                eu.equip_id,
+                eu.serial_number,
+                eu.quantity,
+                sua.status_availability_name AS availability_status,
+                eu.unit_created_at
+            FROM tbl_equipment_unit AS eu
+            LEFT JOIN tbl_status_availability AS sua 
+            ON eu.status_availability_id = sua.status_availability_id
+            WHERE eu.is_active = 1
+        ";
+        $unitStmt = $this->conn->prepare($unitSql);
+        $unitStmt->execute();
+        $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Fetch all active units related to equipment
-    $unitSql = "SELECT 
-                    eu.unit_id, 
-                    eu.equip_id, 
-                    eu.serial_number, 
-                    sua.status_availability_name AS availability_status
-                FROM 
-                    tbl_equipment_unit eu
-                LEFT JOIN 
-                    tbl_status_availability sua ON eu.status_availability_id = sua.status_availability_id
-                WHERE 
-                    eu.is_active = 1"; // <-- Only active units
-
-    $unitStmt = $this->conn->prepare($unitSql);
-    $unitStmt->execute();
-    $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Group units by equip_id
-    $unitMap = [];
-    foreach ($allUnits as $unit) {
-        $equipId = $unit['equip_id'];
-        if (!isset($unitMap[$equipId])) {
-            $unitMap[$equipId] = [];
+        // 3) Group units by equip_id
+        $unitMap = [];
+        foreach ($allUnits as $unit) {
+            $unitMap[$unit['equip_id']][] = [
+                'unit_id'            => (int)$unit['unit_id'],
+                'serial_number'      => $unit['serial_number'],
+                'quantity'           => (int)$unit['quantity'],
+                'availability_status'=> $unit['availability_status'],
+                'unit_created_at'    => $unit['unit_created_at'],
+            ];
         }
-        $unitMap[$equipId][] = [
-            'unit_id' => $unit['unit_id'],
-            'serial_number' => $unit['serial_number'],
-            'availability_status' => $unit['availability_status']
-        ];
+
+        // 4) Assemble the final response
+        $response = [];
+        foreach ($equipments as $e) {
+            $id    = $e['equip_id'];
+            $units = $unitMap[$id] ?? [];
+
+            $response[] = [
+                'equip_id'                => (int)$id,
+                'equip_name'              => $e['equip_name'],
+                'category_name'           => $e['category_name'],
+                'equip_pic'               => $e['equip_pic'],
+                'user_admin_id'           => (int)$e['user_admin_id'],
+                'equip_created_at'        => $e['equip_created_at'],
+                'is_active'               => (bool)$e['is_active'],
+                // compute quantity as # of active units
+                'equip_quantity'          => count($units),
+                'units'                   => $units,
+            ];
+        }
+
+        return json_encode(['status' => 'success', 'data' => $response]);
     }
 
-    // Assemble final response
-    $response = [];
-    foreach ($equipments as $equip) {
-        $equipId = $equip['equip_id'];
-        $units = $unitMap[$equipId] ?? [];
-
-        $response[] = [
-            'equip_id' => (int)$equip['equip_id'],
-            'equip_name' => $equip['equip_name'],
-            'equip_quantity' => $equip['equip_quantity'] !== null ? (int)$equip['equip_quantity'] : count($units),
-            'equipment_status_name' => $equip['equipment_status_name'],
-            'equip_pic' => $equip['equip_pic'],
-            'equipment_equipment_category_id' => $equip['equipment_equipment_category_id'],
-            'equipments_category_name' => $equip['equipments_category_name'],
-            'equip_created_at' => $equip['equip_created_at'],            
-            'equip_updated_at' => $equip['equip_updated_at'],
-            'units' => $units
-        ];
-    }
-
-    return json_encode(['status' => 'success', 'data' => $response]);
-}
 
     
     public function fetchUserByEmailOrFullname($searchTerm) {
@@ -1058,6 +1054,18 @@ class User {
         return $this->executeQuery($sql, [':unitId' => $unitId]);
     }
 
+    public function fetchEquipmentName() {
+        $sql = "SELECT 
+                    equip_id, 
+                    equip_name,
+                    category_name
+                FROM 
+                    tbl_equipments 
+                WHERE 1";
+        
+        return $this->executeQuery($sql);
+    }
+
     public function updateProfile($userData){
         try {
             // Define allowed fields to update
@@ -1290,7 +1298,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Unit ID is required']);
             }
             break;
-    
+        case "fetchEquipmentName":
+            echo $user->fetchEquipmentName();
+            break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;
