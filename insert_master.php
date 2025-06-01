@@ -278,348 +278,167 @@ class User {
         }
     }
 
-    public function saveVehicle($json) {
-        $data = json_decode($json, true);
-        
-        // 1. Extract incoming fields
-        $modelName            = trim($data['vehicle_model_name'] ?? '');
-        $vehicleLicense       = trim($data['vehicle_license'] ?? '');
-        $year                 = trim($data['year'] ?? '');
-        $userAdminId          = intval($data['user_admin_id'] ?? 0);
-        $statusAvailabilityId = intval($data['status_availability_id'] ?? 0);
-        $categoryName         = trim($data['vehicle_category_name'] ?? '');
-        $makeName             = trim($data['vehicle_make_name'] ?? '');
-
-        // 2. Validate required
-        if (
-            !$modelName ||
-            !$vehicleLicense ||
-            !$year ||
-            !$statusAvailabilityId ||
-            !$userAdminId ||
-            !$categoryName ||
-            !$makeName
-        ) {
-            return json_encode([
-                'status'  => 'error',
-                'message' => 'All fields (model, license, year, status, admin, category, make) are required.'
-            ]);
-        }
-
+    public function saveVehicle($data) {
         try {
-            $this->conn->beginTransaction();
-
-            //
-            // 3. Ensure vehicle model exists (insert if not)
-            //
-            $sql = "SELECT vehicle_model_id
-                    FROM tbl_vehicle_model
-                    WHERE vehicle_model_name = :modelName
-                    LIMIT 1";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([':modelName' => $modelName]);
-            
-            if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $vehicleModelId = $row['vehicle_model_id'];
-            } else {
-                // Insert new model
-                $sql = "INSERT INTO tbl_vehicle_model
-                            (vehicle_model_name, vehicle_model_created_at, vehicle_model_updated_at)
-                        VALUES
-                            (:modelName, NOW(), NOW())";
-                $stmt = $this->conn->prepare($sql);
-                $stmt->execute([':modelName' => $modelName]);
-                $vehicleModelId = $this->conn->lastInsertId();
+            // If data is a JSON string, decode it
+            if (is_string($data)) {
+                $data = json_decode($data, true);
             }
 
-            //
-            // 4. Check duplicate vehicle_license
-            //
-            $sql = "SELECT COUNT(*) FROM tbl_vehicle WHERE vehicle_license = :license";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([':license' => $vehicleLicense]);
-            if ($stmt->fetchColumn() > 0) {
-                $this->conn->rollBack();
-                return json_encode([
-                    'status'  => 'error',
-                    'message' => 'This vehicle license is already in use.'
-                ]);
-            }
-
-            //
-            // 5. Handle picture upload (if any)
-            //
-            $picPath = null;
-            if (!empty($data['vehicle_pic'])) {
-                $uploadDir = 'uploads/vehicles/';
-                if (!is_dir($uploadDir)) {
-                    mkdir($uploadDir, 0777, true);
-                }
-                list($meta, $b64) = explode(';base64,', $data['vehicle_pic']);
-                $ext = str_replace('data:image/', '', $meta);
-                $filename = 'vehicle_' . time() . '.' . $ext;
-                $picPath  = $uploadDir . $filename;
-                file_put_contents($picPath, base64_decode($b64));
-            }
-
-            //
-            // 6. Insert into tbl_vehicle (including new category & make columns)
-            //
-            $sql = "INSERT INTO tbl_vehicle
-                        (
-                            vehicle_model_id,
-                            vehicle_license,
-                            year,
-                            status_availability_id,
-                            vehicle_pic,
-                            user_admin_id,
-                            is_active,
-                            vehicle_category_name,
-                            vehicle_make_name
-                        )
-                    VALUES
-                        (
-                            :modelId,
-                            :license,
-                            :year,
-                            :statusId,
-                            :pic,
-                            :adminId,
-                            1,
-                            :category,
-                            :make
-                        )";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([
-                ':modelId'  => $vehicleModelId,
-                ':license'  => $vehicleLicense,
-                ':year'     => $year,
-                ':statusId' => $statusAvailabilityId,
-                ':pic'      => $picPath,
-                ':adminId'  => $userAdminId,
-                ':category' => $categoryName,
-                ':make'     => $makeName,
-            ]);
-
-            $this->conn->commit();
-            return json_encode([
-                'status'  => 'success',
-                'message' => 'Vehicle added successfully.',
-            ]);
-
-        } catch (PDOException $e) {
-            if ($this->conn->inTransaction()) {
-                $this->conn->rollBack();
-            }
-            return json_encode([
-                'status'  => 'error',
-                'message' => $e->getMessage()
-            ]);
-        }
-    }
-
-    public function saveEquipment($json) {
-        try {
-            // If json is already an array, use it directly, otherwise decode it
-            $data = is_array($json) ? $json : json_decode($json, true);
-
+            // Validate decoded data
             if (!$data || !is_array($data)) {
                 return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
             }
 
-            // Check if this is an update to existing equipment
-            $isUpdate = isset($data['equip_id']) && !empty($data['equip_id']);
-
-            if ($isUpdate) {
-                // Validate equipment exists
-                $checkSql = "SELECT equip_id FROM tbl_equipments WHERE equip_id = :equip_id";
-                $checkStmt = $this->conn->prepare($checkSql);
-                $checkStmt->bindParam(':equip_id', $data['equip_id']);
-                $checkStmt->execute();
-                
-                if ($checkStmt->rowCount() === 0) {
-                    return json_encode(['status' => 'error', 'message' => 'Equipment not found']);
-                }
-                
-                $equipmentId = $data['equip_id'];
-            } else {
-                // For new equipment, validate required fields
-                $requiredFields = ['name', 'category_name', 'user_admin_id'];
-                $missingFields = array_filter($requiredFields, function($field) use ($data) {
-                    return !isset($data[$field]) || $data[$field] === '';
-                });
-
-                if (!empty($missingFields)) {
-                    return json_encode(['status' => 'error', 'message' => 'Required fields missing: ' . implode(', ', $missingFields)]);
+            // Required fields check
+            $requiredFields = ['vehicle_model_id', 'vehicle_license', 'year', 'user_admin_id'];
+            foreach ($requiredFields as $field) {
+                if (!isset($data[$field]) || trim($data[$field]) === '') {
+                    return json_encode([
+                        'status' => 'error',
+                        'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required'
+                    ]);
                 }
             }
 
-            // Handle equipment picture upload for new equipment
+            // Handle vehicle picture upload
             $picPath = null;
-            if (!$isUpdate && isset($data['equip_pic']) && !empty($data['equip_pic'])) {
-                $uploadDir = 'uploads/equipment/';
+            if (isset($data['vehicle_pic']) && !empty($data['vehicle_pic'])) {
+                $uploadDir = 'uploads/vehicles/';
                 if (!file_exists($uploadDir)) {
                     mkdir($uploadDir, 0777, true);
                 }
                 
-                $image_parts = explode(";base64,", $data['equip_pic']);
+                $image_parts = explode(";base64,", $data['vehicle_pic']);
                 $image_type_aux = explode("image/", $image_parts[0]);
                 $image_type = $image_type_aux[1];
                 $image_base64 = base64_decode($image_parts[1]);
                 
-                $filename = 'equipment_' . time() . '.' . $image_type;
+                $filename = 'vehicle_' . time() . '.' . $image_type;
                 $picPath = $uploadDir . $filename;
                 
                 file_put_contents($picPath, $image_base64);
             }
+    
+            // Insert vehicle into tbl_vehicle
+            $sql = "INSERT INTO tbl_vehicle (
+                vehicle_model_id, 
+                vehicle_license, 
+                year,
+                status_availability_id,
+                vehicle_pic,
+                user_admin_id,
+                is_active,
+                created_at,
+                updated_at
+            ) VALUES (
+                :modelId,
+                :license,
+                :year,
+                1,
+                :pic,
+                :adminId,
+                1,
+                NOW(),
+                NOW()
+            )";
 
-            $this->conn->beginTransaction();
-
-            try {
-                if (!$isUpdate) {
-                    // Insert new equipment
-                    $sql = "INSERT INTO tbl_equipments (
-                        equip_name, 
-                        equip_created_at,
-                        category_name,
-                        equip_pic,
-                        is_active,
-                        user_admin_id
-                    ) VALUES (
-                        :name, 
-                        NOW(), 
-                        :category_name,
-                        :pic,
-                        1,
-                        :user_admin_id
-                    )";
-                    
-                    $stmt = $this->conn->prepare($sql);
-
-                    $stmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
-                    $stmt->bindParam(':category_name', $data['category_name'], PDO::PARAM_STR);
-                    $stmt->bindParam(':pic', $picPath, PDO::PARAM_STR);
-                    $stmt->bindParam(':user_admin_id', $data['user_admin_id'], PDO::PARAM_INT);
-
-                    if (!$stmt->execute()) {
-                        throw new Exception('Failed to add equipment');
-                    }
-
-                    $equipmentId = $this->conn->lastInsertId();
-                }
-
-                // Determine if this is serial-based or quantity-based equipment
-                $isSerialBased = isset($data['serial_numbers']) && is_array($data['serial_numbers']) && !empty($data['serial_numbers']);
-                $hasQuantity = isset($data['quantity']) && $data['quantity'] > 0;
-
-                if ($isSerialBased) {
-                    // Handle serial-based equipment
-                    // Check for duplicate serial numbers
-                    $duplicateSerials = [];
-                    $checkSerialSql = "SELECT serial_number FROM tbl_equipment_unit WHERE serial_number = :serial";
-                    $checkSerialStmt = $this->conn->prepare($checkSerialSql);
-
-                    foreach ($data['serial_numbers'] as $serial) {
-                        $checkSerialStmt->bindParam(':serial', $serial);
-                        $checkSerialStmt->execute();
-                        if ($checkSerialStmt->rowCount() > 0) {
-                            $duplicateSerials[] = $serial;
-                        }
-                    }
-
-                    if (!empty($duplicateSerials)) {
-                        throw new Exception('Duplicate serial numbers found: ' . implode(', ', $duplicateSerials));
-                    }
-
-                    // Insert serial numbers
-                    $unitSql = "INSERT INTO tbl_equipment_unit (
-                        equip_id,
-                        serial_number,
-                        quantity,
-                        status_availability_id,
-                        unit_created_at,
-                        is_active,
-                        user_admin_id
-                    ) VALUES (
-                        :equip_id,
-                        :serial_number,
-                        NULL,
-                        :status_availability_id,
-                        NOW(),
-                        1,
-                        :user_admin_id
-                    )";
-
-                    $unitStmt = $this->conn->prepare($unitSql);
-                    $successCount = 0;
-
-                    foreach ($data['serial_numbers'] as $serialNumber) {
-                        $statusAvailabilityId = isset($data['status_availability_id']) ? $data['status_availability_id'] : 1;
-                        
-                        $unitStmt->bindParam(':equip_id', $equipmentId, PDO::PARAM_INT);
-                        $unitStmt->bindParam(':serial_number', $serialNumber, PDO::PARAM_STR);
-                        $unitStmt->bindParam(':status_availability_id', $statusAvailabilityId, PDO::PARAM_INT);
-                        $unitStmt->bindParam(':user_admin_id', $data['user_admin_id'], PDO::PARAM_INT);
-                        
-                        if ($unitStmt->execute()) {
-                            $successCount++;
-                        }
-                    }
-                } elseif ($hasQuantity) {
-                    // Handle quantity-based equipment
-                    $unitSql = "INSERT INTO tbl_equipment_unit (
-                        equip_id,
-                        serial_number,
-                        quantity,
-                        status_availability_id,
-                        unit_created_at,
-                        is_active,
-                        user_admin_id
-                    ) VALUES (
-                        :equip_id,
-                        NULL,
-                        :quantity,
-                        :status_availability_id,
-                        NOW(),
-                        1,
-                        :user_admin_id
-                    )";
-
-                    $unitStmt = $this->conn->prepare($unitSql);
-                    $statusAvailabilityId = isset($data['status_availability_id']) ? $data['status_availability_id'] : 1;
-                    
-                    $unitStmt->bindParam(':equip_id', $equipmentId, PDO::PARAM_INT);
-                    $unitStmt->bindParam(':quantity', $data['quantity'], PDO::PARAM_INT);
-                    $unitStmt->bindParam(':status_availability_id', $statusAvailabilityId, PDO::PARAM_INT);
-                    $unitStmt->bindParam(':user_admin_id', $data['user_admin_id'], PDO::PARAM_INT);
-                    
-                    if (!$unitStmt->execute()) {
-                        throw new Exception('Failed to add equipment quantity');
-                    }
-                } else {
-                    throw new Exception('Either serial numbers or quantity must be provided');
-                }
-
-                $this->conn->commit();
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':modelId', $data['vehicle_model_id']);
+            $stmt->bindParam(':license', $data['vehicle_license']);
+            $stmt->bindParam(':year', $data['year']);
+            $stmt->bindParam(':pic', $picPath);
+            $stmt->bindParam(':adminId', $data['user_admin_id']);
+    
+            if ($stmt->execute()) {
                 return json_encode([
-                    'status' => 'success',
-                    'message' => $isUpdate ? 'Equipment units added successfully' : 'Equipment added successfully',
-                    'equip_id' => $equipmentId
+                    'status' => 'success', 
+                    'message' => 'Vehicle added successfully.'
                 ]);
-
-            } catch (Exception $e) {
-                $this->conn->rollBack();
-                throw $e;
             }
-
+    
+            return json_encode(['status' => 'error', 'message' => 'Failed to add vehicle']);
         } catch(PDOException $e) {
-            error_log("Database error in saveEquipment: " . $e->getMessage());
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
-        } catch(Exception $e) {
-            error_log("Error in saveEquipment: " . $e->getMessage());
+            error_log("Database error in saveVehicle: " . $e->getMessage());
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
+
+    public function saveEquipment($json) {
+    try {
+        $data = is_array($json) ? $json : json_decode($json, true);
+
+        if (!$data || !is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        // Validate required fields
+        // Changed 'category_name' to 'equipments_category_id'
+        $requiredFields = ['name', 'equipments_category_id', 'equip_type', 'user_admin_id'];
+        $missingFields = array_filter($requiredFields, function ($field) use ($data) {
+            // Check for existence and non-empty string/non-null for ID fields
+            if (in_array($field, ['equipments_category_id', 'user_admin_id'])) {
+                return !isset($data[$field]) || !is_numeric($data[$field]);
+            }
+            return !isset($data[$field]) || trim($data[$field]) === '';
+        });
+
+        if (!empty($missingFields)) {
+            return json_encode(['status' => 'error', 'message' => 'Required fields missing or invalid: ' . implode(', ', $missingFields)]);
+        }
+
+        // Check for existing equipment (case-insensitive match)
+        $checkSql = "SELECT equip_id FROM tbl_equipments WHERE LOWER(equip_name) = LOWER(:name)";
+        $checkStmt = $this->conn->prepare($checkSql);
+        $checkStmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
+        $checkStmt->execute();
+
+        if ($checkStmt->rowCount() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'Equipment already exists']);
+        }
+
+        // Insert new equipment
+         $sql = "INSERT INTO tbl_equipments (
+                            equip_name,
+                            equipments_category_id,
+                            equip_type,
+                            is_active,
+                            user_admin_id,
+                            equip_created_at
+                        ) VALUES (
+                            :name,
+                            :equipments_category_id,
+                            :equip_type,
+                            1,
+                            :user_admin_id,
+                            NOW()
+                        )";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
+        $stmt->bindParam(':equipments_category_id', $data['equipments_category_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':equip_type', $data['equip_type'], PDO::PARAM_STR);
+        $stmt->bindParam(':user_admin_id', $data['user_admin_id'], PDO::PARAM_INT);
+
+        if ($stmt->execute()) {
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Equipment added successfully',
+                'equip_id' => $this->conn->lastInsertId()
+            ]);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Failed to insert equipment']);
+        }
+
+    } catch (PDOException $e) {
+        error_log("Database error in saveEquipment: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (Exception $e) {
+        error_log("Error in saveEquipment: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 
     public function saveDriver($json) {
     try {
@@ -902,6 +721,212 @@ class User {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
+
+
+
+public function saveUnit($data) {
+    try {
+        // If data is a JSON string, decode it
+        if (is_string($data)) {
+            $data = json_decode($data, true);
+        }
+
+        // Validate decoded data
+        if (!$data || !is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        // Required fields check
+        $requiredFields = ['equip_id', 'serial_number', 'status_availability_id', 'user_admin_id'];
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field]) || trim($data[$field]) === '') {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required'
+                ]);
+            }
+        }
+
+        // Check for duplicate serial number
+        $checkSql = "SELECT COUNT(*) FROM tbl_equipment_unit WHERE serial_number = :serial_number";
+        $checkStmt = $this->conn->prepare($checkSql);
+        $checkStmt->bindParam(':serial_number', $data['serial_number']);
+        $checkStmt->execute();
+        
+        if ($checkStmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'This serial number already exists']);
+        }
+
+        // Prepare optional values
+        $brand = isset($data['brand']) ? $data['brand'] : null;
+        $size = isset($data['size']) ? $data['size'] : null;
+        $color = isset($data['color']) ? $data['color'] : null;
+
+        // Insert query
+        $sql = "INSERT INTO tbl_equipment_unit (
+            equip_id, serial_number, brand, size, color, status_availability_id, 
+            unit_created_at, is_active, user_admin_id
+        ) VALUES (
+            :equip_id, :serial_number, :brand, :size, :color, :status_availability_id,
+            NOW(), 1, :user_admin_id
+        )";
+
+        $stmt = $this->conn->prepare($sql);
+        
+        // Bind parameters
+        $stmt->bindParam(':equip_id', $data['equip_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':serial_number', $data['serial_number'], PDO::PARAM_STR);
+        $stmt->bindParam(':brand', $brand, PDO::PARAM_STR);
+        $stmt->bindParam(':size', $size, PDO::PARAM_STR);
+        $stmt->bindParam(':color', $color, PDO::PARAM_STR);        
+        $stmt->bindParam(':status_availability_id', $data['status_availability_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':user_admin_id', $data['user_admin_id'], PDO::PARAM_INT);       
+         if ($stmt->execute()) {
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Equipment unit added successfully'
+            ]);
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Failed to add equipment unit']);
+
+    } catch(PDOException $e) {
+        error_log("Database error in saveUnit: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch(Exception $e) {
+        error_log("Error in saveUnit: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function saveStock($data) {
+    try {
+        if (is_string($data)) {
+            $data = json_decode($data, true);
+        }
+
+        if (!$data || !is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        $requiredFields = ['equip_id', 'quantity', 'user_admin_id'];
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field]) || trim($data[$field]) === '') {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required'
+                ]);
+            }
+        }
+
+        $equip_id = (int)$data['equip_id'];
+        $inputQuantity = (int)$data['quantity'];
+        $user_admin_id = (int)$data['user_admin_id'];
+
+        // Check current stock entry
+        $checkSql = "SELECT quantity, on_hand_quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id";
+        $checkStmt = $this->conn->prepare($checkSql);
+        $checkStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+        $checkStmt->execute();
+
+        if ($checkStmt->rowCount() > 0) {
+            $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
+            $currentQuantity = (int)$existing['quantity'];
+            $currentOnHand = (int)$existing['on_hand_quantity'];
+
+            if ($inputQuantity < $currentQuantity) {
+                // Subtract difference
+                $diff = $currentQuantity - $inputQuantity;
+
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            quantity = quantity - :diff,
+                            on_hand_quantity = on_hand_quantity - :diff,
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => "Stock decreased by $diff successfully"
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (decrease)']);
+            } elseif ($inputQuantity > $currentQuantity) {
+                // Add difference
+                $diff = $inputQuantity - $currentQuantity;
+
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            quantity = quantity + :diff,
+                            on_hand_quantity = on_hand_quantity + :diff,
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => "Stock increased by $diff successfully"
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (increase)']);
+            } else {
+                // Quantity is the same, update timestamp and user only
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => 'Stock unchanged, updated timestamp'
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update timestamp']);
+            }
+        } else {
+            // Insert new stock record
+            $sql = "INSERT INTO tbl_equipment_quantity (
+                        equip_id, quantity, on_hand_quantity, last_updated, user_admin_id
+                    ) VALUES (
+                        :equip_id, :quantity, :quantity, NOW(), :user_admin_id
+                    )";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+            $stmt->bindParam(':quantity', $inputQuantity, PDO::PARAM_INT);
+            $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Equipment stock added successfully'
+                ]);
+            }
+            return json_encode(['status' => 'error', 'message' => 'Failed to add equipment stock']);
+        }
+    } catch(PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch(Exception $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 }
 
 // Handle the request
@@ -915,6 +940,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         error_log("With data: " . print_r($data, true));
 
         switch($operation) {
+            case "saveUnit":
+                echo $user->saveUnit($data);
+                break;
             case "saveUser":
                 echo $user->saveUser($data);
                 break;
@@ -935,6 +963,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             case "saveHoliday":
                 echo $user->saveHoliday($data);
+                break;
+            case "saveStock":
+                echo $user->saveStock($data);
                 break;
             default:
                 echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

@@ -53,9 +53,7 @@ class User {
                 INNER JOIN 
                     tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
                 INNER JOIN
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-                WHERE 
-                    v.status_availability_id = 1"; // Added condition for availability
+                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id"; // Added condition for availability
 
         return $this->executeQuery($sql);
     }
@@ -80,22 +78,19 @@ class User {
         $reservedQuantities = [];
         if ($startDateTime !== null && $endDateTime !== null) {
             $reservedStmt = $this->conn->prepare("
-                SELECT 
+                SELECT
                     re.reservation_equipment_equip_id AS equip_id,
                     SUM(re.reservation_equipment_quantity) AS reserved_quantity
                 FROM tbl_reservation_equipment re
-                INNER JOIN tbl_reservation r 
+                INNER JOIN tbl_reservation r
                     ON r.reservation_id = re.reservation_reservation_id
-                INNER JOIN tbl_reservation_status rs 
+                INNER JOIN tbl_reservation_status rs
                     ON rs.reservation_reservation_id = r.reservation_id
-                WHERE 
-                    rs.reservation_status_status_id = 6
+                WHERE
+                    rs.reservation_status_status_id = 6 -- Assuming 6 is 'Reserved'
                     AND rs.reservation_active = 1
                     AND (
-                        (r.reservation_start_date BETWEEN :start AND :end)
-                        OR (r.reservation_end_date BETWEEN :start AND :end)
-                        OR (:start BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                        OR (:end BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                        (r.reservation_start_date <= :end AND r.reservation_end_date >= :start)
                     )
                 GROUP BY re.reservation_equipment_equip_id
             ");
@@ -108,91 +103,76 @@ class User {
             }
         }
 
-        // 3. Query for non-serialized equipment (quantity-based)
-        $nonSerialQuery = "
-            SELECT 
-                e.equip_id, 
-                e.equip_name, 
-                e.equip_quantity,
-                e.equip_pic,
-                e.equip_created_at, 
-                e.equip_updated_at, 
-                e.status_availability_id, 
-                sa.status_availability_name,
-                e.equipment_equipment_category_id,
-                ec.equipments_category_name,
-                0 AS is_serialized
+        // 3. Main Query: Fetch all active equipment with their total on-hand quantity
+        // This query combines logic for both consumable and unit-based equipment
+        $mainQuery = "
+            SELECT
+                e.equip_id,
+                e.equip_name,
+                e.equip_type, -- Crucial for distinguishing consumable vs. unit
+                e.equip_created_at,
+                tec.equipments_category_name AS category_name, -- Alias for consistency
+                e.equipments_category_id, -- Correct column name
+                -- Calculate total on-hand quantity based on equip_type
+                CASE
+                    WHEN e.equip_type = 'Consumable' THEN COALESCE(eq.quantity, 0)
+                    ELSE COALESCE(eu.unit_count, 0)
+                END AS total_on_hand
             FROM tbl_equipments e
-            LEFT JOIN tbl_status_availability sa 
-                ON e.status_availability_id = sa.status_availability_id 
-            LEFT JOIN tbl_equipment_category ec 
-                ON e.equipment_equipment_category_id = ec.equipments_category_id
-            WHERE e.equip_quantity IS NOT NULL
-            AND e.equip_quantity > 0
-            ORDER BY e.equip_name
+            LEFT JOIN tbl_equipment_category tec
+                ON e.equipments_category_id = tec.equipments_category_id
+            -- Join for Consumable quantities (get the latest quantity)
+            LEFT JOIN (
+                SELECT
+                    equip_id,
+                    quantity
+                FROM tbl_equipment_quantity
+                WHERE (equip_id, last_updated) IN (
+                    SELECT equip_id, MAX(last_updated)
+                    FROM tbl_equipment_quantity
+                    GROUP BY equip_id
+                )
+            ) AS eq ON e.equip_id = eq.equip_id AND e.equip_type = 'Consumable'
+            -- Join for Unit-based equipment (count active units)
+            LEFT JOIN (
+                SELECT
+                    equip_id,
+                    COUNT(*) AS unit_count
+                FROM tbl_equipment_unit
+                WHERE is_active = 1 AND status_availability_id = 1 -- Only count active and available units
+                GROUP BY equip_id
+            ) AS eu ON e.equip_id = eu.equip_id AND e.equip_type != 'Consumable'
+            WHERE e.is_active = 1 -- Only fetch active equipment
+            ORDER BY e.equip_name;
         ";
 
-        // 4. Query for serialized equipment (unit-based with status_availability_id = 1)
-        $serialQuery = "
-            SELECT 
-                e.equip_id, 
-                e.equip_name, 
-                COUNT(eu.unit_id) AS equip_quantity,
-                e.equip_pic,
-                e.equip_created_at, 
-                e.equip_updated_at, 
-                e.status_availability_id, 
-                sa.status_availability_name,
-                e.equipment_equipment_category_id,
-                ec.equipments_category_name,
-                1 AS is_serialized
-            FROM tbl_equipments e
-            LEFT JOIN tbl_status_availability sa 
-                ON e.status_availability_id = sa.status_availability_id 
-            LEFT JOIN tbl_equipment_category ec 
-                ON e.equipment_equipment_category_id = ec.equipments_category_id
-            LEFT JOIN tbl_equipment_unit eu
-                ON e.equip_id = eu.equip_id
-            WHERE eu.status_availability_id = 1
-            GROUP BY e.equip_id
-            ORDER BY e.equip_name
-        ";
+        $mainStmt = $this->conn->prepare($mainQuery);
+        $mainStmt->execute();
+        $equipments = $mainStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // 5. Execute both queries
-        $nonSerialStmt = $this->conn->prepare($nonSerialQuery);
-        $nonSerialStmt->execute();
-        $nonSerialResult = $nonSerialStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $serialStmt = $this->conn->prepare($serialQuery);
-        $serialStmt->execute();
-        $serialResult = $serialStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // 6. Combine results
-        $combinedResult = array_merge($nonSerialResult, $serialResult);
-
-        // 7. Process reserved quantities
-        foreach ($combinedResult as $idx => $equip) {
+        // 4. Process availability and filter
+        $finalResults = [];
+        foreach ($equipments as $equip) {
             $id = (int)$equip['equip_id'];
-            $quantity = (int)$equip['equip_quantity'];
+            $totalOnHand = (int)$equip['total_on_hand'];
             $reserved = $reservedQuantities[$id] ?? 0;
-            $available = max(0, $quantity - $reserved);
+            $available = max(0, $totalOnHand - $reserved);
 
-            if ($available > 0) {
-                $combinedResult[$idx]['equip_quantity'] = $available;
-                $combinedResult[$idx]['reserved_quantity'] = $reserved;
-            } else {
-                unset($combinedResult[$idx]);
+            // Only include equipment that has availability or has reserved items
+            if ($available > 0 || $reserved > 0) {
+                $equip['current_quantity'] = $totalOnHand; // Renamed for clarity in output
+                $equip['reserved_quantity'] = $reserved;
+                $equip['available_quantity'] = $available;
+                $equip['is_available'] = ($available > 0); // Boolean flag for availability
+                $finalResults[] = $equip;
             }
         }
 
-        // Re-index array
-        $combinedResult = array_values($combinedResult);
-
-        // 8. Return JSON
+        // 5. Return JSON
         http_response_code(200);
         echo json_encode([
             'status'    => 'success',
-            'data'      => $combinedResult,
+            'data'      => $finalResults,
             'timestamp' => date('Y-m-d H:i:s')
         ], JSON_UNESCAPED_SLASHES);
 

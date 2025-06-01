@@ -33,22 +33,7 @@ class User {
         }
     }
 
-    public function login($credentials) {
-        $sql = "SELECT * FROM tbl_admin WHERE admin_username = :username AND admin_password = :password";
-        return $this->executeQuery($sql, [
-            ':username' => $credentials['username'],
-            ':password' => $credentials['password']
-        ]);
-    }
 
-
-    public function fetchUserProfile($userId) {
-        $sql = "SELECT admin_id, admin_name, admin_school_id, admin_contact_number, admin_level, admin_username 
-                FROM tbl_admin 
-                WHERE admin_id = :userId";
-        
-        return $this->executeQuery($sql, [':userId' => $userId]);
-    }
 
     public function fetchUsers() {
         $sql = "SELECT 
@@ -76,57 +61,7 @@ class User {
                     tbl_user_level ul ON u.users_user_level_id = ul.user_level_id";
         return $this->executeQuery($sql);
     }
-    public function fetchDeanSec() {
-        $sql = "SELECT 
-                    d.dept_id,
-                    d.dept_fname,
-                    d.dept_mname,
-                    d.dept_lname,
-                    d.dept_email,
-                    d.dept_school_id,
-                    d.dept_contact_number,
-                    d.dept_user_level_id,
-                    d.dept_department_id,
-                    d.dept_pic,
-                    d.dept_created_at,
-                    d.dept_updated_at,
-                    d.is_active,
-                    dp.departments_name,
-                    ul.user_level_name
-                FROM 
-                    tbl_dept d
-                LEFT JOIN 
-                    tbl_departments dp ON d.dept_department_id = dp.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON d.dept_user_level_id = ul.user_level_id";
-        return $this->executeQuery($sql);
-    }
 
-    public function fetchAdmin() {
-        $sql = "SELECT 
-                    a.admin_id,
-                    a.admin_fname,
-                    a.admin_mname,
-                    a.admin_lname,
-                    a.admin_email,
-                    a.admin_school_id,
-                    a.admin_contact_number,
-                    a.admin_user_level_id,
-                    a.admin_department_id,
-                    a.admin_pic,
-                    a.admin_created_at,
-                    a.admin_updated_at,
-                    a.is_active,
-                    d.departments_name,
-                    ul.user_level_name
-                FROM 
-                    tbl_admin a
-                LEFT JOIN 
-                    tbl_departments d ON a.admin_department_id = d.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON a.admin_user_level_id = ul.user_level_id";
-        return $this->executeQuery($sql);
-    }
 
     public function fetchAllVehicles() {
     $sql = "
@@ -135,15 +70,22 @@ class User {
             v.vehicle_license,
             v.year,
             v.vehicle_pic,
-            v.status_availability_id,
-            v.vehicle_make_name,       -- now stored on tbl_vehicle
-            v.vehicle_category_name,   -- now stored on tbl_vehicle
+            v.is_active,
+            v.created_at,
+
+            -- Only names
+            vmk.vehicle_make_name,
             vmd.vehicle_model_name,
-            sa.status_availability_name,
-            v.is_active
+            vc.vehicle_category_name,
+            sa.status_availability_name
+
         FROM tbl_vehicle v
         INNER JOIN tbl_vehicle_model vmd 
             ON v.vehicle_model_id = vmd.vehicle_model_id
+        INNER JOIN tbl_vehicle_make vmk 
+            ON vmd.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+        INNER JOIN tbl_vehicle_category vc 
+            ON vmd.vehicle_category_id = vc.vehicle_category_id
         INNER JOIN tbl_status_availability sa 
             ON v.status_availability_id = sa.status_availability_id
         WHERE v.is_active = 1
@@ -151,6 +93,7 @@ class User {
 
     return $this->executeQuery($sql);
 }
+
 
 
     public function fetchCategoriesAndModels($makeId) {
@@ -231,13 +174,7 @@ class User {
 
         return $this->executeQuery($sql, [':categoryId' => $categoryId]);
     }
-
-    public function fetchMake() {
-        $sql = "SELECT vehicle_make_id, vehicle_make_name FROM tbl_vehicle_make ORDER BY vehicle_make_name";
-        return $this->executeQuery($sql);
-    }
-
-    // New fetchVenue method
+ // New fetchVenue method
     public function fetchVenue() {
         $sql = "SELECT 
                 ven_id, 
@@ -254,95 +191,39 @@ class User {
         return $this->executeQuery($sql);
     }
 
-    public function fetchEquipmentsWithStatus() {
-    // 1) Get only equipments that have at least one active unit
-    $sql = "
-        SELECT 
-            e.equip_id,
-            e.equip_name,
-            e.category_name,
-            e.equip_pic,
-            e.user_admin_id,
-            e.equip_created_at,
-            e.is_active
-        FROM tbl_equipments AS e
-        WHERE 
-            e.is_active = 1
-            AND EXISTS (
-                SELECT 1 
-                FROM tbl_equipment_unit AS eu
-                WHERE eu.equip_id = e.equip_id
-                AND eu.is_active = 1
-            )
-        ORDER BY e.equip_id
-    ";
-    $stmt = $this->conn->prepare($sql);
-    $stmt->execute();
-    $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+   public function fetchEquipmentsWithStatus() {
+    try {
+        $sql = "
+            SELECT
+                te.equip_id,
+                te.equip_name,
+                tec.equipments_category_name AS category_name, -- Alias the joined category name
+                te.is_active,
+                te.user_admin_id,
+                te.equip_type,
+                te.equip_created_at
+            FROM
+                tbl_equipments AS te
+            INNER JOIN
+                tbl_equipment_category AS tec ON te.equipments_category_id = tec.equipments_category_id
+            WHERE
+                1
+            ORDER BY
+                te.equip_id
+        ";
 
-    // 2) Fetch all active units (so we can group them)
-    $unitSql = "
-        SELECT 
-            eu.unit_id,
-            eu.equip_id,
-            eu.serial_number,
-            eu.quantity,
-            sua.status_availability_name AS availability_status,
-            eu.unit_created_at
-        FROM tbl_equipment_unit AS eu
-        LEFT JOIN tbl_status_availability AS sua 
-        ON eu.status_availability_id = sua.status_availability_id
-        WHERE eu.is_active = 1
-    ";
-    $unitStmt = $this->conn->prepare($unitSql);
-    $unitStmt->execute();
-    $allUnits = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // 3) Group units by equip_id
-    $unitMap = [];
-    foreach ($allUnits as $unit) {
-        $unitMap[$unit['equip_id']][] = [
-            'unit_id'            => (int)$unit['unit_id'],
-            'serial_number'      => $unit['serial_number'],
-            'quantity'           => (int)$unit['quantity'],
-            'availability_status'=> $unit['availability_status'],
-            'unit_created_at'    => $unit['unit_created_at'],
-        ];
+        return json_encode(['status' => 'success', 'data' => $equipments]);
+    } catch (PDOException $e) {
+        error_log("Database error in fetchEquipmentsWithStatus: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (Exception $e) {
+        error_log("Error in fetchEquipmentsWithStatus: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
     }
-
-    // 4) Assemble the final response
-    $response = [];
-    foreach ($equipments as $e) {
-        $id    = $e['equip_id'];
-        $units = $unitMap[$id] ?? [];
-
-        $totalQuantity = 0;
-        $countSerials = 0;
-
-        foreach ($units as $unit) {
-            $totalQuantity += $unit['quantity'];
-            if (!is_null($unit['serial_number']) && $unit['serial_number'] !== '') {
-                $countSerials++;
-            }
-        }
-
-        // If total quantity > 0, use it; otherwise count serial numbers
-        $equipQuantity = $totalQuantity > 0 ? $totalQuantity : $countSerials;
-
-        $response[] = [
-            'equip_id'         => (int)$id,
-            'equip_name'       => $e['equip_name'],
-            'category_name'    => $e['category_name'],
-            'equip_pic'        => $e['equip_pic'],
-            'user_admin_id'    => (int)$e['user_admin_id'],
-            'equip_created_at' => $e['equip_created_at'],
-            'is_active'        => (bool)$e['is_active'],
-            'equip_quantity'   => $equipQuantity,
-            'units'            => $units,
-        ];
-    }
-
-    return json_encode(['status' => 'success', 'data' => $response]);
 }
 
 
@@ -545,7 +426,7 @@ class User {
 
         if ($itemType === 'venue') {
             $sql = "
-                SELECT 
+                SELECT
                     v.ven_id,
                     v.ven_name,
                     v.ven_occupancy,
@@ -555,16 +436,16 @@ class User {
                     r.reservation_end_date,
                     rs.reservation_status_status_id
                 FROM tbl_venue v
-                LEFT JOIN tbl_reservation_venue rv 
+                LEFT JOIN tbl_reservation_venue rv
                     ON v.ven_id = rv.reservation_venue_venue_id
-                LEFT JOIN tbl_reservation r 
+                LEFT JOIN tbl_reservation r
                     ON rv.reservation_reservation_id = r.reservation_id
-                LEFT JOIN tbl_reservation_status rs 
+                LEFT JOIN tbl_reservation_status rs
                     ON r.reservation_id = rs.reservation_reservation_id
                 WHERE v.ven_id IN ($placeholders)
                   AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
                   AND rs.reservation_active = 1
-                GROUP BY 
+                GROUP BY
                     v.ven_id, v.ven_name, v.ven_occupancy,
                     r.reservation_id, r.reservation_title,
                     r.reservation_start_date, r.reservation_end_date,
@@ -575,14 +456,14 @@ class User {
 
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($results as &$result) {
-                $result['is_available']    = ($result['reservation_status_status_id'] !== 6);
+                $result['is_available']     = ($result['reservation_status_status_id'] !== 6);
                 $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
                     ? 'Reserved' : 'Available';
             }
 
         } elseif ($itemType === 'vehicle') {
             $sql = "
-                SELECT 
+                SELECT
                     v.vehicle_id,
                     v.vehicle_license,
                     vm.vehicle_make_name,
@@ -593,20 +474,20 @@ class User {
                     r.reservation_end_date,
                     rs.reservation_status_status_id
                 FROM tbl_vehicle v
-                LEFT JOIN tbl_vehicle_model vmd 
+                LEFT JOIN tbl_vehicle_model vmd
                     ON v.vehicle_model_id = vmd.vehicle_model_id
-                LEFT JOIN tbl_vehicle_make vm 
+                LEFT JOIN tbl_vehicle_make vm
                     ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
-                LEFT JOIN tbl_reservation_vehicle rv 
+                LEFT JOIN tbl_reservation_vehicle rv
                     ON v.vehicle_id = rv.reservation_vehicle_vehicle_id
-                LEFT JOIN tbl_reservation r 
+                LEFT JOIN tbl_reservation r
                     ON rv.reservation_reservation_id = r.reservation_id
-                LEFT JOIN tbl_reservation_status rs 
+                LEFT JOIN tbl_reservation_status rs
                     ON r.reservation_id = rs.reservation_reservation_id
                 WHERE v.vehicle_id IN ($placeholders)
                   AND (rs.reservation_status_status_id = 6 OR rs.reservation_status_status_id IS NULL)
                   AND rs.reservation_active = 1
-                GROUP BY 
+                GROUP BY
                     v.vehicle_id, v.vehicle_license,
                     vm.vehicle_make_name, vmd.vehicle_model_name,
                     r.reservation_id, r.reservation_title,
@@ -618,22 +499,23 @@ class User {
 
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($results as &$result) {
-                $result['is_available']    = ($result['reservation_status_status_id'] !== 6);
+                $result['is_available']     = ($result['reservation_status_status_id'] !== 6);
                 $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
                     ? 'Reserved' : 'Available';
             }
 
         } elseif ($itemType === 'equipment') {
-            // Combined equipment query using sub-queries for unit count and reserved sum
             $sql = "
-                SELECT 
+                SELECT
                     e.equip_id,
                     e.equip_name,
+                    e.equip_type, -- Need equip_type to differentiate consumable vs unit-based
+                    tec.equipments_category_name AS category_name, -- Include category name from join
 
-                    /* Total on hand */
+                    /* Total on hand: Conditionally based on equip_type */
                     CASE
-                        WHEN e.equip_quantity IS NOT NULL THEN e.equip_quantity
-                        ELSE COALESCE(u.unit_count, 0)
+                        WHEN e.equip_type = 'Consumable' THEN COALESCE(eq.quantity, 0)
+                        ELSE COALESCE(eu.unit_count, 0)
                     END AS current_quantity,
 
                     /* Total reserved */
@@ -642,35 +524,45 @@ class User {
                     /* Available = on hand - reserved */
                     (
                         CASE
-                            WHEN e.equip_quantity IS NOT NULL THEN e.equip_quantity
-                            ELSE COALESCE(u.unit_count, 0)
+                            WHEN e.equip_type = 'Consumable' THEN COALESCE(eq.quantity, 0)
+                            ELSE COALESCE(eu.unit_count, 0)
                         END
                         - COALESCE(r.reserved_qty, 0)
                     ) AS total_available,
 
                     /* Reservation window */
-                    r.min_start_date  AS reservation_start_date,
-                    r.max_end_date    AS reservation_end_date,
+                    r.min_start_date    AS reservation_start_date,
+                    r.max_end_date      AS reservation_end_date,
 
-                    e.equip_pic,
+         
                     e.equip_created_at,
-                    e.equip_updated_at,
-                    e.status_availability_id,
-                    sa.status_availability_name,
-                    e.equipment_equipment_category_id,
-                    ec.equipments_category_name
+                    -- e.status_availability_id, -- Removed, as status is derived from availability
+                    -- sa.status_availability_name, -- Removed, as status is derived from availability
+                    e.equipments_category_id -- Use the correct column name from tbl_equipments
                 FROM tbl_equipments e
 
-                /* Sub-query: count available units */
+                -- Join for Consumable quantities (most recent quantity)
                 LEFT JOIN (
-                    SELECT 
+                    SELECT
+                        equip_id,
+                        quantity
+                    FROM tbl_equipment_quantity
+                    WHERE (equip_id, last_updated) IN (
+                        SELECT equip_id, MAX(last_updated)
+                        FROM tbl_equipment_quantity
+                        GROUP BY equip_id
+                    )
+                ) AS eq ON e.equip_id = eq.equip_id AND e.equip_type = 'Consumable'
+
+                -- Join for Unit-based equipment (count active units)
+                LEFT JOIN (
+                    SELECT
                         equip_id,
                         COUNT(*) AS unit_count
                     FROM tbl_equipment_unit
-                    WHERE status_availability_id = 1
+                    WHERE is_active = 1 -- Only count active units
                     GROUP BY equip_id
-                ) AS u 
-                  ON e.equip_id = u.equip_id
+                ) AS eu ON e.equip_id = eu.equip_id AND e.equip_type != 'Consumable'
 
                 /* Sub-query: sum reserved quantities + dates */
                 LEFT JOIN (
@@ -680,30 +572,32 @@ class User {
                         MIN(r.reservation_start_date)       AS min_start_date,
                         MAX(r.reservation_end_date)         AS max_end_date
                     FROM tbl_reservation_equipment re
-                    JOIN tbl_reservation r 
+                    JOIN tbl_reservation r
                       ON r.reservation_id = re.reservation_reservation_id
-                    JOIN tbl_reservation_status rs 
+                    JOIN tbl_reservation_status rs
                       ON rs.reservation_reservation_id = r.reservation_id
-                     AND rs.reservation_active = 1
-                     AND rs.reservation_status_status_id = 6
+                      AND rs.reservation_active = 1
+                      AND rs.reservation_status_status_id = 6 -- Only consider 'Reserved' status (assuming 6 is Reserved)
                     WHERE re.reservation_equipment_equip_id IN ($placeholders)
                     GROUP BY re.reservation_equipment_equip_id
-                ) AS r 
-                  ON e.equip_id = r.equip_id
+                ) AS r
+                    ON e.equip_id = r.equip_id
 
                 /* Lookups */
-                LEFT JOIN tbl_status_availability sa 
-                  ON e.status_availability_id = sa.status_availability_id
-                LEFT JOIN tbl_equipment_category ec 
-                  ON e.equipment_equipment_category_id = ec.equipments_category_id
+                -- LEFT JOIN tbl_status_availability sa -- Not needed if availability is calculated
+                --    ON e.status_availability_id = sa.status_availability_id
+                LEFT JOIN tbl_equipment_category tec
+                    ON e.equipments_category_id = tec.equipments_category_id -- Use correct column name for join
 
                 WHERE e.equip_id IN ($placeholders)
                 ORDER BY e.equip_name
-            ";
-
+            ";            // Create an array with enough parameters for all placeholders
+            $params = array_merge(
+                $itemIds, // For the first IN clause in subquery
+                $itemIds  // For the second IN clause in main query
+            );
             $stmt = $this->conn->prepare($sql);
-            // Bind twice for the two IN-clauses
-            $stmt->execute(array_merge($itemIds, $itemIds));
+            $stmt->execute($params);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             // Add inputted_quantity without altering total_available
@@ -712,6 +606,15 @@ class User {
                 $result['inputted_quantity'] = isset($inputQuantities[$eid])
                     ? (int)$inputQuantities[$eid]
                     : 0;
+
+                // Determine overall availability status
+                if ($result['total_available'] > 0) {
+                    $result['is_available'] = true;
+                    $result['availability_status'] = 'Available';
+                } else {
+                    $result['is_available'] = false;
+                    $result['availability_status'] = 'Unavailable';
+                }
             }
         }
 
@@ -720,9 +623,16 @@ class User {
             'data'   => $results
         ]);
     } catch (PDOException $e) {
+        error_log("Database error in fetchAvailability: " . $e->getMessage());
         return json_encode([
             'status'  => 'error',
             'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        error_log("General error in fetchAvailability: " . $e->getMessage());
+        return json_encode([
+            'status'  => 'error',
+            'message' => 'An unexpected error occurred: ' . $e->getMessage()
         ]);
     }
 }

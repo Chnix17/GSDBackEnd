@@ -82,11 +82,14 @@ class Vehicle {
         } catch(PDOException $e) {
             return false; // Treat as not existing on error
         }
+    }    public function saveModelData($json) {
+    // Handle both string and array inputs
+    if (is_array($json)) {
+        $data = $json;
+    } else {
+        $data = json_decode($json, true);
     }
-
-    public function saveModelData($json) {
-    $json = json_decode($json, true);
-    error_log(print_r($json, true)); 
+    error_log(print_r($data, true)); 
 
     try {
         // Check if the model already exists for the same category and make
@@ -95,11 +98,10 @@ class Vehicle {
                      AND vehicle_category_id = :category_id 
                      AND vehicle_model_vehicle_make_id = :make_id";
         $checkStmt = $this->conn->prepare($checkSql);
-        
-        // Prepare bind variables
-        $name = $json['name'];
-        $category_id = $json['category_id'];
-        $make_id = $json['make_id'];
+          // Prepare bind variables
+        $name = $data['name'];
+        $category_id = $data['category_id'];
+        $make_id = $data['make_id'];
 
         $checkStmt->bindParam(':name', $name, PDO::PARAM_STR);
         $checkStmt->bindParam(':category_id', $category_id, PDO::PARAM_INT);
@@ -142,17 +144,27 @@ class Vehicle {
 
     // Insert vehicle category
     public function saveCategoryData($json) {
-        $json = json_decode($json, true);
+        // Handle both string and array inputs
+        if (is_array($json)) {
+            $data = $json;
+        } else {
+            $data = json_decode($json, true);
+        }
     
-        if ($this->categoryExists($json['vehicle_category_name'])) {
+        // Check if category name is set
+        if (!isset($data['vehicle_category_name'])) {
+            return json_encode(['status' => 'error', 'message' => 'Category name is required.']);
+        }
+    
+        if ($this->categoryExists($data['vehicle_category_name'])) {
             return json_encode(['status' => 'error', 'message' => 'Category already exists.']);
         }
     
         try {
             $sql = "INSERT INTO tbl_vehicle_category (vehicle_category_name) VALUES (:name)";
             $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $json['vehicle_category_name']);
-            $stmt->execute(); // No need to bind the primary key
+            $stmt->bindParam(':name', $data['vehicle_category_name']);
+            $stmt->execute();
             return json_encode(['status' => 'success', 'message' => 'Category added successfully.']);
         } catch(PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);

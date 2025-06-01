@@ -247,90 +247,58 @@ class Dashboard {
     }
 
     public function displayedMaintenanceResources() {
-        try {
-            $records = [];
-    
-            // 1) Equipment under maintenance
-            $sql = "
-                SELECT 
-                    rce.id AS record_id,
-                    'equipment' AS resource_type,
-                    e.equip_name AS resource_name,
-                    re.reservation_equipment_quantity AS quantity,
-                    re.reservation_equipment_equip_id AS resource_id,
-                    CASE 
-                        WHEN c.condition_name = 'Other' THEN rce.other_reason 
-                        ELSE c.condition_name 
-                    END AS condition_name
-                FROM tbl_reservation_condition_equipment rce
-                JOIN tbl_reservation_equipment re ON rce.reservation_equipment_id = re.reservation_equipment_id
-                JOIN tbl_equipments e ON re.reservation_equipment_equip_id = e.equip_id
-                JOIN tbl_condition c ON rce.condition_id = c.id
-                WHERE rce.condition_id != 2
-                  AND rce.is_active = 1
-            ";
-            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
-                $records[] = $row;
-            }
-    
-            // 2) Venues under maintenance
-            $sql = "
-                SELECT 
-                    rcv.id AS record_id,
-                    'venue' AS resource_type,
-                    v.ven_name AS resource_name,
-                    NULL AS quantity,
-                    rv.reservation_venue_venue_id AS resource_id,
-                    CASE 
-                        WHEN c.condition_name = 'Other' THEN rcv.other_reason 
-                        ELSE c.condition_name 
-                    END AS condition_name
-                FROM tbl_reservation_condition_venue rcv
-                JOIN tbl_reservation_venue rv ON rcv.reservation_venue_id = rv.reservation_venue_id
-                JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
-                JOIN tbl_condition c ON rcv.condition_id = c.id
-                WHERE rcv.condition_id != 2
-                  AND rcv.is_active = 1
-            ";
-            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
-                $records[] = $row;
-            }
-    
-            // 3) Vehicles under maintenance
-            $sql = "
-                SELECT
-                    rcvh.id AS record_id,
-                    'vehicle' AS resource_type,
-                    CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
-                    NULL AS quantity,
-                    rv.reservation_vehicle_vehicle_id AS resource_id,
-                    CASE 
-                        WHEN c.condition_name = 'Other' THEN rcvh.other_reason 
-                        ELSE c.condition_name 
-                    END AS condition_name
-                FROM tbl_reservation_condition_vehicle rcvh
-                JOIN tbl_reservation_vehicle rv ON rcvh.reservation_vehicle_id = rv.reservation_vehicle_id
-                JOIN tbl_vehicle vh ON rv.reservation_vehicle_vehicle_id = vh.vehicle_id
-                JOIN tbl_vehicle_model vm ON vh.vehicle_model_id = vm.vehicle_model_id
-                JOIN tbl_condition c ON rcvh.condition_id = c.id
-                WHERE rcvh.condition_id != 2
-                  AND rcvh.is_active = 1
-            ";
-            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
-                $records[] = $row;
-            }
-    
-            return json_encode([
-                'status' => 'success',
-                'data'   => $records
-            ]);
-        } catch (PDOException $e) {
-            return json_encode([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ]);
+    try {
+        $records = [];
+
+        // 1) Venues under maintenance (status_availability_id != 1)
+        $sql = "
+            SELECT 
+                v.ven_id AS record_id,
+                'venue' AS resource_type,
+                v.ven_name AS resource_name,
+                NULL AS quantity,
+                v.ven_id AS resource_id,
+                sa.status_availability_name AS condition_name
+            FROM tbl_venue v
+            JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+            WHERE v.status_availability_id != 1
+              AND v.is_active = 1
+        ";
+        foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+            $records[] = $row;
         }
+
+        // 2) Vehicles under maintenance (status_availability_id != 1)
+        $sql = "
+            SELECT
+                vh.vehicle_id AS record_id,
+                'vehicle' AS resource_type,
+                CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
+                NULL AS quantity,
+                vh.vehicle_id AS resource_id,
+                sa.status_availability_name AS condition_name
+            FROM tbl_vehicle vh
+            JOIN tbl_vehicle_model vm ON vh.vehicle_model_id = vm.vehicle_model_id
+            JOIN tbl_status_availability sa ON vh.status_availability_id = sa.status_availability_id
+            WHERE vh.status_availability_id != 1
+              AND vh.is_active = 1
+        ";
+        foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+            $records[] = $row;
+        }
+
+        return json_encode([
+            'status' => 'success',
+            'data'   => $records
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
     }
+}
+
     
     
     

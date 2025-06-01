@@ -142,6 +142,24 @@ class VehicleMake {
         return $this->executeQuery($sql, [':id' => $id]);
     }
     
+    // New method to fetch models by category and make ID
+    public function fetchModelsByCategoryAndMake($categoryId, $makeId) {
+        $sql = "
+            SELECT 
+                vm.vehicle_model_id, 
+                vm.vehicle_model_name
+            FROM 
+                tbl_vehicle_model AS vm
+            WHERE 
+                vm.vehicle_category_id = :categoryId
+            AND 
+                vm.vehicle_model_vehicle_make_id = :makeId
+            ORDER BY 
+                vm.vehicle_model_name
+        ";
+    
+        return $this->executeQuery($sql, [':categoryId' => $categoryId, ':makeId' => $makeId]);
+    }
 
     public function __destruct() {
         unset($this->conn); // Clean up the database connection
@@ -153,104 +171,153 @@ class VehicleMake {
     }
 
 
-    // New method to fetch equipment by ID and join with equipment category
-    public function fetchEquipmentById($id) {
-            // 1) Fetch the equipment
-            $sql = "
-                SELECT 
-                    e.equip_id,
-                    e.equip_name,
-                    e.category_name,
-                    e.equip_pic,
-                    e.is_active,
-                    e.user_admin_id,
-                    e.equip_created_at
-                FROM tbl_equipments AS e
-                WHERE e.equip_id = :id
-                AND e.is_active = 1
+    public function fetchEquipmentById($id) { // Removed $type as it's not used directly in the initial fetch
+    try {
+        // 1) Fetch the equipment with its category name
+        $sql = "
+            SELECT
+                te.equip_id,
+                te.equip_name,
+                tec.equipments_category_name AS category_name, -- Fetch category name from joined table
+                te.is_active,
+                te.user_admin_id,
+                te.equip_created_at,
+                te.equip_type,
+                te.equipments_category_id -- Include category ID if needed for other logic
+            FROM
+                tbl_equipments AS te
+            INNER JOIN
+                tbl_equipment_category AS tec ON te.equipments_category_id = tec.equipments_category_id
+            WHERE
+                te.equip_id = :id
+                AND te.is_active = 1
+            LIMIT 1
+        ";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':id' => $id]);
+        $equip = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$equip) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Equipment not found or inactive.'
+            ]);
+        }
+
+        $displayQty = 0;
+        $formattedUnits = [];
+
+        // Determine logic based on equip_type from the fetched equipment
+        if ($equip['equip_type'] === 'Consumable') {
+            // Fetch quantity from tbl_equipment_quantity for Consumable type
+            $quantitySql = "
+                SELECT quantity
+                FROM tbl_equipment_quantity
+                WHERE equip_id = :id
+                ORDER BY last_updated DESC
                 LIMIT 1
             ";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([':id' => $id]);
-            $equip = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (! $equip) {
-                return json_encode([
-                    'status'  => 'error',
-                    'message' => 'Equipment not found or inactive.'
-                ]);
-            }
-
-            // 2) Fetch its active units, with status names
+            $quantityStmt = $this->conn->prepare($quantitySql);
+            $quantityStmt->execute([':id' => $id]);
+            $quantityResult = $quantityStmt->fetch(PDO::FETCH_ASSOC);
+            $displayQty = $quantityResult ? (int)$quantityResult['quantity'] : 0;
+        } else {
+            // For non-Consumable types, fetch from tbl_equipment_unit
             $unitSql = "
                 SELECT
-                    eu.unit_id,
-                    eu.serial_number,
-                    eu.quantity,
-                    eu.unit_created_at,
-                    sua.status_availability_name AS availability_status
-                FROM tbl_equipment_unit AS eu
-                LEFT JOIN tbl_status_availability AS sua
-                ON eu.status_availability_id = sua.status_availability_id
-                WHERE eu.equip_id   = :id
-                AND eu.is_active  = 1
-                ORDER BY eu.unit_id
+                    unit_id,
+                    equip_id,
+                    serial_number,
+                    brand,
+                    size,
+                    color,
+                    status_availability_id,
+                    unit_created_at,
+                    is_active,
+                    user_admin_id
+                FROM tbl_equipment_unit
+                WHERE equip_id = :id
+                AND is_active = 1
+                ORDER BY unit_id
             ";
             $unitStmt = $this->conn->prepare($unitSql);
             $unitStmt->execute([':id' => $id]);
             $units = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // 3) Compute displayed equip_quantity
-            $displayQty = count($units);
+            $formattedUnits = array_map(function($u) {
+                return [
+                    'unit_id'               => (int)$u['unit_id'],
+                    'serial_number'         => $u['serial_number'],
+                    'brand'                 => $u['brand'],
+                    'size'                  => $u['size'],
+                    'color'                 => $u['color'],
+                    'status_availability_id'=> (int)$u['status_availability_id'],
+                    'unit_created_at'       => $u['unit_created_at'],
+                    'user_admin_id'         => (int)$u['user_admin_id'],
+                ];
+            }, $units);
 
-            // 4) Build response
-            $response = [
-                'equip_id'        => (int)$equip['equip_id'],
-                'equip_name'      => $equip['equip_name'],
-                'category_name'   => $equip['category_name'],
-                'equip_pic'       => $equip['equip_pic'],
-                'user_admin_id'   => (int)$equip['user_admin_id'],
-                'equip_created_at'=> $equip['equip_created_at'],
-                'is_active'       => (bool)$equip['is_active'],
-                'equip_quantity'  => $displayQty,
-                'units'           => array_map(function($u) {
-                    return [
-                        'unit_id'            => (int)$u['unit_id'],
-                        'serial_number'      => $u['serial_number'],
-                        'quantity'           => (int)$u['quantity'],
-                        'availability_status'=> $u['availability_status'],
-                        'unit_created_at'    => $u['unit_created_at'],
-                    ];
-                }, $units),
-            ];
-
-            return json_encode([
-                'status' => 'success',
-                'data'   => $response
-            ]);
+            $displayQty = count($formattedUnits);
         }
 
+        // Build and return final response
+        $response = [
+            'equip_id'         => (int)$equip['equip_id'],
+            'equip_name'       => $equip['equip_name'],
+            'category_name'    => $equip['category_name'], // This now comes from the joined table
+            'equip_type'       => $equip['equip_type'],
+            'user_admin_id'    => (int)$equip['user_admin_id'],
+            'equip_created_at' => $equip['equip_created_at'],
+            'is_active'        => (bool)$equip['is_active'],
+            'equip_quantity'   => $displayQty,
+            'units'            => $formattedUnits,
+        ];
 
-    public function fetchVehicleById($id) {
+        return json_encode([
+            'status' => 'success',
+            'data'   => $response
+        ]);
+
+    } catch (PDOException $e) {
+        error_log("Database error in fetchEquipmentById: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (Exception $e) {
+        error_log("Error in fetchEquipmentById: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+
+
+public function fetchVehicleById($id) {
     $sql = "
         SELECT 
-            vmd.vehicle_model_name,
-            v.vehicle_make_name,
-            v.vehicle_category_name,
+            v.vehicle_id,
             v.vehicle_license,
-            sa.status_availability_name,
             v.year,
-            v.vehicle_pic
+            v.vehicle_pic,
+
+            -- Names only
+            vmd.vehicle_model_name,
+            vmk.vehicle_make_name,
+            vc.vehicle_category_name,
+            sa.status_availability_name
+
         FROM tbl_vehicle v
         JOIN tbl_vehicle_model vmd 
             ON v.vehicle_model_id = vmd.vehicle_model_id
+        JOIN tbl_vehicle_make vmk 
+            ON vmd.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+        JOIN tbl_vehicle_category vc 
+            ON vmd.vehicle_category_id = vc.vehicle_category_id
         JOIN tbl_status_availability sa 
             ON v.status_availability_id = sa.status_availability_id
         WHERE v.vehicle_id = :id
     ";
 
     return $this->executeQuery($sql, [':id' => $id]);
-    }
+}
+
 
 
     public function fetchConditions() {
@@ -447,6 +514,42 @@ class VehicleMake {
     
         return $this->executeQuery($sql, [':userid' => $userid]);
     }
+
+    public function fetchMake() {
+        $sql = "SELECT vehicle_make_id, vehicle_make_name FROM tbl_vehicle_make ORDER BY vehicle_make_name";
+        return $this->executeQuery($sql);
+    }
+
+    public function fetchAllVehicles() {
+    $sql = "
+        SELECT  
+            v.vehicle_id,
+            v.vehicle_license,
+            v.year,
+            v.vehicle_pic,
+            v.is_active,
+            v.created_at,
+
+            -- Only names
+            vmk.vehicle_make_name,
+            vmd.vehicle_model_name,
+            vc.vehicle_category_name,
+            sa.status_availability_name
+
+        FROM tbl_vehicle v
+        INNER JOIN tbl_vehicle_model vmd 
+            ON v.vehicle_model_id = vmd.vehicle_model_id
+        INNER JOIN tbl_vehicle_make vmk 
+            ON vmd.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+        INNER JOIN tbl_vehicle_category vc 
+            ON vmd.vehicle_category_id = vc.vehicle_category_id
+        INNER JOIN tbl_status_availability sa 
+            ON v.status_availability_id = sa.status_availability_id
+        WHERE v.is_active = 1
+    ";
+
+    return $this->executeQuery($sql);
+}
     
 }
 
@@ -456,6 +559,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
     $vehicleMake = new VehicleMake();
 
     switch ($operation) {
+        case "fetchAllVehicles":
+            echo $vehicleMake->fetchAllVehicles(); // Fetch all vehicles
+            break;
         case "fetchVehicleById":
             $vehicleId = $input['id'] ?? ($_POST['id'] ?? null);
             if ($vehicleId) {
@@ -474,17 +580,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
             }
             break;
         
-        case "fetchEquipmentById": // Fetch equipment by ID with category
+        case "fetchEquipmentById":
             $equipmentId = $input['id'] ?? ($_POST['id'] ?? null);
+            $type = $input['type'] ?? ($_POST['type'] ?? 'Consumable'); // Default to 'consumable'
             if ($equipmentId) {
-                echo $vehicleMake->fetchEquipmentById($equipmentId); // Fetch equipment by ID
+                echo $vehicleMake->fetchEquipmentById($equipmentId, $type); // Fetch equipment by ID
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
             }
             break;
         
         case "fetchMake":
-            echo $vehicleMake->fetchMakes(); // Fetch all vehicle makes
+            echo $vehicleMake->fetchMake(); // Fetch all vehicle makes
             break;
         case "fetchVehicleMakeById":
             $vehicleMakeId = $input['id'] ?? ($_POST['id'] ?? null);
@@ -558,6 +665,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
                 echo $vehicleMake->fetchModelById($vehicleModelId); // Fetch vehicle model by ID
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
+            }
+            break;
+        case "fetchModelsByCategoryAndMake":
+            $categoryId = $input['categoryId'] ?? ($_POST['categoryId'] ?? null);
+            $makeId = $input['makeId'] ?? ($_POST['makeId'] ?? null);
+            if ($categoryId && $makeId) {
+                echo $vehicleMake->fetchModelsByCategoryAndMake($categoryId, $makeId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Category ID and Make ID parameters are required.']);
             }
             break;
         case "fetchConditions":
