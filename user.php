@@ -1064,6 +1064,418 @@ class User {
         }
     }
 
+    public function getVehicleUsage($vehicleId) {
+    try {
+        // First, get the vehicle details
+        $vehicleSql = "
+            SELECT 
+                v.vehicle_id,
+                v.vehicle_license,
+                v.year,
+                v.vehicle_pic,
+                v.is_active,
+                v.created_at,
+                v.updated_at,
+                vm.vehicle_model_name,
+                vmk.vehicle_make_name,
+                vc.vehicle_category_name,
+                sa.status_availability_name
+            FROM tbl_vehicle v
+            INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+            INNER JOIN tbl_vehicle_make vmk ON vm.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+            INNER JOIN tbl_vehicle_category vc ON vm.vehicle_category_id = vc.vehicle_category_id
+            INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+            WHERE v.vehicle_id = :vehicleId
+        ";
+        
+        $stmt = $this->conn->prepare($vehicleSql);
+        $stmt->execute([':vehicleId' => $vehicleId]);
+        $vehicleDetails = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$vehicleDetails) {
+            return json_encode(['status' => 'error', 'message' => 'Vehicle not found']);
+        }
+        
+        // Get all reservations for this vehicle with status_id = 6 and active = 0
+        $reservationsSql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                CONCAT(u.users_fname, ' ', u.users_lname) AS reserved_by,
+                rs.reservation_status_status_id,
+                sm.status_master_name AS reservation_status,
+                rv.reservation_vehicle_id,
+                rv.active AS reservation_vehicle_active,
+                c.condition_name,
+                c.id AS condition_id
+            FROM tbl_reservation_vehicle rv
+            INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+            LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                AND rs.reservation_status_status_id = 6
+                AND rs.reservation_active = 0
+            LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+            LEFT JOIN tbl_reservation_condition_vehicle rcv ON rcv.reservation_vehicle_id = rv.reservation_vehicle_id
+            LEFT JOIN tbl_condition c ON rcv.condition_id = c.id
+            WHERE rv.reservation_vehicle_vehicle_id = :vehicleId
+            ORDER BY r.reservation_start_date DESC
+
+        ";
+        
+        $stmt = $this->conn->prepare($reservationsSql);
+        $stmt->execute([':vehicleId' => $vehicleId]);
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Calculate statistics
+        $totalUsage = count($reservations);
+        $brokenCount = 0;
+        $missingCount = 0;
+        
+        foreach ($reservations as $reservation) {
+            if ($reservation['condition_id'] == 4) {
+                $brokenCount++;
+            } elseif ($reservation['condition_id'] == 3) {
+                $missingCount++;
+            }
+        }
+        
+        // Prepare the response
+        $response = [
+            'status' => 'success',
+            'data' => [
+                'vehicle_details' => $vehicleDetails,
+                'usage_statistics' => [
+                    'total_usage' => $totalUsage,
+                    'broken_count' => $brokenCount,
+                    'missing_count' => $missingCount,
+                    'good_condition_count' => $totalUsage - ($brokenCount + $missingCount)
+                ],
+                'reservations' => $reservations
+            ]
+        ];
+        
+        return json_encode($response);
+        
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function getVenueUsage($venueId) {
+    try {
+        // Fetch venue details
+        $venueSql = "
+            SELECT 
+                v.ven_id,
+                v.ven_name,
+                v.ven_occupancy,
+                v.ven_created_at,
+                v.ven_updated_at,
+                v.status_availability_id,
+                v.ven_pic,
+                v.ven_operating_hours,
+                v.is_active,
+                v.user_admin_id,
+                sa.status_availability_name
+            FROM tbl_venue v
+            LEFT JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+            WHERE v.ven_id = :venueId
+        ";
+
+        $stmt = $this->conn->prepare($venueSql);
+        $stmt->execute([':venueId' => $venueId]);
+        $venueDetails = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$venueDetails) {
+            return json_encode(['status' => 'error', 'message' => 'Venue not found']);
+        }
+
+        // Fetch reservations using this venue (status_id = 6, active = 0)
+        $reservationsSql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                CONCAT(u.users_fname, ' ', u.users_lname) AS reserved_by,
+                rs.reservation_status_status_id,
+                sm.status_master_name AS reservation_status,
+                rv.reservation_venue_id,
+                rv.active AS reservation_venue_active,
+                c.condition_name,
+                c.id AS condition_id
+            FROM tbl_reservation_venue rv
+            INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+            LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                AND rs.reservation_status_status_id = 6
+                AND rs.reservation_active = 0
+            LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+            LEFT JOIN tbl_reservation_condition_venue rcv ON rcv.reservation_venue_id = rv.reservation_venue_id
+            LEFT JOIN tbl_condition c ON rcv.condition_id = c.id
+            WHERE rv.reservation_venue_venue_id = :venueId
+            ORDER BY r.reservation_start_date DESC
+        ";
+
+        $stmt = $this->conn->prepare($reservationsSql);
+        $stmt->execute([':venueId' => $venueId]);
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Count conditions
+        $totalUsage = count($reservations);
+        $brokenCount = 0;
+        $missingCount = 0;
+
+        foreach ($reservations as $reservation) {
+            if ($reservation['condition_id'] == 4) {
+                $brokenCount++;
+            } elseif ($reservation['condition_id'] == 3) {
+                $missingCount++;
+            }
+        }
+
+        // Prepare the response
+        $response = [
+            'status' => 'success',
+            'data' => [
+                'venue_details' => $venueDetails,
+                'usage_statistics' => [
+                    'total_usage' => $totalUsage,
+                    'broken_count' => $brokenCount,
+                    'missing_count' => $missingCount,
+                    'good_condition_count' => $totalUsage - ($brokenCount + $missingCount)
+                ],
+                'reservations' => $reservations
+            ]
+        ];
+
+        return json_encode($response);
+
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function getEquipmentUnitUsage($unitId) {
+    try {
+        // Fetch unit and equipment details with category
+        $unitSql = "
+            SELECT 
+                eu.unit_id,
+                eu.serial_number,
+                eu.brand,
+                eu.size,
+                eu.color,
+                eu.status_availability_id,
+                sa.status_availability_name,
+                eu.unit_created_at,
+                eu.user_admin_id,
+                CONCAT(u.users_fname, ' ', 
+                    IFNULL(CONCAT(u.users_mname, ' '), ''), 
+                    u.users_lname, 
+                    IFNULL(CONCAT(' ', u.users_suffix), '')
+                ) AS admin_full_name,
+                e.equip_name,
+                e.equip_type,
+                e.equip_created_at,
+                ec.equipments_category_name
+            FROM tbl_equipment_unit eu
+            INNER JOIN tbl_equipments e ON eu.equip_id = e.equip_id
+            LEFT JOIN tbl_equipment_category ec ON e.equipments_category_id = ec.equipments_category_id
+            LEFT JOIN tbl_users u ON eu.user_admin_id = u.users_id
+            LEFT JOIN tbl_status_availability sa ON eu.status_availability_id = sa.status_availability_id
+            WHERE eu.unit_id = :unitId
+        ";
+
+
+
+        $stmt = $this->conn->prepare($unitSql);
+        $stmt->execute([':unitId' => $unitId]);
+        $unitDetails = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$unitDetails) {
+            return json_encode(['status' => 'error', 'message' => 'Equipment unit not found']);
+        }
+
+        // Fetch reservations for this unit
+        $reservationsSql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                CONCAT(u.users_fname, ' ', u.users_lname) AS reserved_by,
+                rs.reservation_status_status_id,
+                sm.status_master_name AS reservation_status,
+                ru.reservation_unit_id,
+                ru.active AS reservation_unit_active,
+                c.condition_name,
+                c.id AS condition_id
+            FROM tbl_reservation_unit ru
+            INNER JOIN tbl_reservation_equipment re ON ru.reservation_equipment_id = re.reservation_equipment_id
+            INNER JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
+            LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                AND rs.reservation_status_status_id = 6
+                AND rs.reservation_active = 0
+            LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+            LEFT JOIN tbl_reservation_condition_unit rcu ON rcu.reservation_unit_id = ru.reservation_unit_id
+            LEFT JOIN tbl_condition c ON rcu.condition_id = c.id
+            WHERE ru.unit_id = :unitId
+            ORDER BY r.reservation_start_date DESC
+        ";
+
+        $stmt = $this->conn->prepare($reservationsSql);
+        $stmt->execute([':unitId' => $unitId]);
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Count conditions
+        $totalUsage = count($reservations);
+        $brokenCount = 0;
+        $missingCount = 0;
+
+        foreach ($reservations as $reservation) {
+            if ($reservation['condition_id'] == 4) {
+                $brokenCount++;
+            } elseif ($reservation['condition_id'] == 3) {
+                $missingCount++;
+            }
+        }
+
+        // Response
+        $response = [
+            'status' => 'success',
+            'data' => [
+                'equipment_unit_details' => $unitDetails,
+                'usage_statistics' => [
+                    'total_usage' => $totalUsage,
+                    'broken_count' => $brokenCount,
+                    'missing_count' => $missingCount,
+                    'good_condition_count' => $totalUsage - ($brokenCount + $missingCount)
+                ],
+                'reservations' => $reservations
+            ]
+        ];
+
+        return json_encode($response);
+
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function getConsumableUsage($equipId) {
+    try {
+        // Fetch equipment details
+        $equipmentSql = "
+            SELECT 
+                e.equip_id,
+                e.equip_name,
+                e.equip_type,
+                e.equip_created_at,
+                e.equipments_category_id,
+                e.is_active,
+                e.user_admin_id
+            FROM tbl_equipments e
+            WHERE e.equip_id = :equipId
+        ";
+
+        $stmt = $this->conn->prepare($equipmentSql);
+        $stmt->execute([':equipId' => $equipId]);
+        $equipmentDetails = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$equipmentDetails) {
+            return json_encode(['status' => 'error', 'message' => 'Consumable equipment not found']);
+        }
+
+        // Fetch reservations of this equipment
+        $reservationsSql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                CONCAT(u.users_fname, ' ', u.users_lname) AS reserved_by,
+                rs.reservation_status_status_id,
+                sm.status_master_name AS reservation_status,
+                re.reservation_equipment_id,
+                re.reservation_equipment_quantity,
+                re.active AS reservation_equipment_active,
+                rce.qty_bad
+            FROM tbl_reservation_equipment re
+            INNER JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
+            LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                AND rs.reservation_status_status_id = 6
+                AND rs.reservation_active = 0
+            LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+            LEFT JOIN tbl_reservation_condition_equipment rce ON rce.reservation_equipment_id = re.reservation_equipment_id
+            WHERE re.reservation_equipment_equip_id = :equipId
+            ORDER BY r.reservation_start_date DESC
+        ";
+
+        $stmt = $this->conn->prepare($reservationsSql);
+        $stmt->execute([':equipId' => $equipId]);
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Calculate statistics
+        $totalUsage = 0;
+        $totalQtyBad = 0;
+
+        foreach ($reservations as $reservation) {
+            $totalUsage += (int) $reservation['reservation_equipment_quantity'];
+            $totalQtyBad += (int) $reservation['qty_bad'];
+        }
+
+        // Response
+        $response = [
+            'status' => 'success',
+            'data' => [
+                'equipment_details' => $equipmentDetails,
+                'usage_statistics' => [
+                    'total_usage_quantity' => $totalUsage,
+                    'total_qty_bad' => $totalQtyBad,
+                    'total_good_quantity' => $totalUsage - $totalQtyBad
+                ],
+                'reservations' => $reservations
+            ]
+        ];
+
+        return json_encode($response);
+
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+
+
+
+
+    
+
 }
 
 // Handle the request
@@ -1083,8 +1495,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
-        case "login":
-            echo $user->login($json);
+
+        case "getConsumableUsage":
+            $equipId = $input['equipId'] ?? null;
+            if ($equipId) {
+                echo $user->getConsumableUsage($equipId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Equipment ID is required']);
+            }
+            break;
+
+        case "getEquipmentUnitUsage":
+            $unitId = $input['unitId'] ?? null;
+            if ($unitId) {
+                echo $user->getEquipmentUnitUsage($unitId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Unit ID is required']);
+            }
+            break;
+
+        case "getVenueUsage":
+            $venueId = $input['venueId'] ?? null;
+            if ($venueId) {
+                echo $user->getVenueUsage($venueId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Venue ID is required']);
+            }
+            break;
+
+        case "getVehicleUsage":
+            $vehicleId = $input['vehicleId'] ?? null;
+            if ($vehicleId) {
+                echo $user->getVehicleUsage($vehicleId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Vehicle ID is required']);
+            }
             break;
         case "fetchDepartments":
             echo $user->fetchDepartments($json);
@@ -1180,8 +1625,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($itemType === 'equipment' && !empty($quantities)) {
                 // Only create the combined array if we have quantities
                 $inputQuantities = array_combine($itemId, $quantities);
-            }
-            
+            }        
             echo $user->fetchAvailability($itemType, $itemId, $inputQuantities);
             break;
         case "fetchDriver":
@@ -1206,8 +1650,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$userId || !$oldPassword || !$newPassword) {
                 echo json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
                 break;
-            }
-            
+            }     
             echo $user->updatePassword($userId, $oldPassword, $newPassword);
             break;
         case "updateProfile":

@@ -293,12 +293,11 @@ class User {
     
     
 
-    
-    public function updateEquipment($equipmentData) {
+      public function updateEquipment($equipmentData) {
         try {
             $sql = "UPDATE tbl_equipments SET 
                         equip_name = :name, 
-                        category_name = :categoryName,
+                        equipments_category_id = :categoryId,
                         is_active = :isActive,
                         user_admin_id = :userAdminId,
                         equip_type = :equipType
@@ -308,7 +307,7 @@ class User {
 
             // Bind parameters
             $stmt->bindParam(':name', $equipmentData['name']);
-            $stmt->bindParam(':categoryName', $equipmentData['category_name']);
+            $stmt->bindParam(':categoryId', $equipmentData['category_id'], PDO::PARAM_INT);
             $stmt->bindParam(':isActive', $equipmentData['is_active'], PDO::PARAM_BOOL);
             $stmt->bindParam(':userAdminId', $equipmentData['user_admin_id'], PDO::PARAM_INT);
             $stmt->bindParam(':equipType', $equipmentData['equip_type']);

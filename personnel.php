@@ -1097,117 +1097,185 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
 
 
 
-public function updateReturn($type, $reservation_id, $resource_id, $condition, $user_personnel_id) {
-    try {
-        // Map condition to status and condition_id
-        switch (strtolower($condition)) {
-            case 'good':
-                $status_availability_id = 1;
-                $condition_id = 2;
-                break;
-            case 'damage':
-                $status_availability_id = 8;
-                $condition_id = 4;
-                break;
-            case 'missing':
-                $status_availability_id = 7;
-                $condition_id = 3;
-                break;
-            default:
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid condition provided.'
-                ]);
-        }
-
-        switch ($type) {
-            case 'venue':
-                // Get venue_id
-                $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
-                $stmtFetchVenueId->execute(['reservation_id' => $reservation_id]);
-                $venue = $stmtFetchVenueId->fetch(PDO::FETCH_ASSOC);
-
-                if (!$venue) {
+public function updateReturn($type, $reservation_id, $resource_id, $condition, $user_personnel_id, $bad_quantity = 0, $good_quantity = 0) {
+        try {
+            // Map condition to status and condition_id
+            switch (strtolower($condition)) {
+                case 'good':
+                    $status_availability_id = 1; // Assuming 1 means available/good
+                    $condition_id = 2; // Assuming 2 means good condition
+                    break;
+                case 'damage':
+                    $status_availability_id = 8; // Assuming 8 means damaged
+                    $condition_id = 4; // Assuming 4 means damaged condition
+                    break;
+                case 'missing':
+                    $status_availability_id = 7; // Assuming 7 means missing
+                    $condition_id = 3; // Assuming 3 means missing condition
+                    break;
+                default:
                     return json_encode([
                         'status' => 'error',
-                        'message' => 'Reservation venue ID not found.'
+                        'message' => 'Invalid condition provided.'
+                    ]);
+            }
+
+            switch ($type) {
+                case 'venue':
+                    // Get venue_id
+                    $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
+                    $stmtFetchVenueId->execute(['reservation_id' => $reservation_id]);
+                    $venue = $stmtFetchVenueId->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$venue) {
+                        return json_encode([
+                            'status' => 'error',
+                            'message' => 'Reservation venue ID not found.'
+                        ]);
+                    }
+
+                    $venue_id = $venue['reservation_venue_venue_id'];
+
+                    // Update venue status
+                    $stmtStatus = $this->conn->prepare("UPDATE tbl_venue SET status_availability_id = :status_availability_id WHERE ven_id = :venue_id");
+                    $stmtStatus->execute([
+                        'status_availability_id' => $status_availability_id,
+                        'venue_id' => $venue_id
+                    ]);
+
+                    // Set active to -1
+                    $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_venue SET active = -1 WHERE reservation_venue_id = :reservation_id");
+                    $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                    // Insert condition record
+                    $stmtCond = $this->conn->prepare("INSERT INTO tbl_reservation_condition_venue (reservation_venue_id, condition_id, is_active, user_personnel_id) VALUES (:reservation_id, :condition_id, 1, :user_personnel_id)");
+                    $stmtCond->execute([
+                        'reservation_id' => $reservation_id,
+                        'condition_id' => $condition_id,
+                        'user_personnel_id' => $user_personnel_id
+                    ]);
+                    break;
+
+                case 'vehicle':
+                    // Update vehicle status
+                    $stmtStatus = $this->conn->prepare("UPDATE tbl_vehicle SET status_availability_id = :status_availability_id WHERE vehicle_id = :resource_id");
+                    $stmtStatus->execute([
+                        'status_availability_id' => $status_availability_id,
+                        'resource_id' => $resource_id
+                    ]);
+
+                    // Set active to -1
+                    $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_vehicle SET active = -1 WHERE reservation_vehicle_id = :reservation_id");
+                    $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                    // Insert condition record
+                    $stmtCond = $this->conn->prepare("INSERT INTO tbl_reservation_condition_vehicle (reservation_vehicle_id, condition_id, is_active, user_personnel_id) VALUES (:reservation_id, :condition_id, 1, :user_personnel_id)");
+                    $stmtCond->execute([
+                        'reservation_id' => $reservation_id,
+                        'condition_id' => $condition_id,
+                        'user_personnel_id' => $user_personnel_id
+                    ]);
+                    break;
+
+                case 'equipment':
+                    // Update unit status
+                    $stmtStatus = $this->conn->prepare("UPDATE tbl_equipment_unit SET status_availability_id = :status_availability_id WHERE unit_id = :resource_id");
+                    $stmtStatus->execute([
+                        'status_availability_id' => $status_availability_id,
+                        'resource_id' => $resource_id
+                    ]);
+
+                    // Set reservation_unit to inactive
+                    $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_unit SET active = -1 WHERE reservation_unit_id = :reservation_id");
+                    $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                    // Insert condition log
+                    $stmtCond = $this->conn->prepare("INSERT INTO tbl_reservation_condition_unit
+                        (reservation_unit_id, condition_id, is_active, user_personnel_id)
+                        VALUES (:reservation_id, :condition_id, 1, :user_personnel_id)");
+                    $stmtCond->execute([
+                        'reservation_id' => $reservation_id,
+                        'condition_id' => $condition_id,
+                        'user_personnel_id' => $user_personnel_id
+                    ]);
+                    break;
+
+                case 'equipment_consumable':
+                // 1) Fetch the equip_id for this reservation_equipment
+                $stmtFetchEquip = $this->conn->prepare("
+                    SELECT reservation_equipment_equip_id
+                      FROM tbl_reservation_equipment
+                     WHERE reservation_equipment_id = :rid
+                ");
+                $stmtFetchEquip->execute(['rid' => $reservation_id]);
+                $equipRow = $stmtFetchEquip->fetch(PDO::FETCH_ASSOC);
+                if (!$equipRow) {
+                    return json_encode([
+                        'status'  => 'error',
+                        'message' => 'Reservation equipment not found.'
+                    ]);
+                }
+                $equip_id = $equipRow['reservation_equipment_equip_id'];
+
+                // 2) Update on_hand_quantity in tbl_equipment_quantity
+                if ($good_quantity > 0) {
+                    $stmtUpdateQty = $this->conn->prepare("
+                        UPDATE tbl_equipment_quantity
+                           SET on_hand_quantity      = on_hand_quantity + :g,
+                               last_updated          = NOW(),
+                               status_availability_id = :stat
+                         WHERE equip_id = :eid
+                    ");
+                    $stmtUpdateQty->execute([
+                        'g'    => $good_quantity,
+                        'stat' => $status_availability_id,
+                        'eid'  => $equip_id
                     ]);
                 }
 
-                $venue_id = $venue['reservation_venue_venue_id'];
+                // 3) Insert a “bad qty” record if needed
+                if ($bad_quantity > 0) {
+                    $stmtInsertBad = $this->conn->prepare("
+                        INSERT INTO tbl_reservation_condition_equipment
+                            (reservation_equipment_id, condition_id, qty_bad, user_personnel_id, is_active)
+                        VALUES
+                            (:rid, :cid, :b,  :uid, 1)
+                    ");
+                    $stmtInsertBad->execute([
+                        'rid' => $reservation_id,
+                        'cid' => $condition_id,
+                        'b'   => $bad_quantity,
+                        'uid' => $user_personnel_id
+                    ]);
+                }
 
-                // Update venue status
-                $stmtStatus = $this->conn->prepare("UPDATE tbl_venue SET status_availability_id = :status_availability_id WHERE ven_id = :venue_id");
-                $stmtStatus->execute([
-                    'status_availability_id' => $status_availability_id,
-                    'venue_id' => $venue_id
-                ]);
-
-                // Set active to -1
-                $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_venue SET active = -1 WHERE reservation_venue_id = :reservation_id");
-                $stmtActive->execute(['reservation_id' => $reservation_id]);
-
-                // Insert condition record
-                $stmtCond = $this->conn->prepare("INSERT INTO tbl_reservation_condition_venue (reservation_venue_id, condition_id, is_active, user_personnel_id) VALUES (:reservation_id, :condition_id, 1, :user_personnel_id)");
-                $stmtCond->execute([
-                    'reservation_id' => $reservation_id,
-                    'condition_id' => $condition_id,
-                    'user_personnel_id' => $user_personnel_id
-                ]);
+                // 4) Mark the reservation_equipment record inactive
+                $stmtDeactivate = $this->conn->prepare("
+                    UPDATE tbl_reservation_equipment
+                       SET active = -1
+                     WHERE reservation_equipment_id = :rid
+                ");
+                $stmtDeactivate->execute(['rid' => $reservation_id]);
                 break;
 
-            case 'vehicle':
-                // Update vehicle status
-                $stmtStatus = $this->conn->prepare("UPDATE tbl_vehicle SET status_availability_id = :status_availability_id WHERE vehicle_id = :resource_id");
-                $stmtStatus->execute([
-                    'status_availability_id' => $status_availability_id,
-                    'resource_id' => $resource_id
-                ]);
+                default:
+                    return json_encode([
+                        'status' => 'error',
+                        'message' => 'Invalid type.'
+                    ]);
+            }
 
-                // Set active to -1
-                $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_vehicle SET active = -1 WHERE reservation_vehicle_id = :reservation_id");
-                $stmtActive->execute(['reservation_id' => $reservation_id]);
-
-                // Insert condition record
-                $stmtCond = $this->conn->prepare("INSERT INTO tbl_reservation_condition_vehicle (reservation_vehicle_id, condition_id, is_active, user_personnel_id) VALUES (:reservation_id, :condition_id, 1, :user_personnel_id)");
-                $stmtCond->execute([
-                    'reservation_id' => $reservation_id,
-                    'condition_id' => $condition_id,
-                    'user_personnel_id' => $user_personnel_id
-                ]);
-                break;
-
-            case 'equipment':
-                $stmtStatus = $this->conn->prepare("UPDATE tbl_equipment_unit SET status_availability_id = :status_availability_id WHERE unit_id = :resource_id");
-                $stmtStatus->execute([
-                    'status_availability_id' => $status_availability_id,
-                    'resource_id' => $resource_id
-                ]);
-
-                $stmtActive = $this->conn->prepare("UPDATE tbl_reservation_unit SET active = -1 WHERE reservation_unit_id = :reservation_id");
-                $stmtActive->execute(['reservation_id' => $reservation_id]);
-
-                // No condition table for equipment
-                break;
-
-            default:
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid type'
-                ]);
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Status and condition updated successfully.'
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
         }
-
-        return json_encode([
-            'status' => 'success',
-            'message' => 'Status and condition updated successfully'
-        ]);
-    } catch (PDOException $e) {
-        return json_encode([
-            'status' => 'error',
-            'message' => $e->getMessage()
-        ]);
     }
-}
 
 
 }
@@ -1339,13 +1407,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             echo $user->updateRelease($type, $reservation_id, $resource_id, $quantity);
             break;
-
         case "updateReturn":
             $type = $jsonInput['type'] ?? null;
             $reservation_id = $jsonInput['reservation_id'] ?? null;
             $resource_id = $jsonInput['resource_id'] ?? null;
             $condition = $jsonInput['condition'] ?? null;
             $user_personnel_id = $jsonInput['user_personnel_id'] ?? null;
+            $bad_quantity = $jsonInput['bad_quantity'] ?? 0; // Default to 0 if not provided
+            $good_quantity = $jsonInput['good_quantity'] ?? 0; // Default to 0 if not provided
 
             if (!$type || !$reservation_id || !$resource_id || !$condition || !$user_personnel_id) {
                 die(json_encode([
@@ -1354,7 +1423,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'timestamp' => date('Y-m-d H:i:s')
                 ]));
             }
-            echo $user->updateReturn($type, $reservation_id, $resource_id, $condition, $user_personnel_id);
+            echo $user->updateReturn($type, $reservation_id, $resource_id, $condition, $user_personnel_id, $bad_quantity, $good_quantity);
             break;
             
             

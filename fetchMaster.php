@@ -205,13 +205,14 @@ class VehicleMake {
         }
 
         $displayQty = 0;
+        $onHandQty = 0;
         $formattedUnits = [];
 
         // Determine logic based on equip_type from the fetched equipment
         if ($equip['equip_type'] === 'Consumable') {
             // Fetch quantity from tbl_equipment_quantity for Consumable type
             $quantitySql = "
-                SELECT quantity
+                SELECT quantity, on_hand_quantity
                 FROM tbl_equipment_quantity
                 WHERE equip_id = :id
                 ORDER BY last_updated DESC
@@ -221,6 +222,7 @@ class VehicleMake {
             $quantityStmt->execute([':id' => $id]);
             $quantityResult = $quantityStmt->fetch(PDO::FETCH_ASSOC);
             $displayQty = $quantityResult ? (int)$quantityResult['quantity'] : 0;
+            $onHandQty = $quantityResult ? (int)$quantityResult['on_hand_quantity'] : 0;
         } else {
             // For non-Consumable types, fetch from tbl_equipment_unit
             $unitSql = "
@@ -258,6 +260,7 @@ class VehicleMake {
             }, $units);
 
             $displayQty = count($formattedUnits);
+            $onHandQty = $displayQty; // For non-consumables, on_hand_quantity equals total units
         }
 
         // Build and return final response
@@ -270,6 +273,7 @@ class VehicleMake {
             'equip_created_at' => $equip['equip_created_at'],
             'is_active'        => (bool)$equip['is_active'],
             'equip_quantity'   => $displayQty,
+            'on_hand_quantity' => $onHandQty,
             'units'            => $formattedUnits,
         ];
 
@@ -582,9 +586,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
         
         case "fetchEquipmentById":
             $equipmentId = $input['id'] ?? ($_POST['id'] ?? null);
-            $type = $input['type'] ?? ($_POST['type'] ?? 'Consumable'); // Default to 'consumable'
             if ($equipmentId) {
-                echo $vehicleMake->fetchEquipmentById($equipmentId, $type); // Fetch equipment by ID
+                echo $vehicleMake->fetchEquipmentById($equipmentId); // Fetch equipment by ID
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
             }

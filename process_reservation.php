@@ -462,19 +462,17 @@ class User {
                 'requester_name' => $row['requester_name'],
                 'department_name' => $row['department_name'],
                 'user_level_name' => $row['user_level_name']
-            ];
-
-            // VENUES
-            if (!empty($row['venue_data'])) {
+            ];            // VENUES
+            if (!empty($row['venue_data']) && $row['venue_data'] !== ':::::') {
                 foreach (explode('|', $row['venue_data']) as $venueStr) {
                     $venueParts = explode(':', $venueStr);
-                    if (count($venueParts) >= 5) {
+                    if (count($venueParts) >= 5 && !empty(array_filter($venueParts))) {
                         $venues[] = [
-                            'venue_id' => $venueParts[0],
-                            'venue_name' => $venueParts[1],
-                            'occupancy' => $venueParts[2],
-                            'operating_hours' => $venueParts[3],
-                            'picture' => $venueParts[4]
+                            'venue_id' => $venueParts[0] ?: '',
+                            'venue_name' => $venueParts[1] ?: '',
+                            'occupancy' => $venueParts[2] ?: '',
+                            'operating_hours' => $venueParts[3] ?: '',
+                            'picture' => $venueParts[4] ?: ''
                         ];
                     }
                 }
@@ -929,26 +927,10 @@ class User {
         }
     }
     
-   public function insertUnits($equipIds, $quantities, $reservationId) {
+   public function insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate) {
     try {
         $this->conn->beginTransaction();
         $results = [];
-
-        // Get reservation dates
-        $sqlReservationDates = "SELECT reservation_start_date, reservation_end_date 
-                                FROM tbl_reservation 
-                                WHERE reservation_id = :reservation_id";
-        $stmtDates = $this->conn->prepare($sqlReservationDates);
-        $stmtDates->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-        $stmtDates->execute();
-        $reservationDates = $stmtDates->fetch(PDO::FETCH_ASSOC);
-
-        if (!$reservationDates) {
-            throw new Exception("Reservation with ID $reservationId not found.");
-        }
-
-        $startDate = $reservationDates['reservation_start_date'];
-        $endDate = $reservationDates['reservation_end_date'];
 
         for ($i = 0; $i < count($equipIds); $i++) {
             $equipId = $equipIds[$i];
@@ -983,7 +965,7 @@ class User {
             $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
 
             if ($equipType === 'consumable') {
-                // Handle consumable: deduct quantity
+                // Deduct quantity
                 $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
                 $stmtQty->execute([':equip_id' => $equipId]);
                 $qtyData = $stmtQty->fetch(PDO::FETCH_ASSOC);
@@ -1006,9 +988,8 @@ class User {
                     'quantity_used' => $quantity,
                     'can_release' => true
                 ];
-
             } else {
-                // Handle non-consumable: insert serialized units
+                // Non-consumable logic
                 $sqlUnits = "
                     SELECT eu.unit_id, eu.serial_number 
                     FROM tbl_equipment_unit eu
@@ -1029,6 +1010,7 @@ class User {
                                 )
                         )
                     LIMIT :qty";
+
                 $stmtUnits = $this->conn->prepare($sqlUnits);
                 $stmtUnits->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
                 $stmtUnits->bindValue(':qty', (int)$quantity, PDO::PARAM_INT);
@@ -1037,14 +1019,25 @@ class User {
                 $stmtUnits->execute();
                 $units = $stmtUnits->fetchAll(PDO::FETCH_ASSOC);
 
-                if (count($units) < $quantity) {
-                    throw new Exception("Not enough available units for equipment ID $equipId. Only " . count($units) . " units are available for the specified dates.");
+                $availableUnits = count($units);
+
+                if ($availableUnits === 0) {
+                    $results[] = [
+                        'equip_id' => $equipId,
+                        'reservation_equipment_id' => $reservationEquipmentId,
+                        'type' => 'non-consumable',
+                        'units_inserted' => 0,
+                        'units' => [],
+                        'can_release' => false,
+                        'message' => "No available units for equipment ID $equipId"
+                    ];
+                    continue;
                 }
 
-                // Insert into tbl_reservation_unit
+                // Insert available units
                 $stmtInsert = $this->conn->prepare("INSERT INTO tbl_reservation_unit 
-                                                    (reservation_equipment_id, unit_id, is_released, is_returned) 
-                                                    VALUES (:reservation_equipment_id, :unit_id, 0, 0)");
+                                                    (reservation_equipment_id, unit_id, active) 
+                                                    VALUES (:reservation_equipment_id, :unit_id, 0)");
                 foreach ($units as $unit) {
                     $stmtInsert->execute([
                         ':reservation_equipment_id' => $reservationEquipmentId,
@@ -1056,9 +1049,10 @@ class User {
                     'equip_id' => $equipId,
                     'reservation_equipment_id' => $reservationEquipmentId,
                     'type' => 'non-consumable',
-                    'units_inserted' => count($units),
+                    'units_inserted' => $availableUnits,
+                    'units_missing' => max(0, $quantity - $availableUnits),
                     'units' => $units,
-                    'can_release' => true
+                    'can_release' => $availableUnits > 0
                 ];
             }
         }
@@ -1191,18 +1185,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->fetchApprovalNotification();
             break;
         case "insertUnits":
-            $equipIds = $data['equip_ids'] ?? null;
-            $quantities = $data['quantities'] ?? null;
+            $equipIds = $data['equip_ids'] ?? [];
+            $quantities = $data['quantities'] ?? [];
             $reservationId = $data['reservation_id'] ?? null;
+            $startDate = $data['start_date'] ?? null;
+            $endDate = $data['end_date'] ?? null;
 
-            if ($equipIds === null || $quantities === null || $reservationId === null) {
-                echo json_encode(['status' => 'error', 'message' => 'Equip IDs, Quantities, and Reservation ID are required']);
+            if (empty($equipIds) || empty($quantities) || $reservationId === null || $startDate === null || $endDate === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Equip IDs, Quantities, Reservation ID, Start Date, and End Date are required']);
                 break;
             }
 
-            echo $user->insertUnits($equipIds, $quantities, $reservationId);
+            echo $user->insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate);
             break;
-
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;

@@ -13,7 +13,7 @@ class ReservationDetails {
     }
 
     // Fetch all records based on conditions
-    public function fetchRecord() {
+public function fetchRecord() {
     try {
         $sql = "
             SELECT 
@@ -27,29 +27,26 @@ class ReservationDetails {
                 r.reservation_created_at, 
                 CONCAT(u.users_fname, ' ', u.users_lname) AS user_full_name,
                 sm.status_master_name AS reservation_status_name,
-                rs.reservation_status_status_id,
-                rs.reservation_updated_at,
-                rs.reservation_active
+                rs_filtered.reservation_status_status_id,
+                rs_filtered.reservation_updated_at,
+                rs_filtered.reservation_active
 
-            FROM 
-                tbl_reservation r
+            FROM tbl_reservation r
 
-            -- Join only the latest status per reservation using subquery
             LEFT JOIN (
-                SELECT rs1.*
-                FROM tbl_reservation_status rs1
+                SELECT rs.*
+                FROM tbl_reservation_status rs
                 INNER JOIN (
-                    SELECT reservation_reservation_id, MAX(reservation_updated_at) AS latest_updated
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS latest_status_id
                     FROM tbl_reservation_status
                     GROUP BY reservation_reservation_id
-                ) latest_rs ON rs1.reservation_reservation_id = latest_rs.reservation_reservation_id
-                            AND rs1.reservation_updated_at = latest_rs.latest_updated
-            ) rs ON r.reservation_id = rs.reservation_reservation_id
+                ) latest_rs 
+                    ON rs.reservation_reservation_id = latest_rs.reservation_reservation_id
+                    AND rs.reservation_status_id = latest_rs.latest_status_id
+            ) rs_filtered ON rs_filtered.reservation_reservation_id = r.reservation_id
 
-            LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
-            LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
-
-            WHERE rs.reservation_active = 1
+            LEFT JOIN tbl_status_master sm ON sm.status_master_id = rs_filtered.reservation_status_status_id
+            LEFT JOIN tbl_users u ON u.users_id = r.reservation_user_id
 
             ORDER BY r.reservation_created_at DESC
         ";
@@ -64,6 +61,9 @@ class ReservationDetails {
         return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
+
+
+
 
     
     

@@ -250,38 +250,81 @@ class Dashboard {
     try {
         $records = [];
 
-        // 1) Venues under maintenance (status_availability_id != 1)
+        // 1) Equipment (consumable) under maintenance — display qty_bad
         $sql = "
             SELECT 
-                v.ven_id AS record_id,
-                'venue' AS resource_type,
-                v.ven_name AS resource_name,
-                NULL AS quantity,
-                v.ven_id AS resource_id,
-                sa.status_availability_name AS condition_name
-            FROM tbl_venue v
-            JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-            WHERE v.status_availability_id != 1
-              AND v.is_active = 1
+                rce.id                             AS record_id,
+                'equipment_consumable'                        AS resource_type,
+                e.equip_name                       AS resource_name,
+                rce.qty_bad                        AS quantity,
+                re.reservation_equipment_equip_id  AS resource_id,
+                c.condition_name                   AS condition_name
+            FROM tbl_reservation_condition_equipment rce
+            JOIN tbl_reservation_equipment     re ON rce.reservation_equipment_id = re.reservation_equipment_id
+            JOIN tbl_equipments                e  ON re.reservation_equipment_equip_id = e.equip_id
+            JOIN tbl_condition                 c  ON rce.condition_id = c.id
+            WHERE rce.condition_id != 2
+              AND rce.is_active = 1
         ";
         foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
             $records[] = $row;
         }
 
-        // 2) Vehicles under maintenance (status_availability_id != 1)
+        // 2) Venues under maintenance
+        $sql = "
+            SELECT 
+                rcv.id                            AS record_id,
+                'venue'                           AS resource_type,
+                v.ven_name                        AS resource_name,
+                NULL                              AS quantity,
+                rv.reservation_venue_venue_id     AS resource_id,
+                c.condition_name                  AS condition_name
+            FROM tbl_reservation_condition_venue rcv
+            JOIN tbl_reservation_venue         rv ON rcv.reservation_venue_id = rv.reservation_venue_id
+            JOIN tbl_venue                     v  ON rv.reservation_venue_venue_id = v.ven_id
+            JOIN tbl_condition                 c  ON rcv.condition_id = c.id
+            WHERE rcv.condition_id != 2
+              AND rcv.is_active = 1
+        ";
+        foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+            $records[] = $row;
+        }
+
+        // 3) Vehicles under maintenance
         $sql = "
             SELECT
-                vh.vehicle_id AS record_id,
-                'vehicle' AS resource_type,
+                rcvh.id                           AS record_id,
+                'vehicle'                         AS resource_type,
                 CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
-                NULL AS quantity,
-                vh.vehicle_id AS resource_id,
-                sa.status_availability_name AS condition_name
-            FROM tbl_vehicle vh
-            JOIN tbl_vehicle_model vm ON vh.vehicle_model_id = vm.vehicle_model_id
-            JOIN tbl_status_availability sa ON vh.status_availability_id = sa.status_availability_id
-            WHERE vh.status_availability_id != 1
-              AND vh.is_active = 1
+                NULL                              AS quantity,
+                rv.reservation_vehicle_vehicle_id AS resource_id,
+                c.condition_name                  AS condition_name
+            FROM tbl_reservation_condition_vehicle rcvh
+            JOIN tbl_reservation_vehicle        rv ON rcvh.reservation_vehicle_id = rv.reservation_vehicle_id
+            JOIN tbl_vehicle                    vh ON rv.reservation_vehicle_vehicle_id = vh.vehicle_id
+            JOIN tbl_vehicle_model              vm ON vh.vehicle_model_id = vm.vehicle_model_id
+            JOIN tbl_condition                  c  ON rcvh.condition_id = c.id
+            WHERE rcvh.condition_id != 2
+              AND rcvh.is_active = 1
+        ";
+        foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+            $records[] = $row;
+        }
+
+        // 4) Equipment units (non-consumable) under maintenance
+        $sql = "
+            SELECT
+                rcu.id           AS record_id,
+                'equipment_unit' AS resource_type,
+                eu.serial_number AS resource_name,
+                eu.unit_id       AS resource_id,
+                c.condition_name AS condition_name
+            FROM tbl_reservation_condition_unit rcu
+            JOIN tbl_reservation_unit           ru ON rcu.reservation_unit_id = ru.reservation_unit_id
+            JOIN tbl_equipment_unit             eu ON ru.unit_id = eu.unit_id
+            JOIN tbl_condition                  c  ON rcu.condition_id = c.id
+            WHERE rcu.condition_id != 2
+              AND rcu.is_active = 1
         ";
         foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
             $records[] = $row;
@@ -293,11 +336,12 @@ class Dashboard {
         ]);
     } catch (PDOException $e) {
         return json_encode([
-            'status' => 'error',
+            'status'  => 'error',
             'message' => $e->getMessage()
         ]);
     }
 }
+
 
     
     
@@ -364,79 +408,162 @@ class Dashboard {
         }
     }
 
-    public function updateResourceStatusAndCondition($type, $resourceId, $recordId) {
-        try {
-            $type = strtolower($type); // normalize input
-            $resourceId = (int)$resourceId;
-            $recordId = (int)$recordId;
-    
-            // Define table and column mappings for resources
-            $resourceMap = [
-                'equipment' => ['table' => 'tbl_equipments', 'column' => 'equip_id'],
-                'venue'     => ['table' => 'tbl_venue',     'column' => 'ven_id'],
-                'vehicle'   => ['table' => 'tbl_vehicle',   'column' => 'vehicle_id'],
-            ];
-    
-            // Define table mappings for conditions
-            $conditionMap = [
-                'equipment' => 'tbl_reservation_condition_equipment',
-                'venue'     => 'tbl_reservation_condition_venue',
-                'vehicle'   => 'tbl_reservation_condition_vehicle',
-            ];
-    
-            // Check if resource type is valid
-            if (!isset($resourceMap[$type]) || !isset($conditionMap[$type])) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Invalid resource type.'
-                ]);
-            }
-    
-            // Get table and column names
-            $resourceTable = $resourceMap[$type]['table'];
-            $resourceColumn = $resourceMap[$type]['column'];
-            $conditionTable = $conditionMap[$type];
-    
-            // Start transaction to ensure atomicity
-            $this->conn->beginTransaction();
-    
-            // 1) Update the resource status availability to 1 (Available)
-            $stmt = $this->conn->prepare("UPDATE $resourceTable SET status_availability_id = 1 WHERE $resourceColumn = :resourceId");
-            $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
-            $stmt->execute();
-    
-            // 2) Update the condition record's is_active to 0
-            $stmt = $this->conn->prepare("UPDATE $conditionTable SET is_active = 0 WHERE id = :recordId");
-            $stmt->bindParam(':recordId', $recordId, PDO::PARAM_INT);
-            $stmt->execute();
-    
-            // Commit transaction
-            $this->conn->commit();
-    
-            return json_encode([
-                'status' => 'success',
-                'message' => "Updated $type (ID: $resourceId) to status_availability_id = 1 and set condition record ID $recordId to is_active = 0."
-            ]);
-        } catch (PDOException $e) {
-            // Rollback transaction if an error occurs
-            $this->conn->rollBack();
-            return json_encode([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ]);
+    public function updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed = false) {
+    try {
+        $type       = strtolower($type);
+        $resourceId = (int)$resourceId;
+        $recordId   = (int)$recordId;
+
+        // Mappings for venue/vehicle (unchanged)
+        $resourceMap  = [
+            'equipment' => ['table' => 'tbl_equipment_unit', 'pk' => 'unit_id'],
+            'venue'     => ['table' => 'tbl_venue',          'pk' => 'ven_id'],
+            'vehicle'   => ['table' => 'tbl_vehicle',        'pk' => 'vehicle_id'],
+        ];
+        $conditionMap = [
+            'equipment_unit'            => ['table' => 'tbl_reservation_condition_unit',      'fk' => 'reservation_unit_id'],
+            'venue'                => ['table' => 'tbl_reservation_condition_venue',     'fk' => 'reservation_venue_id'],
+            'vehicle'              => ['table' => 'tbl_reservation_condition_vehicle',   'fk' => 'reservation_vehicle_id'],
+            'equipment_consumable' => ['table' => 'tbl_reservation_condition_equipment', 'fk' => 'reservation_equipment_id'],
+        ];
+
+        if (! isset($conditionMap[$type])) {
+            return json_encode(['status'=>'error','message'=>'Invalid resource type.']);
         }
+
+        $this->conn->beginTransaction();
+
+        switch ($type) {
+            case 'venue':
+            case 'vehicle':
+                // Update remarks if item is fixed
+                if ($isFixed) {
+                    $ctbl = $conditionMap[$type]['table'];
+                    $stmt = $this->conn->prepare("
+                        UPDATE {$ctbl}
+                           SET remarks = 'Fixed'
+                         WHERE id = :cid
+                    ");
+                    $stmt->execute(['cid' => $recordId]);
+                }
+
+                // 1) Make resource available only if fixed
+                if ($isFixed) {
+                    $tbl    = $resourceMap[$type]['table'];
+                    $pk     = $resourceMap[$type]['pk'];
+                    $stmt   = $this->conn->prepare("
+                        UPDATE {$tbl}
+                           SET status_availability_id = 1
+                         WHERE {$pk} = :rid
+                    ");
+                    $stmt->execute(['rid' => $resourceId]);
+                }
+
+                // 2) Deactivate condition record
+                $ctbl   = $conditionMap[$type]['table'];
+                $stmt   = $this->conn->prepare("
+                    UPDATE {$ctbl}
+                       SET is_active = 0
+                     WHERE id = :cid
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                break;
+
+            case 'equipment_unit':
+                // 1) Ensure the condition record exists & is active
+                $stmt = $this->conn->prepare("
+                    SELECT 1
+                      FROM tbl_reservation_condition_unit
+                     WHERE id = :cid
+                       AND is_active = 1
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                if (! $stmt->fetch()) {
+                    throw new Exception("Condition record not found or already inactive.");
+                }
+
+                // 2) If fixed, mark the unit available again
+                if ($isFixed) {
+                    $update = $this->conn->prepare("
+                        UPDATE tbl_equipment_unit
+                           SET status_availability_id = 1
+                         WHERE unit_id = :uid
+                    ");
+                    $update->execute(['uid' => $resourceId]);
+                }
+
+                // 3) Deactivate the condition record and set remarks
+                $this->conn->prepare("
+                    UPDATE tbl_reservation_condition_unit
+                       SET is_active = 0,
+                           remarks   = :remarks
+                     WHERE id = :cid
+                ")->execute([
+                    'cid'     => $recordId,
+                    'remarks' => $isFixed ? 'Fixed' : null
+                ]);
+                break;
+
+            case 'equipment_consumable':
+                // Consumable equipment
+                // 1) fetch qty_bad
+                $stmt = $this->conn->prepare("
+                    SELECT qty_bad
+                      FROM tbl_reservation_condition_equipment
+                     WHERE id = :cid
+                       AND is_active = 1
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                $cond = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (! $cond) {
+                    throw new Exception("Condition record not found or already inactive.");
+                }
+
+                if ($isFixed) {
+                    // Update remarks to 'Fixed'
+                    $this->conn->prepare("
+                        UPDATE tbl_reservation_condition_equipment
+                           SET remarks = 'Fixed'
+                         WHERE id = :cid
+                    ")->execute(['cid' => $recordId]);
+
+                    // 2) if fixed, update on_hand_quantity
+                    if ($cond['qty_bad'] > 0) {
+                        // find the row in equipment_quantity
+                        $stmt2 = $this->conn->prepare("
+                            UPDATE tbl_equipment_quantity
+                               SET on_hand_quantity = on_hand_quantity + :b
+                             WHERE equip_id = (
+                                 SELECT reservation_equipment_equip_id
+                                   FROM tbl_reservation_equipment
+                                  WHERE reservation_equipment_id = :rid
+                             )
+                        ");
+                        $stmt2->execute([
+                            'b'   => $cond['qty_bad'],
+                            'rid' => $resourceId
+                        ]);
+                    }
+                }
+
+                // 3) deactivate the condition record
+                $this->conn->prepare("
+                    UPDATE tbl_reservation_condition_equipment
+                       SET is_active = 0
+                     WHERE id = :cid
+                ")->execute(['cid' => $recordId]);
+                break;
+        }
+
+        $this->conn->commit();
+        return json_encode(['status'=>'success','message'=>"Updated {$type} and deactivated condition #{$recordId}."]);
     }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode(['status'=>'error','message'=>$e->getMessage()]);
+    }
+}
+
 }
 
 // Handle requests
@@ -477,23 +604,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'GET
                 break;
 
             case 'updateResourceStatusAndCondition':
-            case 'updateSingleResourceAvailability':  // Add support for the alternate operation name
-                if (isset($data['type']) && 
-                    (isset($data['resourceId']) || isset($data['resource_id'])) && 
-                    (isset($data['recordId']) || isset($data['record_id']))) {
-                    
-                    // Handle both parameter naming conventions
-                    $resourceId = isset($data['resourceId']) ? $data['resourceId'] : $data['resource_id'];
-                    $recordId = isset($data['recordId']) ? $data['recordId'] : $data['record_id'];
-                    
-                    echo $dashboard->updateResourceStatusAndCondition($data['type'], $resourceId, $recordId);
+                if (isset($data['type'], $data['resourceId'], $data['recordId'])) {
+                    echo $dashboard->updateResourceStatusAndCondition(
+                        $data['type'],
+                        $data['resourceId'],
+                        $data['recordId'],
+                        isset($data['isFixed']) ? (bool)$data['isFixed'] : false
+                    );
                 } else {
                     echo json_encode([
                         'status' => 'error',
-                        'message' => 'Missing required parameters: type, resource_id/resourceId, and record_id/recordId are required.'
+                        'message' => 'Missing parameters for update operation'
                     ]);
                 }
                 break;
+            
                 
             default:
                 echo json_encode([
