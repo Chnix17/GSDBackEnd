@@ -681,7 +681,7 @@ class Reservation {
                     return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
                 }
 
-            } elseif ($userLevelId == 5 || $userLevelId == 15) {
+            } elseif ($userLevelId == 5 || $userLevelId == 18) {
                 // Status SQL 1 and 2 remain the same
                 $statusSql1 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
