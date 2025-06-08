@@ -14,54 +14,61 @@ class FacultyStaff {
     }
 
     public function fetchMyReservation($userId) {
-        try {
-            $query = "
-                SELECT 
-                    r.reservation_id,
-                    r.reservation_title,
-                    r.reservation_description,
-                    r.reservation_start_date,
-                    r.reservation_end_date,
-                    r.reservation_participants,
-                    r.reservation_user_id,
-                    r.reservation_created_at,
-                    rs.reservation_active,
-                    sm.status_master_name AS reservation_status
-                FROM tbl_reservation AS r
-                /* join exactly the one status row having the latest updated_at,
-                   tie‐broken by the highest reservation_status_id */
-                LEFT JOIN tbl_reservation_status AS rs
-                  ON rs.reservation_status_id = (
-                        SELECT reservation_status_id
-                        FROM tbl_reservation_status
-                        WHERE reservation_reservation_id = r.reservation_id
-                        ORDER BY 
-                          reservation_updated_at DESC,
-                          reservation_status_id   DESC
-                        LIMIT 1
-                  )
-                LEFT JOIN tbl_status_master AS sm
-                  ON rs.reservation_status_status_id = sm.status_master_id
-                WHERE r.reservation_user_id = :userId
-                ORDER BY r.reservation_start_date DESC
-            ";
-    
-            $stmt = $this->conn->prepare($query);
-            $stmt->bindParam(':userId', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-            $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-            return json_encode([
-                'status' => 'success',
-                'data'   => $reservations
-            ]);
-        } catch (PDOException $e) {
-            return json_encode([
-                'status'  => 'error',
-                'message' => 'Error fetching reservations: ' . $e->getMessage()
-            ]);
-        }
+    try {
+        $query = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                r.reservation_user_id,
+                r.reservation_created_at,
+                sm.status_master_name AS reservation_status_name,
+                rs_filtered.reservation_status_status_id,
+                rs_filtered.reservation_updated_at,
+                rs_filtered.reservation_active
+
+            FROM tbl_reservation r
+
+            LEFT JOIN (
+                SELECT rs.*
+                FROM tbl_reservation_status rs
+                INNER JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS latest_status_id
+                    FROM tbl_reservation_status
+                    GROUP BY reservation_reservation_id
+                ) latest_rs 
+                    ON rs.reservation_reservation_id = latest_rs.reservation_reservation_id
+                    AND rs.reservation_status_id = latest_rs.latest_status_id
+            ) rs_filtered ON rs_filtered.reservation_reservation_id = r.reservation_id
+
+            LEFT JOIN tbl_status_master sm 
+                ON sm.status_master_id = rs_filtered.reservation_status_status_id
+
+            WHERE r.reservation_user_id = :userId
+            ORDER BY r.reservation_start_date DESC
+        ";
+
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':userId', $userId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return json_encode([
+            'status' => 'success',
+            'data'   => $reservations
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status'  => 'error',
+            'message' => 'Error fetching reservations: ' . $e->getMessage()
+        ]);
     }
+}
+
     
     public function fetchMyReservationById($reservationId){
         try {
@@ -300,7 +307,7 @@ class FacultyStaff {
                 LEFT JOIN tbl_users u
                     ON rs.reservation_users_id = u.users_id
                 WHERE rs.reservation_reservation_id = :reservation_id
-                ORDER BY rs.reservation_updated_at ASC
+                ORDER BY rs.reservation_status_id DESC
             ";
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);

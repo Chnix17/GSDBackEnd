@@ -63,7 +63,7 @@ class User {
                     ON v.status_availability_id = tsa.status_availability_id
                 WHERE rc_venue.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1
+                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
             ";
             $stmtVenue = $this->conn->prepare($sqlVenue);
             $stmtVenue->execute(['personnel_id' => $personnel_id]);
@@ -99,7 +99,7 @@ class User {
                     ON vm.status_availability_id = tsa.status_availability_id
                 WHERE rc_vehicle.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1
+                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
             ";
             $stmtVehicle = $this->conn->prepare($sqlVehicle);
             $stmtVehicle->execute(['personnel_id' => $personnel_id]);
@@ -137,7 +137,7 @@ class User {
                     ON eq.status_availability_id = tsa.status_availability_id
                 WHERE rc_equipment.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1
+                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
             ";
             $stmtEquipment = $this->conn->prepare($sqlEquipment);
             $stmtEquipment->execute(['personnel_id' => $personnel_id]);
@@ -1049,17 +1049,17 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                     ]);
                 }
 
-                // Calculate new on_hand_quantity ensuring it doesn't go below zero
-                $newOnHandQuantity = max(0, $currentOnHandQuantity - (int)$quantity);
+                // Calculate new on_hand_quantity
+                $deductedQuantity = $currentOnHandQuantity - (int)$quantity;
+                $newOnHandQuantity = $deductedQuantity <= 0 ? 10 : $deductedQuantity;
 
-                // Update on_hand_quantity and status_availability_id in tbl_equipment_quantity
+                // Update on_hand_quantity (status_availability_id is NOT updated)
                 $sqlUpdateQuantity = "UPDATE tbl_equipment_quantity 
-                                      SET on_hand_quantity = :new_quantity 
-                                      WHERE quantity_id = :quantity_id";
+                                    SET on_hand_quantity = :new_quantity 
+                                    WHERE quantity_id = :quantity_id";
                 $stmtUpdateQuantity = $this->conn->prepare($sqlUpdateQuantity);
                 $stmtUpdateQuantity->execute([
                     'new_quantity' => $newOnHandQuantity,
-                
                     'quantity_id' => $resource_id
                 ]);
 
@@ -1071,6 +1071,7 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                     ]);
                 }
                 break;
+
 
             default:
                 return json_encode([
