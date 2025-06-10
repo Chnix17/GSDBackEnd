@@ -255,67 +255,75 @@ public function fetchRecord() {
 
 
     public function fetchNoAssignedReservation() {
-        try {
-            $sql = "
-                SELECT DISTINCT
-                    r.reservation_id, 
-                    r.reservation_title, 
-                    r.reservation_description,
-                    r.reservation_start_date, 
-                    r.reservation_end_date, 
-                    r.reservation_participants, 
-                    r.reservation_user_id, 
-                    r.reservation_created_at
-                FROM 
-                    tbl_reservation r
-                LEFT JOIN 
-                    tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                LEFT JOIN 
-                    tbl_reservation_passenger rp ON r.reservation_id = rp.reservation_reservation_id
-                WHERE 
-                    (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    AND r.reservation_id IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM tbl_reservation_checklist_venue cv 
-                        WHERE cv.reservation_venue_id IN (
-                            SELECT rv.reservation_venue_id 
-                            FROM tbl_reservation_venue rv 
-                            WHERE rv.reservation_reservation_id = r.reservation_id
-                        )
+    try {
+        $sql = "
+            SELECT DISTINCT
+                r.reservation_id, 
+                r.reservation_title, 
+                r.reservation_description,
+                r.reservation_start_date, 
+                r.reservation_end_date, 
+                r.reservation_participants, 
+                r.reservation_user_id, 
+                CONCAT(u.users_fname, ' ', 
+                       COALESCE(CONCAT(LEFT(u.users_mname, 1), '. '), ''), 
+                       u.users_lname, 
+                       IF(u.users_suffix IS NOT NULL AND u.users_suffix != '', CONCAT(' ', u.users_suffix), '')
+                ) AS requestor_name,
+                r.reservation_created_at
+            FROM 
+                tbl_reservation r
+            LEFT JOIN 
+                tbl_users u ON r.reservation_user_id = u.users_id
+            LEFT JOIN 
+                tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            LEFT JOIN 
+                tbl_reservation_passenger rp ON r.reservation_id = rp.reservation_reservation_id
+            WHERE 
+                (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
+                AND r.reservation_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM tbl_reservation_checklist_venue cv 
+                    WHERE cv.reservation_venue_id IN (
+                        SELECT rv.reservation_venue_id 
+                        FROM tbl_reservation_venue rv 
+                        WHERE rv.reservation_reservation_id = r.reservation_id
                     )
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM tbl_reservation_checklist_vehicle cvh 
-                        WHERE cvh.reservation_vehicle_id IN (
-                            SELECT rvh.reservation_vehicle_id 
-                            FROM tbl_reservation_vehicle rvh 
-                            WHERE rvh.reservation_reservation_id = r.reservation_id
-                        )
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM tbl_reservation_checklist_vehicle cvh 
+                    WHERE cvh.reservation_vehicle_id IN (
+                        SELECT rvh.reservation_vehicle_id 
+                        FROM tbl_reservation_vehicle rvh 
+                        WHERE rvh.reservation_reservation_id = r.reservation_id
                     )
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM tbl_reservation_checklist_equipment ce 
-                        WHERE ce.reservation_equipment_id IN (
-                            SELECT re.reservation_equipment_id 
-                            FROM tbl_reservation_equipment re 
-                            WHERE re.reservation_reservation_id = r.reservation_id
-                        )
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM tbl_reservation_checklist_equipment ce 
+                    WHERE ce.reservation_equipment_id IN (
+                        SELECT re.reservation_equipment_id 
+                        FROM tbl_reservation_equipment re 
+                        WHERE re.reservation_reservation_id = r.reservation_id
                     )
-                ORDER BY 
-                    r.reservation_created_at DESC
-            ";
-    
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute();
-    
-            $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            return json_encode(['status' => 'success', 'data' => $reservations]);
-    
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
-        }
+                )
+            ORDER BY 
+                r.reservation_created_at DESC
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return json_encode(['status' => 'success', 'data' => $reservations]);
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
     
     
     

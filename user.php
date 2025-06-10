@@ -360,7 +360,8 @@ class User {
             FROM tbl_users u
             LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
             LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id 
-            WHERE u.is_active = 1";
+            WHERE u.is_active = 1
+            ORDER BY u.users_id DESC";
         
         return $this->executeQuery($sql);
     }    public function checkUniqueEmailAndSchoolId($email, $schoolId, $excludeId = null, $excludeType = null) {

@@ -311,52 +311,72 @@ class User {
             }
 
             // 5) Fetch reservation header & user info
-            foreach ($reservations as $rid => &$res) {
-                $sqlR = "
-                    SELECT
-                        r.reservation_title,
-                        r.reservation_description,
-                        r.reservation_start_date,
-                        r.reservation_end_date,
-                        r.reservation_participants,
-                        r.reservation_user_id,
-                        u.users_fname,
-                        u.users_mname,
-                        u.users_lname,
-                        d.departments_name,
-                        ul.user_level_name AS role
-                    FROM tbl_reservation r
-                    INNER JOIN tbl_users u
-                        ON r.reservation_user_id = u.users_id
-                    LEFT JOIN tbl_departments d
-                        ON u.users_department_id = d.departments_id
-                    LEFT JOIN tbl_user_level ul
-                        ON u.users_user_level_id = ul.user_level_id
-                    WHERE r.reservation_id = :rid
-                ";
-                $st  = $this->conn->prepare($sqlR);
-                $st->execute(['rid' => $rid]);
-                $hdr = $st->fetch(PDO::FETCH_ASSOC);
-                if ($hdr) {
-                    $res['reservation_title']        = $hdr['reservation_title'];
-                    $res['reservation_description']  = $hdr['reservation_description'];
-                    $res['reservation_start_date']   = $hdr['reservation_start_date'];
-                    $res['reservation_end_date']     = $hdr['reservation_end_date'];
-                    $res['reservation_participants'] = $hdr['reservation_participants'];
-                    $res['reservation_user_id']      = $hdr['reservation_user_id'];
+foreach ($reservations as $rid => &$res) {
+    $sqlR = "
+        SELECT
+            r.reservation_title,
+            r.reservation_description,
+            r.reservation_start_date,
+            r.reservation_end_date,
+            r.reservation_participants,
+            r.reservation_user_id,
+            u.users_fname,
+            u.users_mname,
+            u.users_lname,
+            d.departments_name,
+            ul.user_level_name AS role,
+            sm.status_master_name AS reservation_status
+        FROM tbl_reservation r
+        INNER JOIN tbl_users u
+            ON r.reservation_user_id = u.users_id
+        LEFT JOIN tbl_departments d
+            ON u.users_department_id = d.departments_id
+        LEFT JOIN tbl_user_level ul
+            ON u.users_user_level_id = ul.user_level_id
+        LEFT JOIN (
+            SELECT rs.*
+            FROM tbl_reservation_status rs
+            INNER JOIN (
+                SELECT reservation_reservation_id, MAX(reservation_status_id) AS latest_status_id
+                FROM tbl_reservation_status
+                GROUP BY reservation_reservation_id
+            ) latest_rs
+                ON rs.reservation_reservation_id = latest_rs.reservation_reservation_id
+                AND rs.reservation_status_id = latest_rs.latest_status_id
+        ) rs_latest ON rs_latest.reservation_reservation_id = r.reservation_id
+        LEFT JOIN tbl_status_master sm
+            ON rs_latest.reservation_status_status_id = sm.status_master_id
+        WHERE r.reservation_id = :rid
+    ";
 
-                    $fullName = trim(
-                        $hdr['users_fname'] . ' ' .
-                        (!empty($hdr['users_mname']) ? $hdr['users_mname'].' ' : '') .
-                        $hdr['users_lname']
-                    );
-                    $res['user_details'] = [
-                        'full_name'  => $fullName,
-                        'department' => $hdr['departments_name'] ?? 'N/A',
-                        'role'       => $hdr['role']           ?? 'N/A'
-                    ];
-                }
-            }
+    $st = $this->conn->prepare($sqlR);
+    $st->execute(['rid' => $rid]);
+    $hdr = $st->fetch(PDO::FETCH_ASSOC);
+
+    if ($hdr) {
+        $res['reservation_title']        = $hdr['reservation_title'];
+        $res['reservation_description']  = $hdr['reservation_description'];
+        $res['reservation_start_date']   = $hdr['reservation_start_date'];
+        $res['reservation_end_date']     = $hdr['reservation_end_date'];
+        $res['reservation_participants'] = $hdr['reservation_participants'];
+        $res['reservation_user_id']      = $hdr['reservation_user_id'];
+        $res['reservation_status']       = $hdr['reservation_status'] ?? 'N/A';
+
+        $fullName = trim(
+            $hdr['users_fname'] . ' ' .
+            (!empty($hdr['users_mname']) ? $hdr['users_mname'] . ' ' : '') .
+            $hdr['users_lname']
+        );
+
+        $res['user_details'] = [
+            'full_name'  => $fullName,
+            'department' => $hdr['departments_name'] ?? 'N/A',
+            'role'       => $hdr['role'] ?? 'N/A'
+        ];
+    }
+}
+
+
             unset($res); // Unset the last reference
 
             // Filter reservations that have associated items
