@@ -355,25 +355,29 @@ public function fetchVehicleById($id) {
         return $this->executeQuery($sql, [':id' => $id]);
     }
     
-    public function fetchUsersById($id) {
-        if (!is_numeric($id)) {
-            return json_encode(['status' => 'error', 'message' => 'Invalid ID format']);
-        }
-
-        $sql = "SELECT 
-                    u.*,
-                    d.departments_name,
-                    ul.user_level_name
-                FROM 
-                    tbl_users u
-                LEFT JOIN 
-                    tbl_departments d ON u.users_department_id = d.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
-                WHERE 
-                    u.users_id = :id";
-        return $this->executeQuery($sql, [':id' => $id]);
+public function fetchUsersById($id) {
+    if (!is_numeric($id)) {
+        return json_encode(['status' => 'error', 'message' => 'Invalid ID format']);
     }
+
+    $sql = "SELECT 
+                u.*,
+                t.abbreviation AS title_abbreviation,
+                d.departments_name,
+                ul.user_level_name
+            FROM 
+                tbl_users u
+            LEFT JOIN 
+                titles t ON u.title_id = t.id
+            LEFT JOIN 
+                tbl_departments d ON u.users_department_id = d.departments_id
+            LEFT JOIN 
+                tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+            WHERE 
+                u.users_id = :id";
+
+    return $this->executeQuery($sql, [':id' => $id]);
+}
 
 
 

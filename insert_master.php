@@ -47,72 +47,81 @@ class User {
     }
 
     // Save User function
-    public function saveUser($data) {
-        try {
-            // Ensure schoolId is treated as a string
-            if (isset($data['schoolId'])) {
-                $data['schoolId'] = (string) $data['schoolId'];
-            }
-
-            // Handle base64 image
-            $picPath = null;
-            if (isset($data['pic']) && !empty($data['pic'])) {
-                $uploadDir = 'uploads/';
-                if (!file_exists($uploadDir)) {
-                    mkdir($uploadDir, 0777, true);
-                }
-                
-                // Get file data and type from base64 string
-                $image_parts = explode(";base64,", $data['pic']);
-                $image_type_aux = explode("image/", $image_parts[0]);
-                $image_type = $image_type_aux[1];
-                $image_base64 = base64_decode($image_parts[1]);
-                
-                // Generate unique filename using timestamp
-                $filename = 'profile_' . time() . '.' . $image_type;
-                $picPath = $uploadDir . $filename;
-                
-                file_put_contents($picPath, $image_base64);
-            }
-
-            // Hash the password before saving
-            $hashedPassword = password_hash($data['password'], PASSWORD_BCRYPT);
-            
-            // Updated SQL statement to include users_birthdate and users_suffix
-            $sql = "INSERT INTO tbl_users (users_fname, users_mname, users_lname, 
-                    users_email, users_school_id, users_contact_number, users_user_level_id, 
-                    users_password, users_department_id, users_birthdate, users_suffix,
-                    users_pic, users_created_at, users_updated_at) 
-                    VALUES (:fname, :mname, :lname, :email, :schoolId, :contact, :userLevelId, 
-                    :password, :departmentId, :birthdate, :suffix,
-                    :pic, NOW(), NOW())";
-    
-            $stmt = $this->conn->prepare($sql);
-            
-            // Bind parameters with explicit PDO parameter types
-            $stmt->bindParam(':fname', $data['fname'], PDO::PARAM_STR);
-            $stmt->bindParam(':mname', $data['mname'], PDO::PARAM_STR);
-            $stmt->bindParam(':lname', $data['lname'], PDO::PARAM_STR);
-            $stmt->bindParam(':email', $data['email'], PDO::PARAM_STR);
-            $stmt->bindParam(':schoolId', $data['schoolId'], PDO::PARAM_STR);
-            $stmt->bindParam(':contact', $data['contact'], PDO::PARAM_STR);
-            $stmt->bindParam(':userLevelId', $data['userLevelId'], PDO::PARAM_INT);
-            $stmt->bindParam(':password', $hashedPassword, PDO::PARAM_STR);
-            $stmt->bindParam(':departmentId', $data['departmentId'], PDO::PARAM_INT);
-            $stmt->bindParam(':birthdate', $data['birthdate'], PDO::PARAM_STR);
-            $stmt->bindParam(':suffix', $data['suffix'], PDO::PARAM_STR);
-            $stmt->bindParam(':pic', $picPath, PDO::PARAM_STR);
-    
-            // Execute the statement and return the appropriate response
-            if ($stmt->execute()) {
-                return json_encode(['status' => 'success', 'message' => 'User added successfully.']);
-            }
-    
-            return json_encode(['status' => 'error', 'message' => 'Failed to add user.']);
-        } catch(PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+   public function saveUser($data) {
+    try {
+        // Ensure schoolId is treated as a string
+        if (isset($data['schoolId'])) {
+            $data['schoolId'] = (string) $data['schoolId'];
         }
+
+        // Handle base64 image
+        $picPath = null;
+        if (isset($data['pic']) && !empty($data['pic'])) {
+            $uploadDir = 'uploads/';
+            if (!file_exists($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+
+            // Get file data and type from base64 string
+            $image_parts = explode(";base64,", $data['pic']);
+            $image_type_aux = explode("image/", $image_parts[0]);
+            $image_type = $image_type_aux[1];
+            $image_base64 = base64_decode($image_parts[1]);
+
+            // Generate unique filename using timestamp
+            $filename = 'profile_' . time() . '.' . $image_type;
+            $picPath = $uploadDir . $filename;
+
+            file_put_contents($picPath, $image_base64);
+        }
+
+        // Hash the password before saving
+        $hashedPassword = password_hash($data['password'], PASSWORD_BCRYPT);
+
+        // Updated SQL statement to include title_id
+        $sql = "INSERT INTO tbl_users (
+                    title_id,
+                    users_fname, users_mname, users_lname, 
+                    users_email, users_school_id, users_contact_number, 
+                    users_user_level_id, users_password, users_department_id, 
+                    users_birthdate, users_suffix, users_pic, 
+                    users_created_at, users_updated_at
+                ) VALUES (
+                    :title_id,
+                    :fname, :mname, :lname, 
+                    :email, :schoolId, :contact, 
+                    :userLevelId, :password, :departmentId, 
+                    :birthdate, :suffix, :pic, 
+                    NOW(), NOW()
+                )";
+
+        $stmt = $this->conn->prepare($sql);
+
+        // Bind parameters
+        $stmt->bindParam(':title_id', $data['title_id'], PDO::PARAM_INT); // Nullable INT
+        $stmt->bindParam(':fname', $data['fname'], PDO::PARAM_STR);
+        $stmt->bindParam(':mname', $data['mname'], PDO::PARAM_STR);
+        $stmt->bindParam(':lname', $data['lname'], PDO::PARAM_STR);
+        $stmt->bindParam(':email', $data['email'], PDO::PARAM_STR);
+        $stmt->bindParam(':schoolId', $data['schoolId'], PDO::PARAM_STR);
+        $stmt->bindParam(':contact', $data['contact'], PDO::PARAM_STR);
+        $stmt->bindParam(':userLevelId', $data['userLevelId'], PDO::PARAM_INT);
+        $stmt->bindParam(':password', $hashedPassword, PDO::PARAM_STR);
+        $stmt->bindParam(':departmentId', $data['departmentId'], PDO::PARAM_INT);
+        $stmt->bindParam(':birthdate', $data['birthdate'], PDO::PARAM_STR);
+        $stmt->bindParam(':suffix', $data['suffix'], PDO::PARAM_STR);
+        $stmt->bindParam(':pic', $picPath, PDO::PARAM_STR);
+
+        if ($stmt->execute()) {
+            return json_encode(['status' => 'success', 'message' => 'User added successfully.']);
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Failed to add user.']);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
     }
+}
+
     
     // Insert Personnel function
     public function savePersonnel($data) {

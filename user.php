@@ -191,23 +191,26 @@ class User {
         return $this->executeQuery($sql);
     }
 
-   public function fetchEquipmentsWithStatus() {
+public function fetchEquipmentsWithStatus() {
     try {
         $sql = "
             SELECT
                 te.equip_id,
                 te.equip_name,
-                tec.equipments_category_name AS category_name, -- Alias the joined category name
+                tec.equipments_category_name AS category_name,
                 te.is_active,
                 te.user_admin_id,
                 te.equip_type,
-                te.equip_created_at
+                te.equip_created_at,
+                -- Use quantity if available, else count units
+                COALESCE(
+                    (SELECT SUM(quantity) FROM tbl_equipment_quantity WHERE equip_id = te.equip_id),
+                    (SELECT COUNT(*) FROM tbl_equipment_unit WHERE equip_id = te.equip_id AND is_active = 1)
+                ) AS total_quantity
             FROM
                 tbl_equipments AS te
             INNER JOIN
                 tbl_equipment_category AS tec ON te.equipments_category_id = tec.equipments_category_id
-            WHERE
-                1
             ORDER BY
                 te.equip_id
         ";
@@ -225,6 +228,9 @@ class User {
         return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
+
+
+
 
 
 
@@ -339,8 +345,9 @@ class User {
     }
 
     public function fetchAllUserTypes() {
-        $sql = "SELECT 
+    $sql = "SELECT 
                 u.users_id,
+                t.abbreviation AS title_abbreviation,
                 u.users_fname,
                 u.users_mname,
                 u.users_lname, 
@@ -358,13 +365,15 @@ class User {
                 ul.user_level_name,
                 ul.user_level_desc
             FROM tbl_users u
+            LEFT JOIN titles t ON u.title_id = t.id
             LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
             LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id 
             WHERE u.is_active = 1
             ORDER BY u.users_id DESC";
-        
-        return $this->executeQuery($sql);
-    }    public function checkUniqueEmailAndSchoolId($email, $schoolId, $excludeId = null, $excludeType = null) {
+
+    return $this->executeQuery($sql);
+}
+    public function checkUniqueEmailAndSchoolId($email, $schoolId, $excludeId = null, $excludeType = null) {
         try {
             // Only check in tbl_users
             $sql = "SELECT users_id as id, users_email as email, users_school_id as school_id 
@@ -951,6 +960,11 @@ class User {
                 'message' => 'Database error: ' . $e->getMessage()
             ]);
         }
+    }
+
+    public function fetchTitle() {
+        $sql = "SELECT id, abbreviation FROM titles WHERE 1";
+        return $this->executeQuery($sql);
     }
 
     public function getUnitById($unitId) {
@@ -2029,6 +2043,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
+
+        case "fetchTitle":
+            echo $user->fetchTitle();
+            break;
 
         case "fetchHolday":
             echo $user->fetchHoliday();

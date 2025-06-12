@@ -44,57 +44,60 @@ class User {
         return json_encode(['status' => 'error', 'message' => 'Could not fetch user details']);
     }
 
-    public function updateUser($userData) {
-        // Build the SQL query dynamically based on whether password is provided
-        $sql = "UPDATE tbl_users SET 
-                    users_fname = :fname,
-                    users_mname = :mname,
-                    users_lname = :lname,
-                    users_birthdate = :birthdate,
-                    users_suffix = :suffix,
-                    users_email = :email,
-                    users_school_id = :schoolId,
-                    users_contact_number = :contact,
-                    users_user_level_id = :userLevelId,
-                    users_department_id = :departmentId,
-                    users_pic = :pic,
-                    users_updated_at = NOW(),
-                    is_active = :isActive";
-        
-        // Only include password in update if it's provided
-        if (isset($userData['password']) && !empty($userData['password'])) {
-            $sql .= ", users_password = :password";
-        }
-        
-        $sql .= " WHERE users_id = :userId";
+   public function updateUser($userData) {
+    // Build the SQL query dynamically based on whether password is provided
+    $sql = "UPDATE tbl_users SET 
+                title_id = :title_id,
+                users_fname = :fname,
+                users_mname = :mname,
+                users_lname = :lname,
+                users_birthdate = :birthdate,
+                users_suffix = :suffix,
+                users_email = :email,
+                users_school_id = :schoolId,
+                users_contact_number = :contact,
+                users_user_level_id = :userLevelId,
+                users_department_id = :departmentId,
+                users_pic = :pic,
+                users_updated_at = NOW(),
+                is_active = :isActive";
 
-        $stmt = $this->conn->prepare($sql);
+    // Only include password in update if it's provided
+    if (isset($userData['password']) && !empty($userData['password'])) {
+        $sql .= ", users_password = :password";
+    }
 
-        // Bind regular parameters
-        $stmt->bindParam(':fname', $userData['fname']);
-        $stmt->bindParam(':mname', $userData['mname']);
-        $stmt->bindParam(':lname', $userData['lname']);
-        $stmt->bindParam(':birthdate', $userData['birthdate']);
-        $stmt->bindParam(':suffix', $userData['suffix']);
-        $stmt->bindParam(':email', $userData['email']);
-        $stmt->bindParam(':schoolId', $userData['schoolId']);
-        $stmt->bindParam(':contact', $userData['contact']);
-        $stmt->bindParam(':userLevelId', $userData['userLevelId']);
-        $stmt->bindParam(':departmentId', $userData['departmentId']);
-        $stmt->bindParam(':pic', $userData['pic']);
-        $stmt->bindParam(':isActive', $userData['isActive'], PDO::PARAM_BOOL);
-        $stmt->bindParam(':userId', $userData['userId'], PDO::PARAM_INT);
+    $sql .= " WHERE users_id = :userId";
 
-        // Only bind password parameter if it's provided
-        if (isset($userData['password']) && !empty($userData['password'])) {
-            $hashedPassword = password_hash($userData['password'], PASSWORD_DEFAULT);
-            $stmt->bindParam(':password', $hashedPassword);
-        }
+    $stmt = $this->conn->prepare($sql);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'User updated successfully'])
-            : json_encode(['status' => 'error', 'message' => 'Could not update user']);
+    // Bind all parameters
+    $stmt->bindParam(':title_id', $userData['title_id'], PDO::PARAM_INT);
+    $stmt->bindParam(':fname', $userData['fname']);
+    $stmt->bindParam(':mname', $userData['mname']);
+    $stmt->bindParam(':lname', $userData['lname']);
+    $stmt->bindParam(':birthdate', $userData['birthdate']);
+    $stmt->bindParam(':suffix', $userData['suffix']);
+    $stmt->bindParam(':email', $userData['email']);
+    $stmt->bindParam(':schoolId', $userData['schoolId']);
+    $stmt->bindParam(':contact', $userData['contact']);
+    $stmt->bindParam(':userLevelId', $userData['userLevelId']);
+    $stmt->bindParam(':departmentId', $userData['departmentId']);
+    $stmt->bindParam(':pic', $userData['pic']);
+    $stmt->bindParam(':isActive', $userData['isActive'], PDO::PARAM_BOOL);
+    $stmt->bindParam(':userId', $userData['userId'], PDO::PARAM_INT);
+
+    // Hash and bind password only if provided
+    if (isset($userData['password']) && !empty($userData['password'])) {
+        $hashedPassword = password_hash($userData['password'], PASSWORD_DEFAULT);
+        $stmt->bindParam(':password', $hashedPassword);
+    }
+
+    return $stmt->execute()
+        ? json_encode(['status' => 'success', 'message' => 'User updated successfully'])
+        : json_encode(['status' => 'error', 'message' => 'Could not update user']);
 }
+
 
 
     public function getPersonnelDetails($personId) {

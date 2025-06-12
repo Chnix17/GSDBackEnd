@@ -322,7 +322,7 @@ class User {
     
     
     // Fetch request details by approval ID
-    public function fetchApprovalNotification() {
+    public function fetchApprovalNotification($departmentId = null, $userLevelId = null) {
         try {
             $sql = "SELECT 
                     notification_id, 
@@ -331,16 +331,119 @@ class User {
                     notification_user_level_id, 
                     notification_create 
                 FROM notification_requests 
-                ORDER BY notification_create DESC";
+                WHERE 1=1";
+
+            $params = array();
+
+            if ($departmentId !== null) {
+                $sql .= " AND notification_department_id = :department_id";
+                $params[':department_id'] = $departmentId;
+            }
+
+            if ($userLevelId !== null) {
+                $sql .= " AND notification_user_level_id = :user_level_id";
+                $params[':user_level_id'] = $userLevelId;
+            }
+
+            $sql .= " ORDER BY notification_create DESC";
 
             $stmt = $this->conn->prepare($sql);
-            $stmt->execute();
+            $stmt->execute($params);
 
             $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
             return json_encode(['status' => 'success', 'data' => $notifications]);
 
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    // Fetch read status of notifications
+    public function fetchReadApprovalNotification() {
+        try {
+            $sql = "SELECT 
+                    notification_read_id, 
+                    notification_id, 
+                    user_id, 
+                    is_read, 
+                    read_at 
+                FROM notification_reads 
+                WHERE 1";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute();
+
+            $notificationReads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return json_encode(['status' => 'success', 'data' => $notificationReads]);
+
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    // Update notification read status
+    public function updateReadApprovalNotification($notificationIds, $userId) {
+        try {
+            $this->conn->beginTransaction();
+            $successCount = 0;
+            $errors = [];
+
+            foreach ($notificationIds as $notificationId) {
+                try {
+                    // First check if a read record already exists
+                    $checkSql = "SELECT notification_read_id FROM notification_reads 
+                                WHERE notification_id = :notification_id AND user_id = :user_id";
+                    
+                    $checkStmt = $this->conn->prepare($checkSql);
+                    $checkStmt->bindParam(':notification_id', $notificationId, PDO::PARAM_INT);
+                    $checkStmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $checkStmt->execute();
+                    
+                    if ($checkStmt->rowCount() > 0) {
+                        // Update existing record
+                        $sql = "UPDATE notification_reads 
+                                SET is_read = 1, read_at = NOW() 
+                                WHERE notification_id = :notification_id AND user_id = :user_id";
+                    } else {
+                        // Insert new record
+                        $sql = "INSERT INTO notification_reads (notification_id, user_id, is_read, read_at) 
+                                VALUES (:notification_id, :user_id, 1, NOW())";
+                    }
+                    
+                    $stmt = $this->conn->prepare($sql);
+                    $stmt->bindParam(':notification_id', $notificationId, PDO::PARAM_INT);
+                    $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmt->execute();
+                    
+                    $successCount++;
+                } catch (PDOException $e) {
+                    $errors[] = "Error with notification ID $notificationId: " . $e->getMessage();
+                }
+            }
+
+            if (count($errors) === 0) {
+                $this->conn->commit();
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'All notifications marked as read successfully',
+                    'updated_count' => $successCount
+                ]);
+            } else {
+                $this->conn->rollBack();
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Some notifications could not be marked as read',
+                    'errors' => $errors,
+                    'updated_count' => $successCount
+                ]);
+            }
+
+        } catch (PDOException $e) {
+            $this->conn->rollBack();
+            return json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
         }
     }
 
@@ -577,19 +680,32 @@ class User {
             $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
             $stmt->execute();
             
+            // Set notification message based on approval status
+            $defaultMessage = $isAccepted ? 'New Request' : 'Request Declined';
+            $notificationMessage = !empty($notificationMessage) ? $notificationMessage : $defaultMessage;
+            
             // Insert notification with proper notification_user_id
-            if (!empty($notificationMessage)) {
-                $sqlNotification = "INSERT INTO tbl_notification_reservation 
-                                 (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
-                                 VALUES (:message, :reservation_id, :notification_user_id, NOW())";
-                
-                $stmtNotification = $this->conn->prepare($sqlNotification);
-                $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
-                $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $notificationUserId = $notification_user_id ?? $userId; // Store in variable first
-                $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
-                $stmtNotification->execute();
-            }
+            $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                             (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                             VALUES (:message, :reservation_id, :notification_user_id, NOW())";
+            
+            $stmtNotification = $this->conn->prepare($sqlNotification);
+            $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
+            $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $notificationUserId = $notification_user_id ?? $userId;
+            $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
+            $stmtNotification->execute();
+
+              $defaultMessage = $isAccepted ? 'New Request' : 'Request Declined';
+
+            // Insert notification into notification_requests table
+            $sqlDepartmentNotification = "INSERT INTO notification_requests 
+                                       (notification_message, notification_department_id, notification_user_level_id, notification_create) 
+                                       VALUES (:message, 27, 1, NOW())";
+            
+            $stmtDepartmentNotification = $this->conn->prepare($sqlDepartmentNotification);
+            $stmtDepartmentNotification->bindParam(':message', $defaultMessage, PDO::PARAM_STR);
+            $stmtDepartmentNotification->execute();
             
             $this->conn->commit();
             return json_encode([
@@ -1198,6 +1314,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             echo $user->insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate);
             break;
+        case "updateReadApprovalNotification":
+            $notificationIds = $data['notification_ids'] ?? [];
+            $userId = $data['user_id'] ?? null;
+            if (empty($notificationIds) || $userId === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Notification IDs and user ID are required']);
+                break;
+            }
+            echo $user->updateReadApprovalNotification($notificationIds, $userId);
+            break;
+            
+        case "fetchReadApprovalNotification":
+            echo $user->fetchReadApprovalNotification();
+            break;
+
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;

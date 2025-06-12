@@ -17,25 +17,44 @@ class User {
             if (empty($userType) || empty($userId)) {
                 return json_encode(array('status' => 'error', 'message' => 'User type and ID are required.'));
             }
-            $query = "";
+
+            // Convert single ID to array for consistent handling
+            if (!is_array($userId)) {
+                $userId = [$userId];
+            }
+
+            // Create placeholders for IN clause
+            $placeholders = implode(',', array_fill(0, count($userId), '?'));
             
             switch ($userType) {
                 case 'user':
-                    $query = "UPDATE tbl_users SET is_active = 0 WHERE users_id = :userId";
+                    $query = "UPDATE tbl_users SET is_active = 0 WHERE users_id IN ($placeholders)";
                     break;
                 case 'driver':
-                    $query = "UPDATE tbl_driver SET is_active = 0 WHERE driver_id = :userId";
+                    $query = "UPDATE tbl_driver SET is_active = 0 WHERE driver_id IN ($placeholders)";
                     break;
                 default:
-                    return json_encode(array('message' => 'Invalid user type. Only user and driver types are supported.'));
+                    return json_encode(array('status' => 'error', 'message' => 'Invalid user type. Only user and driver types are supported.'));
             }
+
             $stmt = $this->conn->prepare($query);
-            $stmt->bindParam(':userId', $userId);
-            if ($stmt->execute()) {
-                return json_encode(array('status' => 'success', 'message' => 'User archived successfully.'));
-            } else {
-                return json_encode(array('status' => 'error', 'message' => 'Error archiving user.'));
+            
+            if ($stmt->execute($userId)) {
+                $count = $stmt->rowCount();
+                if ($count > 0) {
+                    return json_encode([
+                        'status' => 'success', 
+                        'message' => $count . ' user(s) archived successfully.'
+                    ]);
+                } else {
+                    return json_encode([
+                        'status' => 'error', 
+                        'message' => 'No users found with the given IDs.'
+                    ]);
+                }
             }
+
+            return json_encode(array('status' => 'error', 'message' => 'Error archiving user(s).'));
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
@@ -46,24 +65,44 @@ class User {
             if (empty($userType) || empty($userId)) {
                 return json_encode(array('status' => 'error', 'message' => 'User type and ID are required.'));
             }
-            $query = "";
+
+            // Convert single ID to array for consistent handling
+            if (!is_array($userId)) {
+                $userId = [$userId];
+            }
+
+            // Create placeholders for IN clause
+            $placeholders = implode(',', array_fill(0, count($userId), '?'));
+            
             switch ($userType) {
                 case 'user':
-                    $query = "UPDATE tbl_users SET is_active = 1 WHERE users_id = :userId";
+                    $query = "UPDATE tbl_users SET is_active = 1 WHERE users_id IN ($placeholders)";
                     break;
                 case 'driver':
-                    $query = "UPDATE tbl_driver SET is_active = 1 WHERE driver_id = :userId";
+                    $query = "UPDATE tbl_driver SET is_active = 1 WHERE driver_id IN ($placeholders)";
                     break;
                 default:
-                    return json_encode(array('message' => 'Invalid user type. Only user and driver types are supported.'));
+                    return json_encode(array('status' => 'error', 'message' => 'Invalid user type. Only user and driver types are supported.'));
             }
+
             $stmt = $this->conn->prepare($query);
-            $stmt->bindParam(':userId', $userId);
-            if ($stmt->execute()) {
-                return json_encode(array('status' => 'success', 'message' => 'User unarchived successfully.'));
-            } else {
-                return json_encode(array('status' => 'error', 'message' => 'Error unarchiving user.'));
+            
+            if ($stmt->execute($userId)) {
+                $count = $stmt->rowCount();
+                if ($count > 0) {
+                    return json_encode([
+                        'status' => 'success', 
+                        'message' => $count . ' user(s) unarchived successfully.'
+                    ]);
+                } else {
+                    return json_encode([
+                        'status' => 'error', 
+                        'message' => 'No users found with the given IDs.'
+                    ]);
+                }
             }
+
+            return json_encode(array('status' => 'error', 'message' => 'Error unarchiving user(s).'));
         } catch (PDOException $e) {
             return json_encode(array('status' => 'error', 'message' => 'Database error: ' . $e->getMessage()));
         }
@@ -125,23 +164,25 @@ class User {
 
         $query = "";
 
+        // Convert single ID to array for consistent handling
+        if (!is_array($resourceId)) {
+            $resourceId = [$resourceId];
+        }
+
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
+
         switch ($resourceType) {
             case 'vehicle':
-                $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id = :resourceId";
+                $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id IN ($placeholders)";
                 break;
 
             case 'venue':
-                $query = "UPDATE tbl_venue SET is_active = 0 WHERE ven_id = :resourceId";
+                $query = "UPDATE tbl_venue SET is_active = 0 WHERE ven_id IN ($placeholders)";
                 break;
 
             case 'equipment':
-                // Handle array of equipment IDs
-                if (is_array($resourceId)) {
-                    $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
-                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id IN ($placeholders)";
-                } else {
-                    $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id = :resourceId";
-                }
+                $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id IN ($placeholders)";
                 break;
 
             default:
@@ -149,21 +190,24 @@ class User {
         }
 
         $stmt = $this->conn->prepare($query);
-
-        if ($resourceType === 'equipment' && is_array($resourceId)) {
-            // Execute with array of equipment IDs
-            if ($stmt->execute($resourceId)) {
-                return json_encode(['status' => 'success', 'message' => 'Resources archived successfully.']);
-            }
-        } else {
-            // Execute with single ID
-            $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
-            if ($stmt->execute()) {
-                return json_encode(['status' => 'success', 'message' => 'Resource archived successfully.']);
+        
+        // Execute with array of IDs
+        if ($stmt->execute($resourceId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' resource(s) archived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No resources found with the given IDs.'
+                ]);
             }
         }
 
-        return json_encode(['status' => 'error', 'message' => 'Error archiving resource.']);
+        return json_encode(['status' => 'error', 'message' => 'Error archiving resource(s).']);
 
     } catch (PDOException $e) {
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
@@ -177,20 +221,26 @@ class User {
             return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
         }
 
-        $query = "";
+        // Convert single ID to array for consistent handling
+        if (!is_array($resourceId)) {
+            $resourceId = [$resourceId];
+        }
 
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
+
+        $query = "";
         switch ($resourceType) {
             case 'vehicle':
-                $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id = :resourceId";
+                $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id IN ($placeholders)";
                 break;
 
             case 'venue':
-                $query = "UPDATE tbl_venue SET is_active = 1 WHERE ven_id = :resourceId";
+                $query = "UPDATE tbl_venue SET is_active = 1 WHERE ven_id IN ($placeholders)";
                 break;
 
             case 'equipment':
-                // Always unarchive only the unit
-                $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id = :resourceId";
+                $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id IN ($placeholders)";
                 break;
 
             default:
@@ -198,13 +248,24 @@ class User {
         }
 
         $stmt = $this->conn->prepare($query);
-        $stmt->bindParam(':resourceId', $resourceId, PDO::PARAM_INT);
-
-        if ($stmt->execute()) {
-            return json_encode(['status' => 'success', 'message' => 'Resource unarchived successfully.']);
-        } else {
-            return json_encode(['status' => 'error', 'message' => 'Error unarchiving resource.']);
+        
+        // Execute with array of IDs
+        if ($stmt->execute($resourceId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' resource(s) unarchived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No resources found with the given IDs.'
+                ]);
+            }
         }
+
+        return json_encode(['status' => 'error', 'message' => 'Error unarchiving resource(s).']);
 
     } catch (PDOException $e) {
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);

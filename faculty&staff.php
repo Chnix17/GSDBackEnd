@@ -510,7 +510,8 @@ class FacultyStaff {
                     notification_message,
                     notification_reservation_reservation_id,
                     notification_user_id,
-                    notification_created_at
+                    notification_created_at,
+                    is_read
                 FROM tbl_notification_reservation
                 WHERE notification_user_id = :userId
                 ORDER BY notification_created_at DESC
@@ -529,6 +530,42 @@ class FacultyStaff {
             return json_encode([
                 'status'  => 'error',
                 'message' => 'Error fetching notifications: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function updateReadNotification($notificationIds) {
+        try {
+            if (!is_array($notificationIds)) {
+                $notificationIds = [$notificationIds]; // Convert single ID to array for consistency
+            }
+
+            $placeholders = str_repeat('?,', count($notificationIds) - 1) . '?';
+            $query = "
+                UPDATE tbl_notification_reservation
+                SET is_read = 1
+                WHERE notification_reservation_id IN ($placeholders)
+            ";
+
+            $stmt = $this->conn->prepare($query);
+            $stmt->execute($notificationIds);
+
+            if ($stmt->rowCount() > 0) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Notifications marked as read',
+                    'updated_count' => $stmt->rowCount()
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'No notifications were updated'
+                ]);
+            }
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => 'Error updating notifications: ' . $e->getMessage()
             ]);
         }
     }
@@ -587,6 +624,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             echo $facultyStaff->fetchNotification($userId);
+            break;
+        case 'updateReadNotification':
+            if(!$notificationIds = $input['notificationIds'] ?? null) {
+                echo json_encode(['status' => 'error', 'message' => 'Notification IDs are required']);
+                break;
+            }
+            echo $facultyStaff->updateReadNotification($notificationIds);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
