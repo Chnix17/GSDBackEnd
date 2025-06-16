@@ -53,7 +53,10 @@ class User {
                 INNER JOIN 
                     tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
                 INNER JOIN
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id"; // Added condition for availability
+                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+                WHERE 
+                    v.status_availability_id != 7 AND v.status_availability_id != 8";
+                 // Added condition for availability
 
         return $this->executeQuery($sql);
     }
@@ -208,7 +211,7 @@ class User {
                 INNER JOIN 
                     tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id 
                 WHERE 
-                    v.status_availability_id = 1  
+                    v.status_availability_id != 7 AND v.status_availability_id != 8 
                 ORDER BY 
                     ven_name"; 
         return $this->executeQuery($sql);

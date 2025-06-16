@@ -2024,6 +2024,86 @@ public function displayedMaintenanceResourcesDone() {
         }
     }
 
+
+   public function countTrendReservations() {
+    try {
+        $sql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_created_at,
+                rs.reservation_status_status_id AS status_id
+            FROM 
+                tbl_reservation r
+            LEFT JOIN tbl_reservation_status rs 
+                ON rs.reservation_reservation_id = r.reservation_id
+            WHERE 
+                rs.reservation_status_status_id = 6
+            GROUP BY 
+                r.reservation_id
+            ORDER BY 
+                r.reservation_created_at DESC
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return json_encode([
+            'status' => 'success',
+            'data' => [ 
+                'countTrendReservation' => count($reservations),
+                'reservations' => $reservations
+            ]
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+
+
+    public function countCompletedAndCancelledReservations() {
+    try {
+        $sql = "
+            SELECT 
+                r.reservation_id,
+                r.reservation_created_at,
+                rs.reservation_status_status_id AS status_id
+            FROM 
+                tbl_reservation r
+            LEFT JOIN 
+                tbl_reservation_status rs 
+                ON rs.reservation_reservation_id = r.reservation_id
+            WHERE 
+                rs.reservation_status_status_id IN (4, 5)
+            GROUP BY 
+                r.reservation_id
+            ORDER BY 
+                r.reservation_created_at DESC
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return json_encode([
+            'status' => 'success',
+            'data' => [
+                'countCompletedAndCancelled' => count($reservations),
+                'reservations' => $reservations
+            ]
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
 }
 
 // Handle the request
@@ -2251,7 +2331,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "fetchEquipmentName":
             echo $user->fetchEquipmentName();
             break;
-
+        case "countReservationTrends":
+            echo $user->countReservationTrends();
+            break;
+        case "countTrendReservations":
+            echo $user->countTrendReservations();
+            break;
+        case "countCompletedAndCancelledReservations":
+            echo $user->countCompletedAndCancelledReservations();
+            break;
         
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
