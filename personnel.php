@@ -63,7 +63,8 @@ class User {
                     ON v.status_availability_id = tsa.status_availability_id
                 WHERE rc_venue.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
+                  AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
+                GROUP BY rc_venue.reservation_checklist_venue_id
             ";
             $stmtVenue = $this->conn->prepare($sqlVenue);
             $stmtVenue->execute(['personnel_id' => $personnel_id]);
@@ -99,7 +100,8 @@ class User {
                     ON vm.status_availability_id = tsa.status_availability_id
                 WHERE rc_vehicle.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
+                  AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
+                GROUP BY rc_vehicle.reservation_checklist_vehicle_id
             ";
             $stmtVehicle = $this->conn->prepare($sqlVehicle);
             $stmtVehicle->execute(['personnel_id' => $personnel_id]);
@@ -137,7 +139,8 @@ class User {
                     ON eq.status_availability_id = tsa.status_availability_id
                 WHERE rc_equipment.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
-                  AND rs.reservation_active = 1 OR rs.reservation_active = 0
+                  AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
+                GROUP BY rc_equipment.reservation_checklist_equipment_id
             ";
             $stmtEquipment = $this->conn->prepare($sqlEquipment);
             $stmtEquipment->execute(['personnel_id' => $personnel_id]);
@@ -166,12 +169,21 @@ class User {
                     $found = false;
                     foreach ($reservations[$rid]['venues'] as &$v) {
                         if ($v['reservation_venue_id'] == $row['reservation_venue_id']) {
-                            $v['checklists'][] = [
-                                'checklist_venue_id'             => $row['checklist_venue_id'],
-                                'reservation_checklist_venue_id' => $row['reservation_checklist_venue_id'],
-                                'checklist_name'                 => $row['checklist_venue_name'],
-                                'isChecked'                      => (int)$row['venue_isChecked']
-                            ];
+                            $checklistExists = false;
+                            foreach ($v['checklists'] as $checklist) {
+                                if ($checklist['reservation_checklist_venue_id'] == $row['reservation_checklist_venue_id']) {
+                                    $checklistExists = true;
+                                    break;
+                                }
+                            }
+                            if (!$checklistExists) {
+                                $v['checklists'][] = [
+                                    'checklist_venue_id'             => $row['checklist_venue_id'],
+                                    'reservation_checklist_venue_id' => $row['reservation_checklist_venue_id'],
+                                    'checklist_name'                 => $row['checklist_venue_name'],
+                                    'isChecked'                      => (int)$row['venue_isChecked']
+                                ];
+                            }
                             $found = true;
                             break;
                         }
@@ -197,12 +209,21 @@ class User {
                     $found = false;
                     foreach ($reservations[$rid]['vehicles'] as &$v) {
                         if ($v['reservation_vehicle_id'] == $row['reservation_vehicle_id']) {
-                            $v['checklists'][] = [
-                                'checklist_vehicle_id'             => $row['checklist_vehicle_id'],
-                                'reservation_checklist_vehicle_id' => $row['reservation_checklist_vehicle_id'],
-                                'checklist_name'                   => $row['checklist_vehicle_name'],
-                                'isChecked'                        => (int)$row['vehicle_isChecked']
-                            ];
+                            $checklistExists = false;
+                            foreach ($v['checklists'] as $checklist) {
+                                if ($checklist['reservation_checklist_vehicle_id'] == $row['reservation_checklist_vehicle_id']) {
+                                    $checklistExists = true;
+                                    break;
+                                }
+                            }
+                            if (!$checklistExists) {
+                                $v['checklists'][] = [
+                                    'checklist_vehicle_id'             => $row['checklist_vehicle_id'],
+                                    'reservation_checklist_vehicle_id' => $row['reservation_checklist_vehicle_id'],
+                                    'checklist_name'                   => $row['checklist_vehicle_name'],
+                                    'isChecked'                        => (int)$row['vehicle_isChecked']
+                                ];
+                            }
                             $found = true;
                             break;
                         }
@@ -229,12 +250,21 @@ class User {
                     $found = false;
                     foreach ($reservations[$rid]['equipments'] as &$e) {
                         if ($e['reservation_equipment_id'] == $row['reservation_equipment_id']) {
-                            $e['checklists'][] = [
-                                'checklist_equipment_id'             => $row['checklist_equipment_id'],
-                                'reservation_checklist_equipment_id' => $row['reservation_checklist_equipment_id'],
-                                'checklist_name'                     => $row['checklist_equipment_name'],
-                                'isChecked'                          => (int)$row['equipment_isChecked']
-                            ];
+                            $checklistExists = false;
+                            foreach ($e['checklists'] as $checklist) {
+                                if ($checklist['reservation_checklist_equipment_id'] == $row['reservation_checklist_equipment_id']) {
+                                    $checklistExists = true;
+                                    break;
+                                }
+                            }
+                            if (!$checklistExists) {
+                                $e['checklists'][] = [
+                                    'checklist_equipment_id'             => $row['checklist_equipment_id'],
+                                    'reservation_checklist_equipment_id' => $row['reservation_checklist_equipment_id'],
+                                    'checklist_name'                     => $row['checklist_equipment_name'],
+                                    'isChecked'                          => (int)$row['equipment_isChecked']
+                                ];
+                            }
                             $found = true;
                             break;
                         }
@@ -1254,7 +1284,7 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                     ]);
                 }
 
-                // 3) Insert a “bad qty” record if needed
+                // 3) Insert a "bad qty" record if needed
                 if ($bad_quantity > 0) {
                     $stmtInsertBad = $this->conn->prepare("
                         INSERT INTO tbl_reservation_condition_equipment

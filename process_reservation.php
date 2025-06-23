@@ -127,7 +127,7 @@ class User {
                    Otherwise (other levels), allow everything */
                 (
                     :user_level_id = 6
-                      AND r.reservation_user_id     != :current_user_id
+                  
                       AND u_req.users_user_level_id != 6
                   OR :user_level_id != 6
                 )
@@ -146,7 +146,7 @@ class User {
                     WHERE
                         rs1.reservation_reservation_id    = r.reservation_id
                       AND rs1.reservation_status_status_id = 1
-                      AND rs1.reservation_active           = 1
+                      AND rs1.reservation_active           IS NULL
                 )
                 /* 4) Exclude any that have progressed past status 1 */
                 AND NOT EXISTS (
@@ -300,7 +300,7 @@ class User {
                 WHERE
     
                     (
-                        (rs.reservation_status_status_id = 1 AND rs.reservation_active IN (0, 1)) 
+                        (rs.reservation_status_status_id = 1 AND rs.reservation_active IN (0, 1)) OR rs.reservation_active IS NULL
                     )
     
                 GROUP BY 
@@ -322,41 +322,37 @@ class User {
     
     
     // Fetch request details by approval ID
-    public function fetchApprovalNotification($departmentId = null, $userLevelId = null) {
+    public function fetchApprovalNotification($departmentId, $userLevelId) {
         try {
+            if ($departmentId === null || $userLevelId === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing department ID or user level ID']);
+            }
+    
             $sql = "SELECT 
-                    notification_id, 
-                    notification_message, 
-                    notification_department_id, 
-                    notification_user_level_id, 
-                    notification_create 
-                FROM notification_requests 
-                WHERE 1=1";
-
-            $params = array();
-
-            if ($departmentId !== null) {
-                $sql .= " AND notification_department_id = :department_id";
-                $params[':department_id'] = $departmentId;
-            }
-
-            if ($userLevelId !== null) {
-                $sql .= " AND notification_user_level_id = :user_level_id";
-                $params[':user_level_id'] = $userLevelId;
-            }
-
-            $sql .= " ORDER BY notification_create DESC";
-
+                        notification_id, 
+                        notification_message, 
+                        notification_department_id, 
+                        notification_user_level_id, 
+                        notification_create 
+                    FROM notification_requests 
+                    WHERE notification_department_id = :department_id
+                      AND notification_user_level_id = :user_level_id
+                    ORDER BY notification_create DESC";
+    
             $stmt = $this->conn->prepare($sql);
-            $stmt->execute($params);
-
+            $stmt->execute([
+                ':department_id' => $departmentId,
+                ':user_level_id' => $userLevelId
+            ]);
+    
             $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
             return json_encode(['status' => 'success', 'data' => $notifications]);
-
+    
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
+    
 
     // Fetch read status of notifications
     public function fetchReadApprovalNotification() {
@@ -460,13 +456,16 @@ class User {
                 r.reservation_participants, 
                 r.reservation_user_id,
                 r.reservation_created_at,
-                rs.reservation_status_status_id AS status_id,
-                rs.reservation_active AS active,
+
+                latest_status.reservation_status_status_id AS status_id,
+                sm.status_master_name AS status_name,
+                latest_status.reservation_active AS active,
+
                 ul.user_level_name,
                 dep.departments_name,
                 CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
                 dep.departments_name AS department_name,
-                
+
                 -- Venue details
                 GROUP_CONCAT(DISTINCT 
                     CONCAT(
@@ -512,16 +511,28 @@ class User {
                     ) SEPARATOR '|'
                 ) as passenger_data
 
-            FROM 
-                tbl_reservation r
-            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            FROM tbl_reservation r
+
+            -- Latest status subquery
+            LEFT JOIN (
+                SELECT rs1.*
+                FROM tbl_reservation_status rs1
+                INNER JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_status_id
+                    FROM tbl_reservation_status
+                    GROUP BY reservation_reservation_id
+                ) rs2 ON rs1.reservation_reservation_id = rs2.reservation_reservation_id
+                AND rs1.reservation_status_id = rs2.max_status_id
+            ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+
+            LEFT JOIN tbl_status_master sm ON sm.status_master_id = latest_status.reservation_status_status_id
             LEFT JOIN tbl_users u_req ON r.reservation_user_id = u_req.users_id
             LEFT JOIN tbl_user_level ul ON u_req.users_user_level_id = ul.user_level_id
             LEFT JOIN tbl_departments dep ON u_req.users_department_id = dep.departments_id
-            
+
             LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
             LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
-            
+
             LEFT JOIN tbl_reservation_vehicle ve ON r.reservation_id = ve.reservation_reservation_id
             LEFT JOIN tbl_vehicle vm ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
             LEFT JOIN tbl_vehicle_model vmm ON vm.vehicle_model_id = vmm.vehicle_model_id
@@ -559,13 +570,15 @@ class User {
                 'reservation_start_date' => $row['reservation_start_date'],
                 'reservation_end_date' => $row['reservation_end_date'],
                 'reservation_participants' => $row['reservation_participants'],
-                'status_id' => $row['status_id'],
+                'status_name' => $row['status_name'], // ✅ status name instead of status ID
                 'active' => $row['active'],
                 'reservation_user_id' => $row['reservation_user_id'],
                 'requester_name' => $row['requester_name'],
                 'department_name' => $row['department_name'],
                 'user_level_name' => $row['user_level_name']
-            ];            // VENUES
+            ];
+
+            // VENUES
             if (!empty($row['venue_data']) && $row['venue_data'] !== ':::::') {
                 foreach (explode('|', $row['venue_data']) as $venueStr) {
                     $venueParts = explode(':', $venueStr);
@@ -655,15 +668,16 @@ class User {
     }
 }
 
+
     
        
     public function handleApproval($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
         try {
             $this->conn->beginTransaction();
             $sql = "UPDATE tbl_reservation_status 
-                    SET reservation_active = 0
+                    SET reservation_active = 1
                     WHERE reservation_reservation_id = :reservation_id 
-                    AND reservation_active = 1";
+                    AND reservation_active IS NULL";
             
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
@@ -1297,9 +1311,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->updateTripTicket($reservationDriverId);
             break;
 
-        case "fetchApprovalNotification":
-            echo $user->fetchApprovalNotification();
-            break;
+            case "fetchApprovalNotification":
+                $departmentId = $data['department_id'] ?? null;
+                $userLevelId = $data['user_level_id'] ?? null;
+                if ($departmentId === null || $userLevelId === null) {
+                    echo json_encode(['status' => 'error', 'message' => 'Department ID and User Level ID are required']);
+                    break;
+                }
+                echo $user->fetchApprovalNotification($departmentId, $userLevelId);
+                break;
+            
         case "insertUnits":
             $equipIds = $data['equip_ids'] ?? [];
             $quantities = $data['quantities'] ?? [];

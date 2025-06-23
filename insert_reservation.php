@@ -630,7 +630,7 @@ class Reservation {
                 $statusSql = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 1, 1, null, NOW())";
+                              VALUES (:reservation_id, 1, null, null, NOW())";
                                
                 $statusStmt = $this->conn->prepare($statusSql);
                 $statusStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
@@ -686,7 +686,7 @@ class Reservation {
                 $statusSql1 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 1, 0, null, NOW())";
+                              VALUES (:reservation_id, 1, 1, null, NOW())";
 
                 $statusSql2 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 

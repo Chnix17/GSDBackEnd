@@ -247,92 +247,33 @@ class User {
 
 
     public function updateVenue($venueData) {
-        // Handle image upload if present
-        $picPath = null;
-        if (isset($venueData['ven_pic']) && !empty($venueData['ven_pic'])) {
-            $uploadDir = 'uploads/venues/';
-            if (!file_exists($uploadDir)) {
-                mkdir($uploadDir, 0777, true);
-            }
-            
-            $image_parts = explode(";base64,", $venueData['ven_pic']);
-            $image_type_aux = explode("image/", $image_parts[0]);
-            $image_type = $image_type_aux[1];
-            $image_base64 = base64_decode($image_parts[1]);
-            
-            $filename = 'venue_' . time() . '.' . $image_type;
-            $picPath = $uploadDir . $filename;
-            
-            file_put_contents($picPath, $image_base64);
-            $venueData['ven_pic'] = $picPath;
-        }
-
-        // SQL query to update venue data
-        $sql = "UPDATE tbl_venue SET 
-                    ven_name = :venue_name, 
-                    ven_occupancy = :max_occupancy,
-                    ven_pic = :venue_pic,
-                    status_availability_id = :status_availability_id,
-                    ven_operating_hours = :operating_hours 
-                WHERE 
-                    ven_id = :venue_id";
-    
-        // Prepare the SQL statement
-        $stmt = $this->conn->prepare($sql);
-    
-        // Bind parameters with the values from the $venueData array
-        $stmt->bindParam(':venue_name', $venueData['venue_name']);
-        $stmt->bindParam(':max_occupancy', $venueData['max_occupancy']);
-        $stmt->bindParam(':venue_pic', $venueData['ven_pic']);
-        $stmt->bindParam(':status_availability_id', $venueData['status_availability_id'], PDO::PARAM_INT);
-        $stmt->bindParam(':operating_hours', $venueData['operating_hours']);
-        $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
-    
-        // Execute the query and return the response
-        return $stmt->execute() 
-            ? json_encode(['status' => 'success', 'message' => 'Venue updated successfully'])
-            : json_encode(['status' => 'error', 'message' => 'Could not update venue']);
-    }
-    
-    
-
-      public function updateEquipment($equipmentData) {
         try {
-            $sql = "UPDATE tbl_equipments SET 
-                        equip_name = :name, 
-                        equipments_category_id = :categoryId,
-                        is_active = :isActive,
-                        user_admin_id = :userAdminId,
-                        equip_type = :equipType
-                    WHERE equip_id = :equipmentId";
-            
-            $stmt = $this->conn->prepare($sql);
-
-            // Bind parameters
-            $stmt->bindParam(':name', $equipmentData['name']);
-            $stmt->bindParam(':categoryId', $equipmentData['category_id'], PDO::PARAM_INT);
-            $stmt->bindParam(':isActive', $equipmentData['is_active'], PDO::PARAM_BOOL);
-            $stmt->bindParam(':userAdminId', $equipmentData['user_admin_id'], PDO::PARAM_INT);
-            $stmt->bindParam(':equipType', $equipmentData['equip_type']);
-            $stmt->bindParam(':equipmentId', $equipmentData['equipmentId'], PDO::PARAM_INT);
-
-            if (!$stmt->execute()) {
-                throw new Exception('Could not update equipment');
+            if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'])) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
             }
-
-            return json_encode([
-                'status' => 'success', 
-                'message' => 'Equipment updated successfully'
-            ]);
-            
-        } catch (Exception $e) {
-            error_log('Error in updateEquipment: ' . $e->getMessage());
-            return json_encode([
-                'status' => 'error', 
-                'message' => $e->getMessage()
-            ]);
+    
+            $sql = "UPDATE tbl_venue SET 
+                        ven_name = :venue_name, 
+                        ven_occupancy = :max_occupancy,
+                        status_availability_id = :status_availability_id
+                    WHERE ven_id = :venue_id";
+    
+            $stmt = $this->conn->prepare($sql);
+    
+            $stmt->bindParam(':venue_name', $venueData['venue_name']);
+            $stmt->bindParam(':max_occupancy', $venueData['max_occupancy']);
+            $stmt->bindParam(':status_availability_id', $venueData['status_availability_id'], PDO::PARAM_INT);
+            $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
+    
+            return $stmt->execute()
+                ? json_encode(['status' => 'success', 'message' => 'Venue updated successfully'])
+                : json_encode(['status' => 'error', 'message' => 'Could not update venue']);
+        } catch (PDOException $e) {
+            error_log('Database error in updateVenue: ' . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
     }
+    
 
     public function updateUserLevel($userLevelData) {
         try {

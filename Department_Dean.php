@@ -204,6 +204,271 @@ class Department_Dean {
         }
     }
 
+    public function fetchRequestReservation() {
+    try {
+        $sql = "
+            SELECT 
+                r.reservation_id, 
+                r.reservation_created_at, 
+                r.reservation_title,
+                r.reservation_description,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_participants,
+                r.reservation_user_id AS requester_id,
+                CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS requester_name,
+                d.departments_name,
+                rs.reservation_status_status_id AS status_id,
+                rs.reservation_active AS active,
+                sm.status_master_name AS reservation_status
+            FROM 
+                tbl_reservation r
+            INNER JOIN 
+                tbl_users u ON r.reservation_user_id = u.users_id
+            INNER JOIN 
+                tbl_departments d ON u.users_department_id = d.departments_id
+            LEFT JOIN 
+                tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            LEFT JOIN 
+                tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+            WHERE
+                rs.reservation_status_status_id = 7 AND rs.reservation_active = 1
+            GROUP BY 
+                r.reservation_id
+            ORDER BY 
+                r.reservation_created_at DESC;
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute();
+
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return json_encode(['status' => 'success', 'data' => $reservations]);
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+
+    public function fetchVenueScheduledCheck() {
+    try {
+        $query = "SELECT 
+                    v.ven_id,
+                    v.ven_name, 
+                    sct.section_id,
+                    sct.section_name,
+                    cvs.day_of_week, 
+                    cvs.start_time, 
+                    cvs.end_time,
+                    cvs.semester_id,
+                    sem.semester_name
+                  FROM tbl_class_venue_schedule cvs
+                  INNER JOIN tbl_venue v ON cvs.ven_id = v.ven_id
+                  INNER JOIN tbl_section sct ON cvs.section_id = sct.section_id
+                  INNER JOIN tbl_semester sem ON cvs.semester_id = sem.semester_id
+                  ORDER BY sem.semester_id, v.ven_name, sct.section_name, cvs.day_of_week, cvs.start_time";
+        
+        $stmt = $this->conn->prepare($query);
+        $stmt->execute();
+        $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return json_encode([
+            'status' => 'success',
+            'data' => $result
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function fetchRequestById($reservationId) {
+    try {
+        $sql = "
+            SELECT 
+                r.reservation_id, 
+                r.reservation_title, 
+                r.reservation_description, 
+                r.reservation_start_date, 
+                r.reservation_end_date, 
+                r.reservation_participants, 
+                r.reservation_user_id,
+                r.reservation_created_at,
+                rs.reservation_status_status_id AS status_id,
+                rs.reservation_active AS active,
+                ul.user_level_name,
+                dep.departments_name,
+                CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
+                dep.departments_name AS department_name,
+                -- Only venue names
+                GROUP_CONCAT(DISTINCT venue.ven_name SEPARATOR '|') AS venue_names
+            FROM 
+                tbl_reservation r
+            LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            LEFT JOIN tbl_users u_req ON r.reservation_user_id = u_req.users_id
+            LEFT JOIN tbl_user_level ul ON u_req.users_user_level_id = ul.user_level_id
+            LEFT JOIN tbl_departments dep ON u_req.users_department_id = dep.departments_id
+            LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
+            LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
+            WHERE r.reservation_id = :reservation_id
+            GROUP BY r.reservation_id
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($row) {
+            // Prepare response
+            $response = [
+                'reservation_id' => $row['reservation_id'],
+                'reservation_created_at' => $row['reservation_created_at'],
+                'reservation_title' => $row['reservation_title'],
+                'reservation_description' => $row['reservation_description'],
+                'reservation_start_date' => $row['reservation_start_date'],
+                'reservation_end_date' => $row['reservation_end_date'],
+                'reservation_participants' => $row['reservation_participants'],
+                'status_id' => $row['status_id'],
+                'active' => $row['active'],
+                'reservation_user_id' => $row['reservation_user_id'],
+                'requester_name' => $row['requester_name'],
+                'department_name' => $row['department_name'],
+                'user_level_name' => $row['user_level_name'],
+                'venues' => []
+            ];
+
+            // VENUE NAMES ONLY
+            if (!empty($row['venue_names'])) {
+                $names = explode('|', $row['venue_names']);
+                foreach ($names as $name) {
+                    if (trim($name) !== '') {
+                        $response['venues'][] = [
+                            'venue_name' => $name
+                        ];
+                    }
+                }
+            }
+
+            return json_encode(['status' => 'success', 'data' => $response]);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Reservation not found']);
+        }
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function handleReviewUpdated($reservationId, $userId, $isAvailable) {
+    try {
+        $this->conn->beginTransaction();
+
+        // Step 1: Deactivate old status with ID 7
+        $sql = "UPDATE tbl_reservation_status 
+                SET reservation_active = 0
+                WHERE reservation_reservation_id = :reservation_id 
+                AND reservation_status_status_id = 7";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        // Step 2: Determine new status ID
+        $statusId = $isAvailable ? 8 : 9;
+
+        // Step 3: Insert new status record
+        $sqlInsert = "
+            INSERT INTO tbl_reservation_status (
+                reservation_status_status_id,
+                reservation_reservation_id,
+                reservation_active,
+                reservation_users_id,
+                reservation_updated_at
+            ) VALUES (
+                :status_id,
+                :reservation_id,
+                1,
+                :user_id,
+                NOW()
+            )
+        ";
+
+        $stmtInsert = $this->conn->prepare($sqlInsert);
+        $stmtInsert->bindParam(':status_id', $statusId, PDO::PARAM_INT);
+        $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+        $stmtInsert->execute();
+
+        // Step 4: Insert notification
+        $sqlNotif = "
+            INSERT INTO notification_requests (
+                notification_message,
+                notification_department_id,
+                notification_user_level_id,
+                notification_create
+            ) VALUES (
+                :message,
+                :department_id,
+                :user_level_id,
+                NOW()
+            )
+        ";
+
+        $stmtNotif = $this->conn->prepare($sqlNotif);
+
+        // Customize message
+        if ($isAvailable) {
+            $message = "Venue has been approved and available by registrar.";
+        } else {
+            $message = "Venue is NOT AVAILABLE for the requested time.";
+        }
+
+        // You can change these IDs based on your system
+        $departmentId = 27;
+        $userLevelId = 1;
+
+        $stmtNotif->bindParam(':message', $message, PDO::PARAM_STR);
+        $stmtNotif->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+        $stmtNotif->bindParam(':user_level_id', $userLevelId, PDO::PARAM_INT);
+        $stmtNotif->execute();
+
+        // Finalize transaction
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => $message,
+            'reservation_id' => $reservationId,
+            'status_id' => $statusId
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'General error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+
+
     // ...existing code...
 }
 
@@ -221,6 +486,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new Department_Dean();
 
     switch ($operation) {
+
+        case "handleReviewUpdated":
+            $reservationId = $data['reservation_id'] ?? null;
+            $userId = $data['user_id'] ?? null;
+            $isAvailable = isset($data['is_available']) ? (bool)$data['is_available'] : null;
+
+            if ($reservationId !== null && $userId !== null && $isAvailable !== null) {
+                echo $user->handleReviewUpdated($reservationId, $userId, $isAvailable);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Missing parameters']);
+            }
+            break;
+
+        case "fetchRequestById":
+            $reservationId = $data['reservation_id'] ?? null;
+            if ($reservationId !== null) {
+                echo $user->fetchRequestById($reservationId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Missing reservation_id parameter']);
+            }
+            break;
+        case "fetchVenueScheduledCheck":
+            echo $user->fetchVenueScheduledCheck();
+            break;
+
+        case "fetchRequestReservation":
+            echo $user->fetchRequestReservation();
+            break;
         case 'uploadClassroomCSV':
             $school_year_name = $data['school_year_name'] ?? '';
             $semesterName = $data['semester_name'] ?? '';

@@ -768,94 +768,106 @@ class User {
     
     
     
-    public function saveChecklist($data) {
-        try {
-            if (empty($data['checklist_ids']) || !is_array($data['checklist_ids'])) {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'Missing or invalid checklist_ids.'
-                ]);
-            }
-    
-            $this->conn->beginTransaction();
-            $results = [];
-    
-            foreach ($data['checklist_ids'] as $checklist) {
-                $admin_id = $data['admin_id'];
-                $personnel_id = $data['personnel_id'];
-                $isChecked = null;
-    
-                // Common parameters
-                $params = [
-                    ':admin_id' => $admin_id,
-                    ':personnel_id' => $personnel_id,
-                    ':isChecked' => $isChecked
-                ];
-    
-                switch ($checklist['type']) {
-                    case 'venue':
-                        if (empty($checklist['reservation_venue_id']) || empty($checklist['checklist_id'])) {
-                            continue 2;
-                        }
-                        $insertSql = "INSERT INTO tbl_reservation_checklist_venue
-                                    (reservation_venue_id, checklist_venue_id, admin_id, personnel_id, isChecked)
-                                    VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
-                        $params[':reservation_id'] = $checklist['reservation_venue_id'];
-                        $params[':checklist_id'] = $checklist['checklist_id'];
-                        break;
-    
-                    case 'vehicle':
-                        if (empty($checklist['reservation_vehicle_id']) || empty($checklist['checklist_id'])) {
-                            continue 2;
-                        }
-                        $insertSql = "INSERT INTO tbl_reservation_checklist_vehicle
-                                    (reservation_vehicle_id, checklist_vehicle_id, admin_id, personnel_id, isChecked)
-                                    VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
-                        $params[':reservation_id'] = $checklist['reservation_vehicle_id'];
-                        $params[':checklist_id'] = $checklist['checklist_id'];
-                        break;
-    
-                    case 'equipment':
-                        if (empty($checklist['reservation_equipment_id']) || empty($checklist['checklist_id'])) {
-                            continue 2;
-                        }
-                        $insertSql = "INSERT INTO tbl_reservation_checklist_equipment
-                                    (reservation_equipment_id, checklist_equipment_id, admin_id, personnel_id, isChecked)
-                                    VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
-                        $params[':reservation_id'] = $checklist['reservation_equipment_id'];
-                        $params[':checklist_id'] = $checklist['checklist_id'];
-                        break;
-    
-                    default:
-                        continue 2;
-                }
-    
-                $stmt = $this->conn->prepare($insertSql);
-                $stmt->execute($params);
-                $results[] = $this->conn->lastInsertId();
-            }
-    
-            $this->conn->commit();
-    
-            return json_encode([
-                'status' => 'success',
-                'message' => 'Checklists saved successfully.',
-                'inserted_ids' => $results
-            ]);
-    
-        } catch (PDOException $e) {
-            $this->conn->rollBack();
+   public function saveChecklist($data) {
+    try {
+        if (empty($data['checklist_ids']) || !is_array($data['checklist_ids'])) {
             return json_encode([
                 'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage()
-            ]);
-        } catch (Exception $e) {
-            return json_encode([
-                'status' => 'error',
-                'message' => $e->getMessage()
+                'message' => 'Missing or invalid checklist_ids.'
             ]);
         }
+
+        $this->conn->beginTransaction();
+        $results = [];
+
+        foreach ($data['checklist_ids'] as $checklist) {
+            $admin_id = $data['admin_id'];
+            $personnel_id = $data['personnel_id'];
+            $isChecked = null;
+
+            // Common parameters
+            $params = [
+                ':admin_id' => $admin_id,
+                ':personnel_id' => $personnel_id,
+                ':isChecked' => $isChecked
+            ];
+
+            switch ($checklist['type']) {
+                case 'venue':
+                    if (empty($checklist['reservation_venue_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_venue
+                                (reservation_venue_id, checklist_venue_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_venue_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                case 'vehicle':
+                    if (empty($checklist['reservation_vehicle_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_vehicle
+                                (reservation_vehicle_id, checklist_vehicle_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_vehicle_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                case 'equipment':
+                    if (empty($checklist['reservation_equipment_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_equipment
+                                (reservation_equipment_id, checklist_equipment_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_equipment_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                default:
+                    continue 2;
+            }
+
+            $stmt = $this->conn->prepare($insertSql);
+            $stmt->execute($params);
+            $results[] = $this->conn->lastInsertId();
+        }
+
+        // Insert notification for the personnel
+        $notificationSql = "INSERT INTO notification_user 
+                            (notification_message, notification_user_id, is_read, created_at)
+                            VALUES (:message, :user_id, 0, NOW())";
+
+        $notifMessage = "You have been assigned new checklist tasks.";
+        $stmtNotif = $this->conn->prepare($notificationSql);
+        $stmtNotif->bindParam(':message', $notifMessage, PDO::PARAM_STR);
+        $stmtNotif->bindParam(':user_id', $data['personnel_id'], PDO::PARAM_INT);
+        $stmtNotif->execute();
+
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => 'Checklists saved successfully.',
+            'inserted_ids' => $results
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
     }
+}
+
 
     public function saveMasterChecklist($checklistNames, $type, $id) {
         try {

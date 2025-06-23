@@ -110,15 +110,26 @@ class VehicleMake {
         $sql = "
             SELECT 
                 vm.vehicle_model_id,
-                vm.vehicle_model_name
+                vm.vehicle_model_name,
+                vm.vehicle_model_created_at,
+                vm.vehicle_model_updated_at,
+                vm.vehicle_model_vehicle_make_id,
+                vm.vehicle_category_id,
+                make.vehicle_make_name,
+                category.vehicle_category_name
             FROM 
                 tbl_vehicle_model vm
+            LEFT JOIN 
+                tbl_vehicle_make make ON vm.vehicle_model_vehicle_make_id = make.vehicle_make_id
+            LEFT JOIN 
+                tbl_vehicle_category category ON vm.vehicle_category_id = category.vehicle_category_id
             ORDER BY 
                 vm.vehicle_model_name
         ";
     
         return $this->executeQuery($sql);
     }
+    
     
 
     // New method to fetch vehicle model by ID
@@ -412,25 +423,7 @@ public function fetchUsersById($id) {
         return $this->executeQuery($sql);
     }
 
-    public function fetchPersonnelById($id) {
-        if (!is_numeric($id)) {
-            return json_encode(['status' => 'error', 'message' => 'Invalid ID format']);
-        }
-
-        $sql = "SELECT 
-                    p.*,
-                    d.departments_name,
-                    ul.user_level_name
-                FROM 
-                    tbl_personel p
-                LEFT JOIN 
-                    tbl_departments d ON p.jo_personel_department_id = d.departments_id
-                LEFT JOIN 
-                    tbl_user_level ul ON p.jo_user_level_id = ul.user_level_id
-                WHERE 
-                    p.jo_personel_id = :id";
-        return $this->executeQuery($sql, [':id' => $id]);
-    }
+   
 
     public function enable2FAById($userId, $userType) {
         if (!is_numeric($userId)) {

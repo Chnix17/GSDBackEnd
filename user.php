@@ -2104,6 +2104,1040 @@ public function displayedMaintenanceResourcesDone() {
     }
 }
 
+public function fetchVenueScheduled() {
+        try {
+            // Fetch all scheduled venues with their names, days, and times
+            // The query now directly joins class_venue_schedule with venue
+            // without any WHERE clause related to semester.
+            $query = "SELECT 
+                        v.ven_id,
+                        v.ven_name, 
+                        cvs.day_of_week, 
+                        cvs.start_time, 
+                        cvs.end_time,
+                        cvs.semester_id,  -- Include semester_id if you want to know which semester it belongs to
+                        s.semester_name   -- Include semester_name for better context if needed
+                      FROM tbl_class_venue_schedule cvs
+                      INNER JOIN tbl_venue v ON cvs.ven_id = v.ven_id
+                      INNER JOIN tbl_semester s ON cvs.semester_id = s.semester_id
+                      ORDER BY s.semester_id, v.ven_name, cvs.day_of_week, cvs.start_time";
+            
+            $stmt = $this->conn->prepare($query);
+            $stmt->execute();
+            $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            return json_encode([
+                'status' => 'success',
+                'data' => $result
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        } catch (Exception $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function handleReview($reservationId, $userId) {
+    try {
+        $this->conn->beginTransaction();
+
+        // Step 1: Insert new reservation status
+        $sqlInsert = "
+            INSERT INTO tbl_reservation_status (
+                reservation_status_status_id,
+                reservation_reservation_id,
+                reservation_active,
+                reservation_users_id,
+                reservation_updated_at
+            ) VALUES (
+                :status_id,
+                :reservation_id,
+                1,
+                :user_id,
+                NOW()
+            )
+        ";
+
+        $stmtInsert = $this->conn->prepare($sqlInsert);
+        $statusReviewed = 7;
+        $stmtInsert->bindParam(':status_id', $statusReviewed, PDO::PARAM_INT);
+        $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+        $stmtInsert->execute();
+
+        // Step 2: Insert department-level notification for review
+        $sqlDepartmentNotification = "
+            INSERT INTO notification_requests (
+                notification_message,
+                notification_department_id,
+                notification_user_level_id,
+                notification_create
+            ) VALUES (
+                :message,
+                :department_id,
+                :user_level_id,
+                NOW()
+            )
+        ";
+
+        $stmtNotif = $this->conn->prepare($sqlDepartmentNotification);
+        $message = "Venue Availability Request Check By GSD";
+        $departmentId = 44;
+        $userLevelId = 18;
+
+        $stmtNotif->bindParam(':message', $message, PDO::PARAM_STR);
+        $stmtNotif->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+        $stmtNotif->bindParam(':user_level_id', $userLevelId, PDO::PARAM_INT);
+        $stmtNotif->execute();
+
+        // Commit transaction
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => 'Reservation ID ' . $reservationId . ' has been marked as reviewed and notification sent.',
+            'reservation_id' => $reservationId
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'General error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+
+
+public function saveStock($data) {
+    try {
+        if (is_string($data)) {
+            $data = json_decode($data, true);
+        }
+
+        if (!$data || !is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        $requiredFields = ['equip_id', 'quantity', 'user_admin_id'];
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field]) || trim($data[$field]) === '') {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required'
+                ]);
+            }
+        }
+
+        $equip_id = (int)$data['equip_id'];
+        $inputQuantity = (int)$data['quantity'];
+        $user_admin_id = (int)$data['user_admin_id'];
+
+        // Check current stock entry
+        $checkSql = "SELECT quantity, on_hand_quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id";
+        $checkStmt = $this->conn->prepare($checkSql);
+        $checkStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+        $checkStmt->execute();
+
+        if ($checkStmt->rowCount() > 0) {
+            $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
+            $currentQuantity = (int)$existing['quantity'];
+            $currentOnHand = (int)$existing['on_hand_quantity'];
+
+            if ($inputQuantity < $currentQuantity) {
+                // Subtract difference
+                $diff = $currentQuantity - $inputQuantity;
+
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            quantity = quantity - :diff,
+                            on_hand_quantity = on_hand_quantity - :diff,
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => "Stock decreased by $diff successfully"
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (decrease)']);
+            } elseif ($inputQuantity > $currentQuantity) {
+                // Add difference
+                $diff = $inputQuantity - $currentQuantity;
+
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            quantity = quantity + :diff,
+                            on_hand_quantity = on_hand_quantity + :diff,
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => "Stock increased by $diff successfully"
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (increase)']);
+            } else {
+                // Quantity is the same, update timestamp and user only
+                $sql = "UPDATE tbl_equipment_quantity SET 
+                            last_updated = NOW(),
+                            user_admin_id = :user_admin_id
+                        WHERE equip_id = :equip_id";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+
+                if ($stmt->execute()) {
+                    return json_encode([
+                        'status' => 'success',
+                        'message' => 'Stock unchanged, updated timestamp'
+                    ]);
+                }
+                return json_encode(['status' => 'error', 'message' => 'Failed to update timestamp']);
+            }
+        } else {
+            // Insert new stock record
+            $sql = "INSERT INTO tbl_equipment_quantity (
+                        equip_id, quantity, on_hand_quantity, last_updated, user_admin_id
+                    ) VALUES (
+                        :equip_id, :quantity, :quantity, NOW(), :user_admin_id
+                    )";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
+            $stmt->bindParam(':quantity', $inputQuantity, PDO::PARAM_INT);
+            $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Equipment stock added successfully'
+                ]);
+            }
+            return json_encode(['status' => 'error', 'message' => 'Failed to add equipment stock']);
+        }
+    } catch(PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch(Exception $e) {
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function saveUnit($data) {
+    try {
+        if (is_string($data)) $data = json_decode($data, true);
+        if (!is_array($data)) return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+
+        // Required fields and types
+        $requiredFields = [
+            'equip_id' => 'int',
+            'serial_number' => 'string',
+            'status_availability_id' => 'int',
+            'user_admin_id' => 'int'
+        ];
+
+        foreach ($requiredFields as $field => $type) {
+            if (!isset($data[$field]) || ($type === 'string' && trim($data[$field]) === '')) {
+                return json_encode(['status' => 'error', 'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required']);
+            }
+            if ($type === 'int' && !is_numeric($data[$field])) {
+                return json_encode(['status' => 'error', 'message' => ucfirst(str_replace('_', ' ', $field)) . ' must be a number']);
+            }
+        }
+
+        // Check for duplicate serial number
+        $check = $this->conn->prepare("SELECT COUNT(*) FROM tbl_equipment_unit WHERE serial_number = :serial_number");
+        $check->bindParam(':serial_number', $data['serial_number']);
+        $check->execute();
+        if ($check->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'This serial number already exists']);
+        }
+
+        // Optional fields
+        $brand = $data['brand'] ?? null;
+        $size = $data['size'] ?? null;
+        $color = $data['color'] ?? null;
+
+        // Insert query
+        $sql = "INSERT INTO tbl_equipment_unit (
+                    equip_id, serial_number, brand, size, color, 
+                    status_availability_id, unit_created_at, is_active, user_admin_id
+                ) VALUES (
+                    :equip_id, :serial_number, :brand, :size, :color,
+                    :status_id, NOW(), 1, :admin_id
+                )";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':equip_id', $data['equip_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':serial_number', $data['serial_number']);
+        $stmt->bindParam(':brand', $brand);
+        $stmt->bindParam(':size', $size);
+        $stmt->bindParam(':color', $color);
+        $stmt->bindParam(':status_id', $data['status_availability_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Equipment unit added successfully'])
+            : json_encode(['status' => 'error', 'message' => 'Failed to add equipment unit']);
+
+    } catch (PDOException $e) {
+        error_log("Database error in saveUnit: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (Exception $e) {
+        error_log("Error in saveUnit: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function updateEquipmentUnit($unitData) {
+    try {
+        // Validate required fields
+        if (empty($unitData['unit_id'])) {
+            return json_encode([
+                "status" => "error",
+                "message" => "Unit ID is required"
+            ]);
+        }
+
+        // Begin transaction
+        $this->conn->beginTransaction();
+
+        // Check if the unit exists
+        $checkStmt = $this->conn->prepare("SELECT unit_id FROM tbl_equipment_unit WHERE unit_id = :unit_id FOR UPDATE");
+        $checkStmt->bindParam(':unit_id', $unitData['unit_id'], PDO::PARAM_INT);
+        $checkStmt->execute();
+        
+        if (!$checkStmt->fetch(PDO::FETCH_ASSOC)) {
+            $this->conn->rollBack();
+            return json_encode([
+                "status" => "error",
+                "message" => "Equipment unit not found"
+            ]);
+        }
+
+        // Map the allowed fields that can be updated
+        $allowedFields = [
+            'serial_number' => PDO::PARAM_STR,
+            'brand' => PDO::PARAM_STR,
+            'size' => PDO::PARAM_STR,
+            'color' => PDO::PARAM_STR,
+            'is_active' => PDO::PARAM_BOOL,
+            'user_admin_id' => PDO::PARAM_INT
+        ];
+
+        $updateFields = [];
+        $params = [];
+
+        foreach ($allowedFields as $field => $paramType) {
+            if (isset($unitData[$field]) && $unitData[$field] !== '') {
+                $updateFields[] = "$field = :$field";
+                $params[$field] = [
+                    'value' => $unitData[$field],
+                    'type' => $paramType
+                ];
+            }
+        }
+
+        if (empty($updateFields)) {
+            $this->conn->rollBack();
+            return json_encode([
+                "status" => "error",
+                "message" => "No fields to update"
+            ]);
+        }
+
+        // Construct and execute the update query
+        $sql = "UPDATE tbl_equipment_unit SET " . implode(", ", $updateFields) . " WHERE unit_id = :unit_id";
+        
+        $updateStmt = $this->conn->prepare($sql);
+        
+        // Bind unit_id parameter
+        $updateStmt->bindParam(':unit_id', $unitData['unit_id'], PDO::PARAM_INT);
+        
+        // Bind all other parameters
+        foreach ($params as $field => $param) {
+            $updateStmt->bindParam(":$field", $param['value'], $param['type']);
+        }
+        
+        // Add debug logging
+        error_log("Executing SQL: $sql");
+        error_log("Parameters: " . print_r($params, true));
+        
+        $updateStmt->execute();
+        $this->conn->commit();
+
+        if ($updateStmt->rowCount() > 0) {
+            // Verify the update
+            $verifyStmt = $this->conn->prepare("SELECT * FROM tbl_equipment_unit WHERE unit_id = :unit_id");
+            $verifyStmt->bindParam(':unit_id', $unitData['unit_id'], PDO::PARAM_INT);
+            $verifyStmt->execute();
+            $updatedData = $verifyStmt->fetch(PDO::FETCH_ASSOC);
+            
+            return json_encode([
+                "status" => "success",
+                "message" => "Equipment unit updated successfully",
+                "unit_id" => $unitData['unit_id'],
+                "updated_data" => $updatedData
+            ]);
+        } else {
+            return json_encode([
+                "status" => "info",
+                "message" => "No changes were made to the equipment unit",
+                "unit_id" => $unitData['unit_id']
+            ]);
+        }
+    } catch (PDOException $e) {
+        if ($this->conn->inTransaction()) {
+            $this->conn->rollBack();
+        }
+        error_log("Database error in updateEquipmentUnit: " . $e->getMessage());
+        return json_encode([
+            "status" => "error",
+            "message" => "Database error: " . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        if ($this->conn->inTransaction()) {
+            $this->conn->rollBack();
+        }
+        error_log("Error in updateEquipmentUnit: " . $e->getMessage());
+        return json_encode([
+            "status" => "error",
+            "message" => "An unexpected error occurred: " . $e->getMessage()
+        ]);
+    }
+}
+
+
+public function saveHoliday($data) {
+        try {
+            // If data is a JSON string, decode it
+            if (is_string($data)) {
+                $data = json_decode($data, true);
+            }
+
+            // Validate decoded data
+            if (!$data || !is_array($data)) {
+                return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+            }
+
+            // Check required fields
+            if (!isset($data['holiday_name']) || !isset($data['holiday_date'])) {
+                return json_encode(['status' => 'error', 'message' => 'Holiday name and date are required']);
+            }
+
+            // Check if holiday already exists on the same date
+            $checkSql = "SELECT COUNT(*) FROM tbl_holidays WHERE holiday_date = :holiday_date";
+            $checkStmt = $this->conn->prepare($checkSql);
+            $checkStmt->bindParam(':holiday_date', $data['holiday_date']);
+            $checkStmt->execute();
+            
+            if ($checkStmt->fetchColumn() > 0) {
+                return json_encode(['status' => 'error', 'message' => 'A holiday already exists on this date']);
+            }
+
+            // Insert the holiday
+            $sql = "INSERT INTO tbl_holidays (holiday_name, holiday_date) VALUES (:name, :date)";
+            $stmt = $this->conn->prepare($sql);
+            
+            $stmt->bindParam(':name', $data['holiday_name'], PDO::PARAM_STR);
+            $stmt->bindParam(':date', $data['holiday_date'], PDO::PARAM_STR);
+
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Holiday added successfully'
+                ]);
+            }
+
+            return json_encode(['status' => 'error', 'message' => 'Failed to add holiday']);
+        } catch(PDOException $e) {
+            error_log("Database error in saveHoliday: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function saveDriver($json) {
+    try {
+        // If json is already an array, use it directly, otherwise decode it
+        $data = is_array($json) ? $json : json_decode($json, true);
+
+        if (!$data || !is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        // Required fields check
+        $requiredFields = [
+            'driver_first_name',
+            'driver_last_name',
+            'driver_contact_number',
+            'driver_address',
+            'user_admin_id',
+            'employee_id',
+            'driver_birthdate'
+        ];
+
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field]) || trim($data[$field]) === '') {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => ucwords(str_replace('_', ' ', $field)) . ' is required'
+                ]);
+            }
+        }
+
+        // Check for duplicate driver
+        $checkSql = "SELECT COUNT(*) FROM tbl_driver 
+                    WHERE (driver_first_name = :firstName 
+                    AND driver_last_name = :lastName)
+                    OR employee_id = :employeeId";
+        $checkStmt = $this->conn->prepare($checkSql);
+
+        $firstNameCheck = $data['driver_first_name'];
+        $lastNameCheck = $data['driver_last_name'];
+        $employeeIdCheck = $data['employee_id'];
+        $checkStmt->bindParam(':firstName', $firstNameCheck);
+        $checkStmt->bindParam(':lastName', $lastNameCheck);
+        $checkStmt->bindParam(':employeeId', $employeeIdCheck);
+        $checkStmt->execute();
+
+        if ($checkStmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'This driver already exists or the employee ID is already in use']);
+        }
+
+        // Prepare variables
+        $firstName     = $data['driver_first_name'];
+        $middleName    = $data['driver_middle_name'] ?? null;
+        $lastName      = $data['driver_last_name'];
+        $suffix        = $data['driver_suffix'] ?? null;
+        $birthdate     = $data['driver_birthdate'];
+        $contactNumber = $data['driver_contact_number'];
+        $address       = $data['driver_address'];
+        $adminId       = $data['user_admin_id'];
+        $employeeId    = $data['employee_id'];
+        $isActive      = 1;
+
+        // Insert query
+        $sql = "INSERT INTO tbl_driver (
+            driver_first_name,
+            driver_middle_name,
+            driver_last_name,
+            driver_suffix,
+            driver_birthdate,
+            driver_contact_number,
+            driver_address,
+            employee_id,
+            created_at,
+            updated_at,
+            is_active,
+            user_admin_id
+        ) VALUES (
+            :firstName,
+            :middleName,
+            :lastName,
+            :suffix,
+            :birthdate,
+            :contactNumber,
+            :address,
+            :employeeId,
+            NOW(),
+            NOW(),
+            :isActive,
+            :adminId
+        )";
+
+        $stmt = $this->conn->prepare($sql);
+
+        // Bind values
+        $stmt->bindParam(':firstName', $firstName, PDO::PARAM_STR);
+        $stmt->bindParam(':middleName', $middleName, PDO::PARAM_STR);
+        $stmt->bindParam(':lastName', $lastName, PDO::PARAM_STR);
+        $stmt->bindParam(':suffix', $suffix, PDO::PARAM_STR);
+        $stmt->bindParam(':birthdate', $birthdate, PDO::PARAM_STR);
+        $stmt->bindParam(':contactNumber', $contactNumber, PDO::PARAM_STR);
+        $stmt->bindParam(':address', $address, PDO::PARAM_STR);
+        $stmt->bindParam(':employeeId', $employeeId, PDO::PARAM_STR);
+        $stmt->bindParam(':isActive', $isActive, PDO::PARAM_INT);
+        $stmt->bindParam(':adminId', $adminId, PDO::PARAM_INT);
+
+        if ($stmt->execute()) {
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Driver added successfully'
+            ]);
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Failed to add driver']);
+    } catch (PDOException $e) {
+        error_log("Database error in saveDriver: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function updateDriver($driverData) {
+    try {
+        // Handle driver picture upload if present
+       
+
+        $sql = "UPDATE tbl_driver SET 
+                driver_first_name = :firstName,
+                driver_middle_name = :middleName,
+                driver_last_name = :lastName,
+                driver_suffix = :suffix,
+                employee_id = :employeeId,
+                driver_birthdate = :birthdate,
+                driver_contact_number = :contactNumber,
+                driver_address = :address,
+                is_active = :isActive,
+                updated_at = NOW()";
+
+        // Add picture update only if a new picture was uploaded
+        
+        $sql .= " WHERE driver_id = :driverId";
+
+        $stmt = $this->conn->prepare($sql);
+
+        // Bind the parameters
+        $stmt->bindParam(':firstName', $driverData['first_name']);
+        $stmt->bindParam(':middleName', $driverData['middle_name']);
+        $stmt->bindParam(':lastName', $driverData['last_name']);
+        $stmt->bindParam(':suffix', $driverData['suffix']);
+        $stmt->bindParam(':employeeId', $driverData['employee_id']);
+        $stmt->bindParam(':birthdate', $driverData['birthdate']);
+        $stmt->bindParam(':contactNumber', $driverData['contact_number']);
+        $stmt->bindParam(':address', $driverData['address']);
+        $stmt->bindParam(':isActive', $driverData['is_active'], PDO::PARAM_BOOL);
+        $stmt->bindParam(':driverId', $driverData['driver_id'], PDO::PARAM_INT);
+
+
+
+        if ($stmt->execute()) {
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Driver updated successfully',
+                'driver_id' => $driverData['driver_id']
+            ]);
+        } else {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Could not update driver'
+            ]);
+        }
+    } catch (PDOException $e) {
+        error_log("PDO Exception in updateDriver: " . $e->getMessage());
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        error_log("General Exception in updateDriver: " . $e->getMessage());
+        return json_encode([
+            'status' => 'error',
+            'message' => 'An unexpected error occurred: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function saveEquipment($json) {
+    try {
+        $data = is_array($json) ? $json : json_decode($json, true);
+        if (!is_array($data)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+        }
+
+        // Validate required fields
+        $required = ['name', 'equipments_category_id', 'equip_type', 'user_admin_id'];
+        foreach ($required as $field) {
+            if (empty($data[$field]) || ($field !== 'name' && !is_numeric($data[$field]))) {
+                return json_encode(['status' => 'error', 'message' => "$field is required or invalid"]);
+            }
+        }
+
+        // Check for duplicate equipment name (case-insensitive)
+        $check = $this->conn->prepare("SELECT equip_id FROM tbl_equipments WHERE LOWER(equip_name) = LOWER(:name)");
+        $check->bindParam(':name', $data['name']);
+        $check->execute();
+        if ($check->rowCount() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'Equipment already exists']);
+        }
+
+        // Insert equipment
+        $sql = "INSERT INTO tbl_equipments (
+                    equip_name, equipments_category_id, equip_type,
+                    is_active, user_admin_id, equip_created_at
+                ) VALUES (
+                    :name, :category_id, :type, 1, :admin_id, NOW()
+                )";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['name']);
+        $stmt->bindParam(':category_id', $data['equipments_category_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':type', $data['equip_type']);
+        $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Equipment added successfully', 'equip_id' => $this->conn->lastInsertId()])
+            : json_encode(['status' => 'error', 'message' => 'Failed to insert equipment']);
+
+    } catch (PDOException $e) {
+        error_log("DB error in saveEquipment: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function updateEquipment($data) {
+    try {
+        // Validate required fields
+        $required = ['equip_id', 'equip_name', 'equip_type', 'equipments_category_id'];
+        foreach ($required as $field) {
+            if (empty($data[$field])) {
+                return json_encode(['status' => 'error', 'message' => "$field is required"]);
+            }
+            
+            // Check if numeric fields are actually numeric
+            if (in_array($field, ['equip_id', 'equipments_category_id']) && !is_numeric($data[$field])) {
+                return json_encode(['status' => 'error', 'message' => "$field must be numeric"]);
+            }
+        }
+
+        // Prepare the update statement
+        $sql = "UPDATE tbl_equipments SET 
+                    equip_name = :name, 
+                    equip_type = :type, 
+                    equipments_category_id = :category_id
+                WHERE equip_id = :id";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['equip_name']);
+        $stmt->bindParam(':type', $data['equip_type']);
+        $stmt->bindParam(':category_id', $data['equipments_category_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':id', $data['equip_id'], PDO::PARAM_INT);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Equipment updated successfully'])
+            : json_encode(['status' => 'error', 'message' => 'Failed to update equipment']);
+
+    } catch (PDOException $e) {
+        error_log("Database error in updateEquipment: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+
+
+public function saveVehicle($data) {
+    try {
+        if (is_string($data)) $data = json_decode($data, true);
+        if (!is_array($data)) return json_encode(['status' => 'error', 'message' => 'Invalid input data']);
+
+        foreach (['vehicle_model_id', 'vehicle_license', 'year', 'user_admin_id'] as $field) {
+            if (empty($data[$field])) return json_encode(['status' => 'error', 'message' => ucfirst(str_replace('_', ' ', $field)) . ' is required']);
+        }
+
+        $sql = "INSERT INTO tbl_vehicle (
+                    vehicle_model_id, vehicle_license, year, 
+                    status_availability_id, user_admin_id, 
+                    is_active, created_at, updated_at
+                ) VALUES (
+                    :modelId, :license, :year, 
+                    1, :adminId, 
+                    1, NOW(), NOW()
+                )";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':modelId', $data['vehicle_model_id']);
+        $stmt->bindParam(':license', $data['vehicle_license']);
+        $stmt->bindParam(':year', $data['year']);
+        $stmt->bindParam(':adminId', $data['user_admin_id']);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Vehicle added successfully.'])
+            : json_encode(['status' => 'error', 'message' => 'Failed to add vehicle']);
+    } catch (PDOException $e) {
+        error_log("saveVehicle error: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function updateVehicleLicense($vehicleData) {
+    try {
+        $required = ['vehicle_id', 'vehicle_model_id', 'vehicle_license', 'year', 'status_availability_id', 'user_admin_id', 'is_active'];
+        foreach ($required as $field) {
+            if (!isset($vehicleData[$field])) {
+                return json_encode(['status' => 'error', 'message' => "$field is required"]);
+            }
+        }
+
+        $sql = "UPDATE tbl_vehicle SET 
+                    vehicle_model_id = :model_id,
+                    vehicle_license = :license,
+                    year = :year,
+                    status_availability_id = :status_id,
+                    user_admin_id = :user_admin_id,
+                    is_active = :is_active,
+                    updated_at = NOW()
+                WHERE vehicle_id = :id";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':model_id', $vehicleData['vehicle_model_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':license', $vehicleData['vehicle_license']);
+        $stmt->bindParam(':year', $vehicleData['year']);
+        $stmt->bindParam(':status_id', $vehicleData['status_availability_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':user_admin_id', $vehicleData['user_admin_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':is_active', $vehicleData['is_active'], PDO::PARAM_BOOL);
+        $stmt->bindParam(':id', $vehicleData['vehicle_id'], PDO::PARAM_INT);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Vehicle updated successfully', 'vehicle_id' => $vehicleData['vehicle_id']])
+            : json_encode(['status' => 'error', 'message' => 'Failed to update vehicle']);
+    } catch (PDOException $e) {
+        error_log("Database error in updateVehicleLicense: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+
+
+
+public function saveVenue($data) {
+    error_log("saveVenue received data: " . print_r($data, true));
+
+    try {
+        if (!isset($data['user_admin_id'])) {
+            return json_encode(['status' => 'error', 'message' => 'Admin ID is required']);
+        }
+        if (!isset($data['name']) || !isset($data['occupancy'])) {
+            return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
+        }
+        if ($this->venueExists($data['name'])) {
+            return json_encode(['status' => 'error', 'message' => 'This venue name is already in use.']);
+        }
+
+        $sql = "INSERT INTO tbl_venue (
+            ven_name, ven_occupancy, ven_created_at, ven_updated_at, 
+            status_availability_id, is_active, user_admin_id
+        ) VALUES (
+            :name, :occupancy, NOW(), NOW(), 
+            1, 1, :admin_id
+        )";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
+        $stmt->bindParam(':occupancy', $data['occupancy'], PDO::PARAM_INT);
+        $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
+
+        if ($stmt->execute()) {
+            return json_encode(['status' => 'success', 'message' => 'Venue added successfully']);
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Failed to add venue']);
+    } catch(PDOException $e) {
+        error_log("Database error: " . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+public function updateVenue($venueData) {
+    try {
+        if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'])) {
+            return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
+        }
+
+        $sql = "UPDATE tbl_venue SET 
+                    ven_name = :venue_name, 
+                    ven_occupancy = :max_occupancy,
+                    status_availability_id = :status_availability_id
+                WHERE ven_id = :venue_id";
+
+        $stmt = $this->conn->prepare($sql);
+
+        $stmt->bindParam(':venue_name', $venueData['venue_name']);
+        $stmt->bindParam(':max_occupancy', $venueData['max_occupancy']);
+        $stmt->bindParam(':status_availability_id', $venueData['status_availability_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
+
+        return $stmt->execute()
+            ? json_encode(['status' => 'success', 'message' => 'Venue updated successfully'])
+            : json_encode(['status' => 'error', 'message' => 'Could not update venue']);
+    } catch (PDOException $e) {
+        error_log('Database error in updateVenue: ' . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+
+
+    public function saveUser($data) {
+    try {
+        // Ensure schoolId is treated as a string
+        if (isset($data['schoolId'])) {
+            $data['schoolId'] = (string) $data['schoolId'];
+        }
+
+        // Handle base64 image
+        $picPath = null;
+        if (isset($data['pic']) && !empty($data['pic'])) {
+            $uploadDir = 'uploads/';
+            if (!file_exists($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+
+            // Get file data and type from base64 string
+            $image_parts = explode(";base64,", $data['pic']);
+            $image_type_aux = explode("image/", $image_parts[0]);
+            $image_type = $image_type_aux[1];
+            $image_base64 = base64_decode($image_parts[1]);
+
+            // Generate unique filename using timestamp
+            $filename = 'profile_' . time() . '.' . $image_type;
+            $picPath = $uploadDir . $filename;
+
+            file_put_contents($picPath, $image_base64);
+        }
+
+        // Hash the password before saving
+        $hashedPassword = password_hash($data['password'], PASSWORD_BCRYPT);
+
+        // Updated SQL statement to include title_id
+        $sql = "INSERT INTO tbl_users (
+                    title_id,
+                    users_fname, users_mname, users_lname, 
+                    users_email, users_school_id, users_contact_number, 
+                    users_user_level_id, users_password, users_department_id, 
+                    users_birthdate, users_suffix, users_pic, 
+                    users_created_at, users_updated_at
+                ) VALUES (
+                    :title_id,
+                    :fname, :mname, :lname, 
+                    :email, :schoolId, :contact, 
+                    :userLevelId, :password, :departmentId, 
+                    :birthdate, :suffix, :pic, 
+                    NOW(), NOW()
+                )";
+
+        $stmt = $this->conn->prepare($sql);
+
+        // Bind parameters
+        $stmt->bindParam(':title_id', $data['title_id'], PDO::PARAM_INT); // Nullable INT
+        $stmt->bindParam(':fname', $data['fname'], PDO::PARAM_STR);
+        $stmt->bindParam(':mname', $data['mname'], PDO::PARAM_STR);
+        $stmt->bindParam(':lname', $data['lname'], PDO::PARAM_STR);
+        $stmt->bindParam(':email', $data['email'], PDO::PARAM_STR);
+        $stmt->bindParam(':schoolId', $data['schoolId'], PDO::PARAM_STR);
+        $stmt->bindParam(':contact', $data['contact'], PDO::PARAM_STR);
+        $stmt->bindParam(':userLevelId', $data['userLevelId'], PDO::PARAM_INT);
+        $stmt->bindParam(':password', $hashedPassword, PDO::PARAM_STR);
+        $stmt->bindParam(':departmentId', $data['departmentId'], PDO::PARAM_INT);
+        $stmt->bindParam(':birthdate', $data['birthdate'], PDO::PARAM_STR);
+        $stmt->bindParam(':suffix', $data['suffix'], PDO::PARAM_STR);
+        $stmt->bindParam(':pic', $picPath, PDO::PARAM_STR);
+
+        if ($stmt->execute()) {
+            return json_encode(['status' => 'success', 'message' => 'User added successfully.']);
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Failed to add user.']);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+  public function updateUser($userData) {
+    // Build the SQL query dynamically based on whether password is provided
+    $sql = "UPDATE tbl_users SET 
+                title_id = :title_id,
+                users_fname = :fname,
+                users_mname = :mname,
+                users_lname = :lname,
+                users_birthdate = :birthdate,
+                users_suffix = :suffix,
+                users_email = :email,
+                users_school_id = :schoolId,
+                users_contact_number = :contact,
+                users_user_level_id = :userLevelId,
+                users_department_id = :departmentId,
+                users_pic = :pic,
+                users_updated_at = NOW(),
+                is_active = :isActive";
+
+    // Only include password in update if it's provided
+    if (isset($userData['password']) && !empty($userData['password'])) {
+        $sql .= ", users_password = :password";
+    }
+
+    $sql .= " WHERE users_id = :userId";
+
+    $stmt = $this->conn->prepare($sql);
+
+    // Bind all parameters
+    $stmt->bindParam(':title_id', $userData['title_id'], PDO::PARAM_INT);
+    $stmt->bindParam(':fname', $userData['fname']);
+    $stmt->bindParam(':mname', $userData['mname']);
+    $stmt->bindParam(':lname', $userData['lname']);
+    $stmt->bindParam(':birthdate', $userData['birthdate']);
+    $stmt->bindParam(':suffix', $userData['suffix']);
+    $stmt->bindParam(':email', $userData['email']);
+    $stmt->bindParam(':schoolId', $userData['schoolId']);
+    $stmt->bindParam(':contact', $userData['contact']);
+    $stmt->bindParam(':userLevelId', $userData['userLevelId']);
+    $stmt->bindParam(':departmentId', $userData['departmentId']);
+    $stmt->bindParam(':pic', $userData['pic']);
+    $stmt->bindParam(':isActive', $userData['isActive'], PDO::PARAM_BOOL);
+    $stmt->bindParam(':userId', $userData['userId'], PDO::PARAM_INT);
+
+    // Hash and bind password only if provided
+    if (isset($userData['password']) && !empty($userData['password'])) {
+        $hashedPassword = password_hash($userData['password'], PASSWORD_DEFAULT);
+        $stmt->bindParam(':password', $hashedPassword);
+    }
+
+    return $stmt->execute()
+        ? json_encode(['status' => 'success', 'message' => 'User updated successfully'])
+        : json_encode(['status' => 'error', 'message' => 'Could not update user']);
+}
+
+
+public function venueExists($venueName) {
+        try {
+            $sql = "SELECT COUNT(*) FROM tbl_venue WHERE ven_name = :name";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $venueName);
+            $stmt->execute();
+            return $stmt->fetchColumn() > 0;
+        } catch(PDOException $e) {
+            return false; // Treat as not existing on error
+        }
+    }
+
+
+
+
 }
 
 // Handle the request
@@ -2123,6 +3157,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
+        case "saveDriver":
+            echo $user->saveDriver($input);
+            break;
+        case "saveHoliday":
+            echo $user->saveHoliday($input);
+            break;
+        case "updateDriver":
+            echo $user->updateDriver($input);
+            break;  
+
+
+        case "saveVenue":
+            echo $user->saveVenue($input);
+            break;
+
+        case "updateVenue":
+            echo $user->updateVenue($input);
+            break;
+
+        case "saveVehicle":
+            echo $user->saveVehicle($input);
+            break;
+
+        case "updateVehicleLicense":
+            echo $user->updateVehicleLicense($input);
+            break;
+
+        case "saveEquipment":
+            echo $user->saveEquipment($input);
+            break;
+
+        case "updateEquipment":
+            echo $user->updateEquipment($input);
+            break;
+        case "saveUnit":
+            echo $user->saveUnit($input);
+            break;
+        case "updateUnit":
+            echo $user->updateUnit($input);
+            break;
+        case "saveStock":
+            echo $user->saveStock($input);
+            break;
+        case "saveUser":
+            echo $user->saveUser($input);
+            break;
+        case "updateUser":
+            echo $user->updateUser($input);
+            break;
+
+        case "handleReview":
+            $reservationId = $input['reservationId'] ?? null;
+            $userId = $input['userId'] ?? null;
+            
+            if (!$reservationId || !$userId) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing reservation ID or user ID']);
+                break;
+            }
+            echo $user->handleReview($reservationId, $userId);
+            break;
+           
+
+        case "fetchVenueScheduled":
+            echo $user->fetchVenueScheduled();
+            break;
 
         case "fetchTitle":
             echo $user->fetchTitle();
