@@ -277,15 +277,15 @@ class User {
 
     
 
-    public function fetchAllVehicles() {
+public function fetchAllVehicles() {
     $sql = "SELECT  
                 v.vehicle_id,
                 v.vehicle_license,
                 v.year,
                 v.vehicle_pic,
                 v.status_availability_id,
-                v.vehicle_make_name, 
-                v.vehicle_category_name,
+                vmk.vehicle_make_name, 
+                vc.vehicle_category_name,
                 vmd.vehicle_model_name,
                 sa.status_availability_name,
                 v.is_active
@@ -293,6 +293,10 @@ class User {
                 tbl_vehicle v
             INNER JOIN
                 tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
+            INNER JOIN
+                tbl_vehicle_make vmk ON vmd.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+            INNER JOIN
+                tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
             INNER JOIN
                 tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
             WHERE 
@@ -308,7 +312,6 @@ class User {
                     eu.unit_id, 
                     eu.equip_id, 
                     eu.serial_number,
-                    eu.quantity,
                     e.equip_name
                 FROM 
                     tbl_equipment_unit eu
