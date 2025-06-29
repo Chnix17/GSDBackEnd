@@ -299,25 +299,53 @@ class Reservation {
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
     }
-    public function insertDriver($reservationId, $driverId = null) {
+  
+    public function insertDriver($reservationId, $drivers = null) {
         try {
-            $sql = "INSERT INTO tbl_reservation_driver 
-                    (reservation_reservation_id, reservation_driver_user_id, is_accepted_trip) 
-                    VALUES (:reservation_id, :driver_id, :is_accepted_trip)";
-
+            $sql = "INSERT INTO tbl_reservation_driver (reservation_reservation_id, reservation_driver_user_id, driver_name, reservation_vehicle_id) VALUES (:reservation_id, :driver_id, :driver_name, :reservation_vehicle_id)";
             $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':reservation_id', $reservationId);
-            $stmt->bindParam(':driver_id', $driverId);
-            
-            // If driver_id is null, set is_accepted_trip to 0
-            // If driver_id is provided, set is_accepted_trip to null
-            $isAcceptedTrip = ($driverId === null) ? 0 : null;
-            $stmt->bindParam(':is_accepted_trip', $isAcceptedTrip);
+            $errors = [];
 
-            if ($stmt->execute()) {
-                return ['status' => 'success', 'message' => 'Driver assignment processed successfully.'];
+            // Normalize input to array of drivers
+            if (is_null($drivers)) {
+                $drivers = [];
+            } elseif (is_string($drivers)) {
+                $drivers = [['name' => $drivers]];
+            } elseif (is_array($drivers) && isset($drivers['name'])) {
+                // Single driver object with 'name'
+                $drivers = [$drivers];
+            } elseif (!is_array($drivers) || (is_array($drivers) && array_keys($drivers) === range(0, count($drivers) - 1))) {
+                // Already an array of drivers or single value
+                $drivers = is_array($drivers) ? $drivers : [$drivers];
+            } else {
+                $drivers = [$drivers];
             }
-            return ['status' => 'error', 'message' => 'Failed to process driver assignment.'];
+
+            foreach ($drivers as $driver) {
+                $userId = null;
+                $name = null;
+                $vehicleId = null;
+                if (is_array($driver)) {
+                    $userId = isset($driver['user_id']) ? $driver['user_id'] : null;
+                    $name = array_key_exists('name', $driver) ? $driver['name'] : null;
+                    $vehicleId = isset($driver['reservation_vehicle_id']) ? $driver['reservation_vehicle_id'] : (isset($driver['vehicle_id']) ? $driver['vehicle_id'] : null);
+                } elseif (is_numeric($driver)) {
+                    $userId = $driver;
+                } elseif (is_string($driver)) {
+                    $name = $driver;
+                }
+                $stmt->bindValue(':reservation_id', $reservationId, \PDO::PARAM_INT);
+                $stmt->bindValue(':driver_id', $userId, is_null($userId) ? \PDO::PARAM_NULL : \PDO::PARAM_INT);
+                $stmt->bindValue(':driver_name', $name, is_null($name) ? \PDO::PARAM_NULL : \PDO::PARAM_STR);
+                $stmt->bindValue(':reservation_vehicle_id', $vehicleId, is_null($vehicleId) ? \PDO::PARAM_NULL : \PDO::PARAM_INT);
+                if (!$stmt->execute()) {
+                    $errors[] = 'Failed to insert driver: ' . (is_null($userId) ? $name : $userId);
+                }
+            }
+            if (!empty($errors)) {
+                return ['status' => 'error', 'message' => implode('; ', $errors)];
+            }
+            return ['status' => 'success', 'message' => 'All drivers inserted successfully.'];
         } catch (PDOException $e) {
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
@@ -903,17 +931,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception($vehicleResult['message']);
                 }
 
+                // Map vehicle_id to reservation_vehicle_id for this reservation
+                $vehicleIds = $input['form_data']['vehicles'];
+                $reservationId = $reservationResult['reservation_id'];
+                $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+                $sql = "SELECT reservation_vehicle_id, reservation_vehicle_vehicle_id FROM tbl_reservation_vehicle WHERE reservation_reservation_id = ? AND reservation_vehicle_vehicle_id IN ($placeholders)";
+                $stmt = $reservation->conn->prepare($sql);
+                $params = array_merge([$reservationId], $vehicleIds);
+                $stmt->execute($params);
+                $vehicleMap = [];
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $vehicleMap[$row['reservation_vehicle_vehicle_id']] = $row['reservation_vehicle_id'];
+                }
+
                 // Insert passengers
                 $passengerResult = $reservation->insertPassengers($reservationResult['reservation_id'], $input['form_data']['passengers']);
                 if ($passengerResult['status'] !== 'success') {
                     throw new Exception($passengerResult['message']);
                 }
 
-                // Get the driver_id from input, it can be null or a specific ID
-                $driverId = isset($input['form_data']['driver_id']) ? $input['form_data']['driver_id'] : null;
-                
-                // Always insert driver record with whatever driver_id was provided (can be null)
-                $driverResult = $reservation->insertDriver($reservationResult['reservation_id'], $driverId);
+                // Get the drivers array from input, each with vehicle_id
+                $drivers = isset($input['form_data']['drivers']) ? $input['form_data']['drivers'] : null;
+                // Map vehicle_id to reservation_vehicle_id for each driver
+                if (is_array($drivers)) {
+                    foreach ($drivers as &$driver) {
+                        if (isset($driver['vehicle_id']) && isset($vehicleMap[$driver['vehicle_id']])) {
+                            $driver['reservation_vehicle_id'] = $vehicleMap[$driver['vehicle_id']];
+                        } else {
+                            $driver['reservation_vehicle_id'] = null;
+                        }
+                    }
+                    unset($driver);
+                }
+                // Insert driver records with reservation_vehicle_id
+                $driverResult = $reservation->insertDriver($reservationResult['reservation_id'], $drivers);
                 if ($driverResult['status'] !== 'success') {
                     throw new Exception($driverResult['message']);
                 }
