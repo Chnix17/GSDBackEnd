@@ -77,10 +77,6 @@ class VehicleMake {
         return $this->executeQuery($sql);
     }
 
-    public function fetchPositionById($id) {
-        $sql = "SELECT position_id, position_name FROM tbl_personnel_position WHERE position_id = :id";
-        return $this->executeQuery($sql, [':id' => $id]);
-    }
 
     // New method to fetch equipment categories
     public function fetchEquipments() {
@@ -547,6 +543,7 @@ public function fetchUsersById($id) {
         INNER JOIN tbl_status_availability sa 
             ON v.status_availability_id = sa.status_availability_id
         WHERE v.is_active = 1
+        ORDER BY v.vehicle_id DESC
     ";
 
     return $this->executeQuery($sql);

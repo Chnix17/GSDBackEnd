@@ -217,62 +217,7 @@ class User {
         return $this->executeQuery($sql);
     }
 
-    public function fetchChatHistory($userId) {
-        $sql = "SELECT 
-                    c.chat_id,
-                    c.sender_id,
-                    c.receiver_id,
-                    c.message,
-                    c.created_at,
-                    c.updated_at,
-                    sender.users_pic as sender_pic,
-                    receiver.users_pic as receiver_pic,
-                    sender.users_fname as sender_fname,
-                    sender.users_lname as sender_lname,
-                    receiver.users_fname as receiver_fname,
-                    receiver.users_lname as receiver_lname
-                FROM 
-                    tbl_chat c
-                INNER JOIN 
-                    tbl_users sender ON c.sender_id = sender.users_id
-                INNER JOIN
-                    tbl_users receiver ON c.receiver_id = receiver.users_id
-                WHERE 
-                    c.sender_id = ? OR c.receiver_id = ?
-                ORDER BY 
-                    c.created_at ASC";
-        
-        return $this->executeQuery($sql, [$userId, $userId]);
-    }
 
-    public function fetchNewMessages($userId, $lastMessageId) {
-        $sql = "SELECT 
-                    c.chat_id,
-                    c.sender_id,
-                    c.receiver_id,
-                    c.message,
-                    c.created_at,
-                    c.updated_at,
-                    sender.users_pic as sender_pic,
-                    receiver.users_pic as receiver_pic,
-                    sender.users_fname as sender_fname,
-                    sender.users_lname as sender_lname,
-                    receiver.users_fname as receiver_fname,
-                    receiver.users_lname as receiver_lname
-                FROM 
-                    tbl_chat c
-                INNER JOIN 
-                    tbl_users sender ON c.sender_id = sender.users_id
-                INNER JOIN
-                    tbl_users receiver ON c.receiver_id = receiver.users_id
-                WHERE 
-                    (c.sender_id = ? OR c.receiver_id = ?)
-                    AND c.chat_id > ?
-                ORDER BY 
-                    c.created_at DESC";
-        
-        return $this->executeQuery($sql, [$userId, $userId, $lastMessageId]);
-    }
 
     public function __destruct() {
         unset($this->conn);

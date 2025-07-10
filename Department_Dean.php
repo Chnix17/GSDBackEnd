@@ -66,6 +66,7 @@ class Department_Dean {
                 GROUP_CONCAT(DISTINCT
                     CONCAT_WS(':',
                         ve.reservation_vehicle_vehicle_id,
+                        ve.reservation_vehicle_id,
                         vm.vehicle_license,
                         vmm.vehicle_model_name
                     )
@@ -79,15 +80,6 @@ class Department_Dean {
                         e.reservation_equipment_quantity
                     )
                 ) AS equipment_data,
-
-                -- Driver assignment
-                d.reservation_driver_id,
-                d.reservation_driver_user_id       AS driver_id,
-                CONCAT_WS(' ',
-                    drv.driver_first_name,
-                    drv.driver_middle_name,
-                    drv.driver_last_name
-                )                                    AS driver_name,
 
                 -- Passengers
                 GROUP_CONCAT(DISTINCT
@@ -118,10 +110,6 @@ class Department_Dean {
               ON r.reservation_id = e.reservation_reservation_id
             LEFT JOIN tbl_equipments equip 
               ON e.reservation_equipment_equip_id = equip.equip_id
-            LEFT JOIN tbl_reservation_driver d 
-              ON r.reservation_id = d.reservation_reservation_id
-            LEFT JOIN tbl_driver drv 
-              ON d.reservation_driver_user_id = drv.driver_id
             LEFT JOIN tbl_reservation_passenger p 
               ON r.reservation_id = p.reservation_reservation_id
 
@@ -195,11 +183,12 @@ class Department_Dean {
 
             if (!empty($row['vehicle_data'])) {
                 foreach (explode(',', $row['vehicle_data']) as $str) {
-                    list($vid,$license,$model) = explode(':', $str) + [null,null,null];
+                    list($vehicle_vehicle_id, $reservation_vehicle_id, $license, $model) = explode(':', $str) + [null,null,null,null];
                     $vehicles[] = [
-                        'vehicle_id' => $vid,
-                        'license'    => $license,
-                        'model'      => $model
+                        'vehicle_vehicle_id'      => $vehicle_vehicle_id,
+                        'reservation_vehicle_id'  => $reservation_vehicle_id,
+                        'license'                 => $license,
+                        'model'                   => $model
                     ];
                 }
             }
@@ -215,45 +204,34 @@ class Department_Dean {
                 }
             }
 
-            // Fetch all drivers for this reservation
-            $driverStmt = $this->conn->prepare("SELECT reservation_driver_id, reservation_driver_user_id, driver_name, created_at, updated_at, reservation_vehicle_id FROM tbl_reservation_driver WHERE reservation_reservation_id = :reservation_id");
+            // Fetch all drivers for this reservation (with fallback to driver_name if user_id is null)
+            $driverStmt = $this->conn->prepare(
+                "SELECT rd.reservation_driver_id, rd.reservation_driver_user_id, rd.reservation_vehicle_id, rd.is_accepted_trip, rd.driver_name, rd.created_at, rd.updated_at, u.users_fname, u.users_mname, u.users_lname, u.users_suffix
+                 FROM tbl_reservation_driver rd
+                 JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
+                 LEFT JOIN tbl_users u ON rd.reservation_driver_user_id = u.users_id
+                 WHERE rv.reservation_reservation_id = :reservation_id"
+            );
             $driverStmt->execute([':reservation_id' => $row['reservation_id']]);
             while ($driverRow = $driverStmt->fetch(PDO::FETCH_ASSOC)) {
-                $driverName = null;
-                if (!empty($driverRow['reservation_driver_user_id'])) {
-                    // Try to get the joined name from tbl_driver
-                    $nameStmt = $this->conn->prepare("SELECT CONCAT_WS(' ', driver_first_name, driver_middle_name, driver_last_name) AS full_name FROM tbl_driver WHERE driver_id = :driver_id");
-                    $nameStmt->execute([':driver_id' => $driverRow['reservation_driver_user_id']]);
-                    $nameResult = $nameStmt->fetch(PDO::FETCH_ASSOC);
-                    $driverName = $nameResult && !empty($nameResult['full_name']) ? $nameResult['full_name'] : null;
-                }
-                if (empty($driverName)) {
+                if (empty($driverRow['reservation_driver_user_id'])) {
                     $driverName = $driverRow['driver_name'];
+                } else {
+                    $driverName = trim(
+                        $driverRow['users_fname'] . ' ' .
+                        ($driverRow['users_mname'] ? $driverRow['users_mname'] . ' ' : '') .
+                        $driverRow['users_lname'] .
+                        ($driverRow['users_suffix'] ? ' ' . $driverRow['users_suffix'] : '')
+                    );
                 }
-
-                // Fetch assigned vehicle for this driver (if any)
-                $assignedVehicle = null;
-                if (!empty($driverRow['reservation_vehicle_id'])) {
-                    $vehicleStmt = $this->conn->prepare("SELECT ve.reservation_vehicle_id, ve.reservation_vehicle_vehicle_id AS vehicle_id, v.vehicle_license, vmm.vehicle_model_name AS model FROM tbl_reservation_vehicle ve LEFT JOIN tbl_vehicle v ON ve.reservation_vehicle_vehicle_id = v.vehicle_id LEFT JOIN tbl_vehicle_model vmm ON v.vehicle_model_id = vmm.vehicle_model_id WHERE ve.reservation_vehicle_id = :reservation_vehicle_id");
-                    $vehicleStmt->execute([':reservation_vehicle_id' => $driverRow['reservation_vehicle_id']]);
-                    $vehicleRow = $vehicleStmt->fetch(PDO::FETCH_ASSOC);
-                    if ($vehicleRow) {
-                        $assignedVehicle = [
-                            'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
-                            'vehicle_id' => $vehicleRow['vehicle_id'],
-                            'license' => $vehicleRow['vehicle_license'],
-                            'model' => $vehicleRow['model']
-                        ];
-                    }
-                }
-
                 $drivers[] = [
                     'reservation_driver_id' => $driverRow['reservation_driver_id'],
                     'driver_id' => $driverRow['reservation_driver_user_id'],
                     'name' => $driverName,
                     'created_at' => $driverRow['created_at'],
                     'updated_at' => $driverRow['updated_at'],
-                    'assigned_vehicle' => $assignedVehicle
+                    'reservation_vehicle_id' => $driverRow['reservation_vehicle_id'],
+                    'assigned_vehicle' => null // You can add vehicle details if needed
                 ];
             }
 

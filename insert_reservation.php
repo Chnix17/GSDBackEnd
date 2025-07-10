@@ -300,9 +300,9 @@ class Reservation {
         }
     }
   
-    public function insertDriver($reservationId, $drivers = null) {
+    public function insertDriver($drivers = null) {
         try {
-            $sql = "INSERT INTO tbl_reservation_driver (reservation_reservation_id, reservation_driver_user_id, driver_name, reservation_vehicle_id) VALUES (:reservation_id, :driver_id, :driver_name, :reservation_vehicle_id)";
+            $sql = "INSERT INTO tbl_reservation_driver (reservation_driver_user_id, driver_name, reservation_vehicle_id) VALUES (:driver_id, :driver_name, :reservation_vehicle_id)";
             $stmt = $this->conn->prepare($sql);
             $errors = [];
 
@@ -334,7 +334,6 @@ class Reservation {
                 } elseif (is_string($driver)) {
                     $name = $driver;
                 }
-                $stmt->bindValue(':reservation_id', $reservationId, \PDO::PARAM_INT);
                 $stmt->bindValue(':driver_id', $userId, is_null($userId) ? \PDO::PARAM_NULL : \PDO::PARAM_INT);
                 $stmt->bindValue(':driver_name', $name, is_null($name) ? \PDO::PARAM_NULL : \PDO::PARAM_STR);
                 $stmt->bindValue(':reservation_vehicle_id', $vehicleId, is_null($vehicleId) ? \PDO::PARAM_NULL : \PDO::PARAM_INT);
@@ -964,7 +963,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     unset($driver);
                 }
                 // Insert driver records with reservation_vehicle_id
-                $driverResult = $reservation->insertDriver($reservationResult['reservation_id'], $drivers);
+                $driverResult = $reservation->insertDriver($drivers);
                 if ($driverResult['status'] !== 'success') {
                     throw new Exception($driverResult['message']);
                 }

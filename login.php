@@ -195,7 +195,7 @@ class Login {
                         4 => 'Super Admin',
                         5 => 'Dean',
                         6 => 'Secretary',
-                        13 => 'Driver',
+                        19 => 'Driver',
                         15 => 'School Head',
                         16 => 'SBO PRESIDENT',
                         17 => 'CSG PRESIDENT',
@@ -207,9 +207,9 @@ class Login {
                         'status' => 'success',
                         'data' => [
                             'user_id' => $user['users_id'],
-                            'firstname' => $user['users_fname'],
-                            'middlename' => $user['users_mname'],
-                            'lastname' => $user['users_lname'],
+                            'firstname' => $user['users_fname'] ?? '',
+                            'middlename' => $user['users_mname'] ?? '',
+                            'lastname' => $user['users_lname'] ?? '',
                             'school_id' => $user['users_school_id'],
                             'contact_number' => $user['users_contact_number'],
                             'user_level_name' => $userLevelMap[$user['users_user_level_id']] ?? 'Unknown',
@@ -222,7 +222,8 @@ class Login {
                             'updated_at' => $user['users_updated_at'],
                             'password' => $json['password'],
                             'email' => $user['users_email'],
-                            'is_2FAactive' => $user['is_2FAactive'] ?? 0
+                            'is_2FAactive' => $user['is_2FAactive'] ?? 0,
+                            'first_login' => (bool)$user['first_login']
                         ]
                     ]);
                 }
@@ -309,6 +310,25 @@ class Login {
             ]);
         }
     }
+
+    public function updateFirstLogin($users_id) {
+        try {
+            $sql = "UPDATE tbl_users SET first_login = 0 WHERE users_id = :users_id";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':users_id', $users_id, PDO::PARAM_INT);
+            $stmt->execute();
+            return json_encode([
+                'status' => 'success',
+                'message' => 'First login updated successfully.'
+            ]);
+        } catch (PDOException $e) {
+            error_log("Error updating first_login: " . $e->getMessage());
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error while updating first_login.'
+            ]);
+        }
+    }
 }
 
 // Handle the request
@@ -356,6 +376,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             echo $login->checkEmailExists($email);
+            break;
+        case "updateFirstLogin":
+            $users_id = $input['json']['users_id'] ?? '';
+            if (empty($users_id)) {
+                echo json_encode(['status' => 'error', 'message' => 'users_id is required']);
+                break;
+            }
+            echo $login->updateFirstLogin($users_id);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

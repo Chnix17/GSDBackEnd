@@ -37,39 +37,7 @@ class Vehicle {
     }
 
 
-    public function personnelPositionExists($positionName) {
-        try {
-            $sql = "SELECT COUNT(*) FROM tbl_personnel_position WHERE position_name = :name";
-            $stmt = $this->conn->prepare($sql);
-            // Fixed the typo in variable name
-            $stmt->bindParam(':name', $positionName); 
-            $stmt->execute();
-            return $stmt->fetchColumn() > 0;
-        } catch(PDOException $e) {
-            return false; // Treat as not existing on error
-        }
-    }
-    
-    // Insert personnel position
-    public function savePositionData($json) {
-        $json = json_decode($json, true);
-        
-        // Updated method call to correct method name
-        if ($this->personnelPositionExists($json['position_name'])) {
-            return json_encode(['status' => 'error', 'message' => 'Position already exists.']);
-        }
-        
-        try {
-            $sql = "INSERT INTO tbl_personnel_position (position_name) VALUES (:name)";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $json['position_name']);
-            $stmt->execute();
-            return json_encode(['status' => 'success', 'message' => 'Position added successfully.']);
-        } catch(PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
-        }
-    }
-    
+
 
 
     public function modelExists($modelName) {
@@ -92,25 +60,15 @@ class Vehicle {
     error_log(print_r($data, true)); 
 
     try {
-        // Check if the model already exists for the same category and make
-        $checkSql = "SELECT COUNT(*) FROM tbl_vehicle_model 
-                     WHERE vehicle_model_name = :name 
-                     AND vehicle_category_id = :category_id 
-                     AND vehicle_model_vehicle_make_id = :make_id";
-        $checkStmt = $this->conn->prepare($checkSql);
-          // Prepare bind variables
+        // Check if the model name already exists globally (unique across all models)
+        if ($this->modelExists($data['name'])) {
+            return json_encode(['status' => 'error', 'message' => 'This vehicle model name already exists.']);
+        }
+
+        // Prepare bind variables
         $name = $data['name'];
         $category_id = $data['category_id'];
         $make_id = $data['make_id'];
-
-        $checkStmt->bindParam(':name', $name, PDO::PARAM_STR);
-        $checkStmt->bindParam(':category_id', $category_id, PDO::PARAM_INT);
-        $checkStmt->bindParam(':make_id', $make_id, PDO::PARAM_INT);
-        $checkStmt->execute();
-
-        if ($checkStmt->fetchColumn() > 0) {
-            return json_encode(['status' => 'error', 'message' => 'This vehicle model already exists under the same category and make.']);
-        }
 
         // Insert if not existing
         $sql = "INSERT INTO tbl_vehicle_model (vehicle_model_name, vehicle_category_id, vehicle_model_vehicle_make_id) 
@@ -193,8 +151,7 @@ class Vehicle {
         $data = json_decode($json, true);
     }
     
-    // Log the incoming data
-    error_log("Incoming data for make: " . print_r($data, true));
+
 
     if ($this->makeExists($data['vehicle_make_name'])) {
         return json_encode(['status' => 'error', 'message' => 'Make already exists.']);

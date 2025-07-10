@@ -1156,7 +1156,7 @@ class User {
             $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
 
             if ($equipType === 'consumable') {
-                // Deduct quantity
+                // Check available quantity (but don't deduct)
                 $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
                 $stmtQty->execute([':equip_id' => $equipId]);
                 $qtyData = $stmtQty->fetch(PDO::FETCH_ASSOC);
@@ -1166,11 +1166,12 @@ class User {
                     throw new Exception("Not enough quantity for consumable equipment ID $equipId. Only $availableQty available.");
                 }
 
-                $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
-                $stmtUpdateQty->execute([
-                    ':qty' => $quantity,
-                    ':equip_id' => $equipId
-                ]);
+                // Commented out quantity deduction for consumable equipment
+                // $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
+                // $stmtUpdateQty->execute([
+                //     ':qty' => $quantity,
+                //     ':equip_id' => $equipId
+                // ]);
 
                 $results[] = [
                     'equip_id' => $equipId,

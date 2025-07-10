@@ -48,7 +48,7 @@ class FacultyStaff {
                 ON sm.status_master_id = rs_filtered.reservation_status_status_id
 
             WHERE r.reservation_user_id = :userId
-            ORDER BY r.reservation_start_date DESC
+            ORDER BY r.reservation_id DESC
         ";
 
         $stmt = $this->conn->prepare($query);
