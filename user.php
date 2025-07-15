@@ -511,7 +511,36 @@ public function fetchEquipmentsWithStatus() {
                         r.reservation_start_date,
                         r.reservation_end_date,
                         rs.reservation_status_status_id,
-                        rs.reservation_active
+                        rs.reservation_active,
+                        (
+                            SELECT COUNT(DISTINCT u.users_id)
+                            FROM tbl_users u
+                            WHERE u.users_user_level_id = 19
+                                AND u.is_active = 1
+                                AND u.users_id NOT IN (
+                                    SELECT DISTINCT rd.reservation_driver_user_id
+                                    FROM tbl_reservation_driver rd
+                                    INNER JOIN tbl_reservation_vehicle rv2 ON rd.reservation_vehicle_id = rv2.reservation_vehicle_id
+                                    INNER JOIN tbl_reservation r2 ON rv2.reservation_reservation_id = r2.reservation_id
+                                    INNER JOIN tbl_reservation_status rs2 ON r2.reservation_id = rs2.reservation_reservation_id
+                                    WHERE 
+                                        (
+                                            (rs2.reservation_status_status_id = 1 AND (rs2.reservation_active = 1 OR rs2.reservation_active = -1 OR rs2.reservation_active IS NULL))
+                                            OR (rs2.reservation_status_status_id = 6 AND rs2.reservation_active = 1)
+                                        )
+                                        AND r2.reservation_id NOT IN (
+                                            SELECT DISTINCT reservation_reservation_id 
+                                            FROM tbl_reservation_status 
+                                            WHERE reservation_status_status_id IN (2, 5)
+                                        )
+                                        AND (
+                                            (r2.reservation_start_date BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                                            OR (r2.reservation_end_date BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                                            OR (r.reservation_start_date BETWEEN r2.reservation_start_date AND r2.reservation_end_date)
+                                            OR (r.reservation_end_date BETWEEN r2.reservation_start_date AND r2.reservation_end_date)
+                                        )
+                                )
+                        ) AS available_drivers_count
                     FROM tbl_vehicle v
                     LEFT JOIN tbl_vehicle_model vmd
                         ON v.vehicle_model_id = vmd.vehicle_model_id
@@ -524,15 +553,15 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN tbl_reservation_status rs
                         ON r.reservation_id = rs.reservation_reservation_id
                     WHERE v.vehicle_id IN ($placeholders)
-                       AND (
+                    AND (
                         (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
                         OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                      )
-                      AND r.reservation_id NOT IN (
-                          SELECT DISTINCT reservation_reservation_id 
-                          FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
-                      )
+                    )
+                    AND r.reservation_id NOT IN (
+                        SELECT DISTINCT reservation_reservation_id 
+                        FROM tbl_reservation_status 
+                        WHERE reservation_status_status_id IN (2, 5)
+                    )
                     GROUP BY
                         v.vehicle_id, v.vehicle_license,
                         vm.vehicle_make_name, vmd.vehicle_model_name,
@@ -543,14 +572,13 @@ public function fetchEquipmentsWithStatus() {
                 ";
                 $stmt = $this->conn->prepare($sql);
                 $stmt->execute($itemIds);
-    
+
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($results as &$result) {
                     $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
                     $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
                         ? 'Reserved' : 'Available';
                 }
-    
             } elseif ($itemType === 'equipment') {
                 $sql = "
                     SELECT
@@ -684,10 +712,9 @@ public function fetchEquipmentsWithStatus() {
                 INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
                 INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
                 WHERE 
-                    (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    )
+                  
+                        (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
+ 
                     AND r.reservation_id NOT IN (
                         SELECT DISTINCT reservation_reservation_id 
                         FROM tbl_reservation_status 
@@ -727,6 +754,94 @@ public function fetchEquipmentsWithStatus() {
             $drivers = $stmt->fetchAll(PDO::FETCH_ASSOC);
             return json_encode(['status' => 'success', 'data' => $drivers]);
     
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
+
+    public function fetchAvailableDrivers() {
+        try {
+            $sql = "
+                SELECT 
+                    u.users_id,
+                    u.users_fname,
+                    u.users_mname,
+                    u.users_lname,
+                    u.users_suffix,
+
+                    u.title_id,
+                    r.reservation_id,
+                    r.reservation_title,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
+                    rs.reservation_status_status_id,
+                    rs.reservation_active,
+                    CASE 
+                        WHEN r.reservation_id IS NULL THEN 'Available'
+                        WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 'Reserved'
+                        ELSE 'Available'
+                    END AS availability_status,
+                    CASE 
+                        WHEN r.reservation_id IS NULL THEN 1
+                        WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 0
+                        ELSE 1
+                    END AS is_available
+                FROM 
+                    tbl_users u
+                LEFT JOIN tbl_reservation_driver rd ON u.users_id = rd.reservation_driver_user_id
+                LEFT JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
+                LEFT JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                WHERE 
+                    u.users_user_level_id = 19
+                    AND u.is_active = 1
+                    AND (
+                        r.reservation_id IS NULL
+                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
+                    )
+                ORDER BY 
+                    u.users_lname, u.users_fname, r.reservation_start_date DESC
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute();
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Group drivers by user_id to handle multiple reservations
+            $drivers = [];
+            foreach ($results as $row) {
+                $userId = $row['users_id'];
+                
+                if (!isset($drivers[$userId])) {
+                    // Initialize driver data
+                    $drivers[$userId] = [
+                        'users_id' => $row['users_id'],
+                        'users_fname' => $row['users_fname'],
+                        'users_mname' => $row['users_mname'],
+                        'users_lname' => $row['users_lname'],
+                        'users_suffix' => $row['users_suffix'],
+                        'title_id' => $row['title_id'],
+                        'availability_status' => $row['availability_status'],
+                        'is_available' => $row['is_available'],
+                        'reservations' => []
+                    ];
+                }
+
+                // Add reservation data if exists and matches criteria
+                if ($row['reservation_id'] && $row['reservation_status_status_id'] == 6 && $row['reservation_active'] == 1) {
+                    $drivers[$userId]['reservations'][] = [
+                        'reservation_id' => $row['reservation_id'],
+                        'reservation_title' => $row['reservation_title'],
+                        'reservation_start_date' => $row['reservation_start_date'],
+                        'reservation_end_date' => $row['reservation_end_date'],
+                        'reservation_status_status_id' => $row['reservation_status_status_id'],
+                        'reservation_active' => $row['reservation_active']
+                    ];
+                }
+            }
+
+            return json_encode(['status' => 'success', 'data' => array_values($drivers)]);
+
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
@@ -3400,6 +3515,38 @@ public function venueExists($venueName) {
         }
     }
 
+    // Enhanced notification method with push notification support
+    public function sendEnhancedNotification($userId, $message, $reservationId = null, $type = 'info') {
+        try {
+            // Include notification helper
+            require_once 'notification_helper.php';
+            $notificationHelper = new NotificationHelper();
+            
+            // Send notification using helper
+            $result = $notificationHelper->sendUserNotification($userId, $message, $reservationId, $type);
+            
+            return $result;
+        } catch (Exception $e) {
+            return json_encode(['status' => 'error', 'message' => 'Notification error: ' . $e->getMessage()]);
+        }
+    }
+
+    // Enhanced department notification with push support
+    public function sendEnhancedDepartmentNotification($departmentId, $userLevelId, $message) {
+        try {
+            // Include notification helper
+            require_once 'notification_helper.php';
+            $notificationHelper = new NotificationHelper();
+            
+            // Send department notification using helper
+            $result = $notificationHelper->sendDepartmentNotification($departmentId, $userLevelId, $message);
+            
+            return $result;
+        } catch (Exception $e) {
+            return json_encode(['status' => 'error', 'message' => 'Department notification error: ' . $e->getMessage()]);
+        }
+    }
+
     public function fetchReadApprovalNotification() {
         try {
             $sql = "SELECT 
@@ -4141,7 +4288,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->fetchTitle();
             break;
 
-        case "fetchHolday":
+        case "fetchHoliday":
             echo $user->fetchHoliday();
             break;        case "updateHoliday":
             $holidayId = $input['holiday_id'] ?? null;
@@ -4309,6 +4456,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $startDateTime = $input['startDateTime'] ?? null;
             $endDateTime = $input['endDateTime'] ?? null;
             echo $user->fetchDriver($startDateTime, $endDateTime);
+            break;
+        case "fetchAvailableDrivers":
+            echo $user->fetchAvailableDrivers();
             break;
         case "updateUsers":
             echo $user->updateUsers($input);

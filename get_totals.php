@@ -447,17 +447,16 @@ class Dashboard {
                     $stmt->execute(['cid' => $recordId]);
                 }
 
-                // 1) Make resource available only if fixed
-                if ($isFixed) {
-                    $tbl    = $resourceMap[$type]['table'];
-                    $pk     = $resourceMap[$type]['pk'];
-                    $stmt   = $this->conn->prepare("
-                        UPDATE {$tbl}
-                           SET status_availability_id = 1
-                         WHERE {$pk} = :rid
-                    ");
-                    $stmt->execute(['rid' => $resourceId]);
-                }
+                // 1) Update resource availability based on isFixed
+                $tbl    = $resourceMap[$type]['table'];
+                $pk     = $resourceMap[$type]['pk'];
+                $status = $isFixed ? 1 : 2;
+                $stmt   = $this->conn->prepare("
+                    UPDATE {$tbl}
+                       SET status_availability_id = :status
+                     WHERE {$pk} = :rid
+                ");
+                $stmt->execute(['status' => $status, 'rid' => $resourceId]);
 
                 // 2) Deactivate condition record
                 $ctbl   = $conditionMap[$type]['table'];
@@ -482,26 +481,27 @@ class Dashboard {
                     throw new Exception("Condition record not found or already inactive.");
                 }
 
-                // 2) If fixed, mark the unit available again
-                if ($isFixed) {
-                    $update = $this->conn->prepare("
-                        UPDATE tbl_equipment_unit
-                           SET status_availability_id = 1
-                         WHERE unit_id = :uid
-                    ");
-                    $update->execute(['uid' => $resourceId]);
-                }
+                // 2) Update unit availability based on isFixed
+                $status = $isFixed ? 1 : 2;
+                $update = $this->conn->prepare("
+                    UPDATE tbl_equipment_unit
+                       SET status_availability_id = :status
+                     WHERE unit_id = :uid
+                ");
+                $update->execute(['status' => $status, 'uid' => $resourceId]);
 
                 // 3) Deactivate the condition record and set remarks
+                $updateFields = 'is_active = 0';
+                $params = ['cid' => $recordId];
+                if ($isFixed) {
+                    $updateFields .= ', remarks = :remarks';
+                    $params['remarks'] = 'Fixed';
+                }
                 $this->conn->prepare("
                     UPDATE tbl_reservation_condition_unit
-                       SET is_active = 0,
-                           remarks   = :remarks
+                       SET $updateFields
                      WHERE id = :cid
-                ")->execute([
-                    'cid'     => $recordId,
-                    'remarks' => $isFixed ? 'Fixed' : null
-                ]);
+                ")->execute($params);
                 break;
 
             case 'equipment_consumable':

@@ -52,7 +52,7 @@ class Reservation {
         }
     }
 
-    public function hasConflictRequest($resourceType, $resourceId, $startDate, $endDate) {
+    public function hasConflictRequest($resourceType, $resourceId, $startDate, $endDate, $requestedQuantity = 0) {
         if (!in_array($resourceType, ['venue', 'vehicle', 'driver', 'equipment'])) {
             error_log("Invalid resource type: " . $resourceType);
             return ['status' => false, 'count' => 0];
@@ -175,9 +175,6 @@ class Reservation {
                     }
                     
                     // Get the requested quantity from the parameters
-                    $requestedQuantity = isset($data['quantity']) ? intval($data['quantity']) : 0;
-                    
-                    // Compare requested quantity with remaining quantity
                     $remainingQuantity = intval($result['remaining_quantity']);
                     if ($requestedQuantity <= $remainingQuantity) {
                         return ['status' => true, 'count' => 0];
@@ -193,7 +190,6 @@ class Reservation {
             $stmt->bindParam(':end_date', $endDate);
             
             if ($resourceType === 'equipment') {
-                $requestedQuantity = isset($data['quantity']) ? $data['quantity'] : 1;
                 $stmt->bindParam(':requested_quantity', $requestedQuantity);
             }
             
@@ -707,6 +703,76 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
                 }
+
+                // --- PUSH NOTIFICATION LOGIC (for user levels 3, 6, 16, 17) ---
+                // Find all users with active push subscriptions in the same department and user level 5 or 6
+                $sqlPushUsers = "SELECT u.users_id
+                                    FROM tbl_users u
+                                    INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                                    WHERE u.users_department_id = :dept_id
+                                    AND u.users_user_level_id IN (5, 6)
+                                    AND ps.is_active = 1";
+                $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
+                $stmtPushUsers->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
+                $stmtPushUsers->execute();
+                $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
+
+                // Log the number of users found for push notifications
+                error_log("Found " . count($pushUsers) . " users with push subscriptions for department " . $userLevel['users_department_id'] . " and user levels 5,6");
+
+                // Prepare push notification data
+                $pushTitle = 'New Reservation Request';
+                $pushBody = 'A new reservation request is pending approval.';
+                $pushData = [
+                    'reservation_id' => $reservationId,
+                    'type' => 'reservation_approval',
+                    'department_id' => $userLevel['users_department_id'],
+                ];
+                $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+
+                $successCount = 0;
+                $errorCount = 0;
+
+                foreach ($pushUsers as $pushUser) {
+                    $pushPayload = [
+                        'operation' => 'send',
+                        'user_id' => $pushUser['users_id'],
+                        'title' => $pushTitle,
+                        'body' => $pushBody,
+                        'data' => $pushData
+                    ];
+                    
+                    error_log("Sending push notification to user {$pushUser['users_id']}: " . json_encode($pushPayload));
+                    
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushPayload));
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                        'Content-Type: application/json',
+                        'Content-Length: ' . strlen(json_encode($pushPayload))
+                    ]);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $error = curl_error($ch);
+                    curl_close($ch);
+                    
+                    error_log("Push notification response for user {$pushUser['users_id']}: HTTP $httpCode, Response: $response");
+                    
+                    if ($error || $httpCode < 200 || $httpCode >= 300) {
+                        error_log("Push notification failed for user {$pushUser['users_id']}: " . ($error ?: "HTTP $httpCode"));
+                        $errorCount++;
+                    } else {
+                        error_log("Push notification sent successfully to user {$pushUser['users_id']}");
+                        $successCount++;
+                    }
+                }
+                
+                error_log("Push notifications sent after reservation creation: $successCount successful, $errorCount failed");
 
             } elseif ($userLevelId == 5 || $userLevelId == 18) {
                 // Status SQL 1 and 2 remain the same

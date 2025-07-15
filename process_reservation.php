@@ -783,6 +783,10 @@ class User {
             $stmtDepartmentNotification->execute();
             
             $this->conn->commit();
+            
+            // Send push notification to the requester after successful database operations
+            $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
+            
             return json_encode([
                 'status' => 'success', 
                 'message' => 'Request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
@@ -793,6 +797,307 @@ class User {
         } catch (PDOException $e) {
             $this->conn->rollBack();
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+    
+    private function sendApprovalPushNotification($reservationId, $isAccepted, $requesterUserId) {
+        try {
+            // Get reservation details and requester info for the notification
+            $sql = "SELECT 
+                        r.reservation_title,
+                        r.reservation_description,
+                        r.reservation_start_date,
+                        r.reservation_end_date,
+                        r.reservation_user_id,
+                        CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS requester_name,
+                        u.users_department_id,
+                        u.users_user_level_id,
+                        d.departments_name,
+                        ul.user_level_name
+                    FROM tbl_reservation r
+                    LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                    LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+                    LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+                    WHERE r.reservation_id = :reservation_id";
+            
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmt->execute();
+            $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$reservation) {
+                error_log("Reservation not found for push notification: " . $reservationId);
+                return;
+            }
+            
+            // Prepare notification content
+            $status = $isAccepted ? 'approved' : 'declined';
+            $title = "Reservation " . ucfirst($status);
+            
+            // Check if this is a cancellation (status 5) or approval/decline
+            $sqlStatus = "SELECT reservation_status_status_id FROM tbl_reservation_status 
+                         WHERE reservation_reservation_id = :reservation_id 
+                         AND reservation_active = 1 
+                         ORDER BY reservation_status_id DESC LIMIT 1";
+            $stmtStatus = $this->conn->prepare($sqlStatus);
+            $stmtStatus->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmtStatus->execute();
+            $currentStatus = $stmtStatus->fetch(PDO::FETCH_ASSOC);
+            
+            if ($currentStatus && $currentStatus['reservation_status_status_id'] == 5) {
+                // This is a cancellation
+                $title = "Reservation Cancelled";
+                $body = "Your reservation '{$reservation['reservation_title']}' has been cancelled.";
+                $status = 'cancelled';
+            } else {
+                $body = "Your reservation '{$reservation['reservation_title']}' has been {$status}.";
+            }
+            
+            // Additional data for the notification
+            $data = [
+                'reservation_id' => $reservationId,
+                'status' => $status,
+                'title' => $reservation['reservation_title'],
+                'requester_name' => $reservation['requester_name'],
+                'department_name' => $reservation['departments_name'],
+                'user_level_name' => $reservation['user_level_name'],
+                'start_date' => $reservation['reservation_start_date'],
+                'end_date' => $reservation['reservation_end_date'],
+                'type' => 'reservation_approval'
+            ];
+            
+            // Send push notification to the requester
+            $this->sendPushNotificationToUser($requesterUserId, $title, $body, $data);
+            
+            // Also send notification to department 27 and user level 1 users (administrators)
+            $this->sendPushNotificationToAdmins($reservation, $status, $title, $body, $data);
+            
+        } catch (Exception $e) {
+            error_log("Error sending push notifications: " . $e->getMessage());
+        }
+    }
+    
+    private function sendPushNotificationToUser($userId, $title, $body, $data) {
+        try {
+            // Check if user has active push subscription
+            $sql = "SELECT 
+                        u.users_id,
+                        CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
+                        ps.subscription_id,
+                        ps.endpoint,
+                        ps.p256dh_key,
+                        ps.auth_key
+                    FROM tbl_users u
+                    INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                    WHERE u.users_id = :user_id 
+                    AND ps.is_active = 1";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$user) {
+                error_log("No active push subscription found for user ID: " . $userId);
+                return;
+            }
+            
+            $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+            
+            // Add unique identifier to prevent notification replacement
+            $uniqueData = array_merge($data, [
+                'notification_id' => uniqid('user_', true),
+                'timestamp' => time(),
+                'recipient_type' => 'user'
+            ]);
+            
+            $pushData = [
+                'operation' => 'send',
+                'user_id' => $user['users_id'],
+                'title' => $title,
+                'body' => $body,
+                'data' => $uniqueData
+            ];
+            
+            error_log("Sending push notification to user {$user['users_id']}: " . json_encode($pushData));
+            
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $pushUrl);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushData));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Content-Type: application/json',
+                'Content-Length: ' . strlen(json_encode($pushData))
+            ]);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            curl_close($ch);
+            
+            error_log("Push notification response for user {$user['users_id']}: HTTP $httpCode, Response: $response");
+            
+            if ($error || $httpCode < 200 || $httpCode >= 300) {
+                error_log("Push notification failed for user {$user['users_id']}: " . ($error ?: "HTTP $httpCode"));
+            } else {
+                error_log("Push notification sent successfully to user {$user['users_id']}");
+            }
+            
+        } catch (Exception $e) {
+            error_log("Error sending push notification to user: " . $e->getMessage());
+        }
+    }
+    
+    private function sendPushNotificationToAdmins($reservation, $status, $title, $body, $data) {
+        try {
+            // Get the requester's user level and department to determine notification targets
+            $requesterUserId = $reservation['reservation_user_id'];
+            $sqlRequester = "SELECT users_user_level_id, users_department_id FROM tbl_users WHERE users_id = :user_id";
+            $stmtRequester = $this->conn->prepare($sqlRequester);
+            $stmtRequester->bindParam(':user_id', $requesterUserId, PDO::PARAM_INT);
+            $stmtRequester->execute();
+            $requester = $stmtRequester->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$requester) {
+                error_log("Could not find requester information for user ID: " . $requesterUserId);
+                return;
+            }
+            
+            // Determine notification targets based on requester's user level
+            $notificationTargets = [];
+            
+            switch ($requester['users_user_level_id']) {
+                case 3: // Student
+                    // Notify department heads (level 5) and secretaries (level 6) in the same department
+                    $notificationTargets = [
+                        ['dept_id' => $requester['users_department_id'], 'user_level_id' => 5],
+                        ['dept_id' => $requester['users_department_id'], 'user_level_id' => 6]
+                    ];
+                    break;
+                    
+                case 6: // Secretary
+                    // Notify department heads (level 5) in the same department
+                    $notificationTargets = [
+                        ['dept_id' => $requester['users_department_id'], 'user_level_id' => 5]
+                    ];
+                    break;
+                    
+                case 16: // Dean
+                case 17: // Vice President
+                    // Notify administrators (level 1) in department 27
+                    $notificationTargets = [
+                        ['dept_id' => 27, 'user_level_id' => 1]
+                    ];
+                    break;
+                    
+                default:
+                    // Default case - notify department heads (level 5) in the same department
+                    $notificationTargets = [
+                        ['dept_id' => $requester['users_department_id'], 'user_level_id' => 5]
+                    ];
+                    break;
+            }
+            
+            $allUsers = [];
+            
+            // Get users for each notification target
+            foreach ($notificationTargets as $target) {
+                $sqlUsers = "SELECT 
+                                u.users_id,
+                                CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
+                                ps.subscription_id,
+                                ps.endpoint,
+                                ps.p256dh_key,
+                                ps.auth_key
+                            FROM tbl_users u
+                            INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                            WHERE u.users_department_id = :dept_id 
+                            AND u.users_user_level_id = :user_level_id
+                            AND ps.is_active = 1";
+                
+                $stmtUsers = $this->conn->prepare($sqlUsers);
+                $stmtUsers->bindParam(':dept_id', $target['dept_id'], PDO::PARAM_INT);
+                $stmtUsers->bindParam(':user_level_id', $target['user_level_id'], PDO::PARAM_INT);
+                $stmtUsers->execute();
+                $users = $stmtUsers->fetchAll(PDO::FETCH_ASSOC);
+                
+                $allUsers = array_merge($allUsers, $users);
+            }
+            
+            if (empty($allUsers)) {
+                error_log("No users with push subscriptions found for notification targets");
+                return;
+            }
+            
+            // Prepare admin notification message
+            $adminTitle = $title;
+            $adminBody = $body;
+            
+            if ($status === 'cancelled') {
+                $adminTitle = "Reservation Cancelled";
+                $adminBody = "A reservation '{$reservation['reservation_title']}' by {$reservation['requester_name']} has been cancelled.";
+            } else {
+                $adminTitle = "Reservation " . ucfirst($status);
+                $adminBody = "A reservation '{$reservation['reservation_title']}' by {$reservation['requester_name']} has been {$status}.";
+            }
+            
+            // Add unique identifier to prevent notification replacement
+            $adminData = array_merge($data, [
+                'notification_id' => uniqid('admin_', true),
+                'timestamp' => time(),
+                'recipient_type' => 'admin'
+            ]);
+            
+            $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+            $successCount = 0;
+            $errorCount = 0;
+            
+            // Send push notification to all target users
+            foreach ($allUsers as $user) {
+                $pushData = [
+                    'operation' => 'send',
+                    'user_id' => $user['users_id'],
+                    'title' => $adminTitle,
+                    'body' => $adminBody,
+                    'data' => $adminData
+                ];
+                
+                error_log("Sending admin push notification to user {$user['users_id']}: " . json_encode($pushData));
+                
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushData));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Content-Type: application/json',
+                    'Content-Length: ' . strlen(json_encode($pushData))
+                ]);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $error = curl_error($ch);
+                curl_close($ch);
+                
+                error_log("Admin push notification response for user {$user['users_id']}: HTTP $httpCode, Response: $response");
+                
+                if ($error || $httpCode < 200 || $httpCode >= 300) {
+                    error_log("Push notification failed for admin user {$user['users_id']}: " . ($error ?: "HTTP $httpCode"));
+                    $errorCount++;
+                } else {
+                    $successCount++;
+                }
+            }
+            
+            error_log("Push notifications sent to admins: $successCount successful, $errorCount failed");
+            
+        } catch (Exception $e) {
+            error_log("Error sending push notifications to admins: " . $e->getMessage());
         }
     }
 
@@ -863,6 +1168,10 @@ class User {
             }
 
             $this->conn->commit();
+            
+            // Send push notification to the requester after successful database operations
+            $notificationUserId = $notification_user_id ?? $userId;
+            $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
 
             return json_encode([
                 'status' => 'success', 
@@ -901,6 +1210,9 @@ class User {
             $stmtInsert->execute();
 
             $this->conn->commit();
+            
+            // Send push notification to the requester after successful cancellation
+            $this->sendApprovalPushNotification($reservationId, false, $userId);
 
             return json_encode([
                 'status' => 'success', 

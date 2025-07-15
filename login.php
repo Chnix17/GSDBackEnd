@@ -20,18 +20,12 @@ class Login {
     }
 
     private function checkPassword($inputPassword, $storedHash) {
-        error_log("Input password: " . $inputPassword);
-        error_log("Stored hash: " . $storedHash);
-        
         // Try direct comparison first
         if ($inputPassword === $storedHash) {
-            error_log("Direct match successful");
             return true;
         }
-        
         // Try password_verify
         $verified = password_verify($inputPassword, $storedHash);
-        error_log("password_verify result: " . ($verified ? "true" : "false"));
         return $verified;
     }
 
@@ -114,7 +108,6 @@ class Login {
             return false;
 
         } catch (PDOException $e) {
-            error_log("Login attempt handling error: " . $e->getMessage());
             return false;
         }
     }
@@ -157,9 +150,6 @@ class Login {
         $json = json_decode($json, true);
 
         try {
-            error_log("=== Login Debug ===");
-            error_log("Username: " . $json['username']);
-
             // Check if account is blocked
             $blockStatus = $this->isAccountBlocked($json['username']);
             if ($blockStatus['blocked']) {
@@ -229,12 +219,10 @@ class Login {
                 }
             }
 
-            error_log("Authentication failed for user: " . $json['username']);
             $this->handleLoginAttempt($json['username'], false);
             return json_encode(['status' => 'error', 'message' => 'Invalid credentials']);
             
         } catch (PDOException $e) {
-            error_log("Database error: " . $e->getMessage());
             return json_encode(['status' => 'error', 'message' => 'Database error']);
         }
     }
@@ -252,17 +240,13 @@ class Login {
             
             return $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            error_log("Error fetching login failed attempts: " . $e->getMessage());
             return false;
         }
     }
 
     public function checkEmailExists($email) {
         try {
-            error_log("Checking email existence for: " . $email);
-            
             if (!$this->conn) {
-                error_log("Database connection not established");
                 throw new PDOException("Database connection not established");
             }
             
@@ -270,19 +254,16 @@ class Login {
             
             $stmt = $this->conn->prepare($check_sql);
             if (!$stmt) {
-                error_log("Failed to prepare statement: " . print_r($this->conn->errorInfo(), true));
                 throw new PDOException("Failed to prepare statement");
             }
             
             $stmt->bindParam(':email', $email, PDO::PARAM_STR);
             
             if (!$stmt->execute()) {
-                error_log("Failed to execute statement: " . print_r($stmt->errorInfo(), true));
                 throw new PDOException("Failed to execute statement");
             }
             
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            error_log("Query result: " . print_r($result, true));
             
             if ($result) {
                 return json_encode([
@@ -297,13 +278,11 @@ class Login {
             ]);
 
         } catch (PDOException $e) {
-            error_log("Email check error: " . $e->getMessage());
             return json_encode([
                 'status' => 'error',
                 'message' => 'Database error while checking email: ' . $e->getMessage()
             ]);
         } catch (Exception $e) {
-            error_log("Unexpected error: " . $e->getMessage());
             return json_encode([
                 'status' => 'error',
                 'message' => 'An unexpected error occurred'
@@ -322,7 +301,6 @@ class Login {
                 'message' => 'First login updated successfully.'
             ]);
         } catch (PDOException $e) {
-            error_log("Error updating first_login: " . $e->getMessage());
             return json_encode([
                 'status' => 'error',
                 'message' => 'Database error while updating first_login.'
