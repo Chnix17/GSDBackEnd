@@ -1248,6 +1248,9 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                     'user_personnel_id' => $user_personnel_id,
                     'remarks' => $remarksValue
                 ]);
+                // Also deactivate consumable equipment reservation if exists
+                $stmtDeactivateConsumable = $this->conn->prepare("UPDATE tbl_reservation_equipment SET active = -1 WHERE reservation_equipment_id = :reservation_id");
+                $stmtDeactivateConsumable->execute(['reservation_id' => $reservation_id]);
                 break;
             case 'equipment_consumable':
                 $stmtFetchEquip = $this->conn->prepare("SELECT reservation_equipment_equip_id FROM tbl_reservation_equipment WHERE reservation_equipment_id = :rid");

@@ -354,7 +354,8 @@ public function fetchVehicleById($id) {
             v.ven_operating_hours, 
             v.is_active, 
             v.user_admin_id,
-            sa.status_availability_name
+            sa.status_availability_name,
+            v.event_type
         FROM tbl_venue v
         INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
         WHERE v.ven_id = :id";

@@ -324,7 +324,13 @@ class Reservation {
                 if (is_array($driver)) {
                     $userId = isset($driver['user_id']) ? $driver['user_id'] : null;
                     $name = array_key_exists('name', $driver) ? $driver['name'] : null;
-                    $vehicleId = isset($driver['reservation_vehicle_id']) ? $driver['reservation_vehicle_id'] : (isset($driver['vehicle_id']) ? $driver['vehicle_id'] : null);
+                    if (isset($driver['reservation_vehicle_id'])) {
+                        $vehicleId = $driver['reservation_vehicle_id'];
+                    } elseif (isset($driver['vehicle_id'])) {
+                        $vehicleId = $driver['vehicle_id'];
+                    } else {
+                        $vehicleId = null;
+                    }
                 } elseif (is_numeric($driver)) {
                     $userId = $driver;
                 } elseif (is_string($driver)) {
@@ -587,13 +593,16 @@ class Reservation {
                     (reservation_title, reservation_description, 
                     reservation_start_date, reservation_end_date,
                     reservation_participants, reservation_user_id,
-                    reservation_created_at) 
+                    reservation_created_at, additional_note) 
                     VALUES (:title, :description,
                     :start_date, :end_date, :participants, :user_id,
-                    NOW())";
+                    NOW(), :additional_note)";
             
             $stmt = $this->conn->prepare($sql);
     
+            // Determine additional_note value (null if not set)
+            $additionalNote = isset($data['additional_note']) ? $data['additional_note'] : null;
+
             switch($type) {
                 case 'venue':
                     $stmt->bindParam(':title', $data['title']);
@@ -602,8 +611,9 @@ class Reservation {
                     $stmt->bindParam(':end_date', $data['end_date']);
                     $stmt->bindParam(':participants', $data['participants']);
                     $stmt->bindParam(':user_id', $data['user_id']);
+                    $stmt->bindValue(':additional_note', $additionalNote);
                     break;
-                    
+                
                 case 'vehicle':
                     $stmt->bindParam(':title', $data['destination']);
                     $stmt->bindParam(':description', $data['purpose']);
@@ -611,8 +621,9 @@ class Reservation {
                     $stmt->bindParam(':user_id', $data['user_id']);
                     $stmt->bindParam(':start_date', $data['start_date']);
                     $stmt->bindParam(':end_date', $data['end_date']);
+                    $stmt->bindValue(':additional_note', $additionalNote);
                     break;
-                    
+                
                 case 'equipment':
                     $stmt->bindParam(':title', $data['title']);
                     $stmt->bindParam(':description', $data['description']);
@@ -620,6 +631,7 @@ class Reservation {
                     $stmt->bindParam(':end_date', $data['end_date']);
                     $stmt->bindParam(':participants', $data['participants']);
                     $stmt->bindParam(':user_id', $data['user_id']);
+                    $stmt->bindValue(':additional_note', $additionalNote);
                     break;
             }
     
@@ -649,14 +661,60 @@ class Reservation {
             $statusSql = "";
     
             if ($userLevelId == 3 || $userLevelId == 6 || $userLevelId == 16 || $userLevelId == 17) {
-                // If user level is 3 or 6, set reservation as pending with active 1
+                // Determine event type from all venues
+                $reservationActive = null;
+                $hasBigEvent = false;
+                
+                if (!empty($data['venues']) && is_array($data['venues'])) {
+                    // Check all venues for event types
+                    foreach ($data['venues'] as $venueId) {
+                        $stmtEventType = $this->conn->prepare("SELECT event_type FROM tbl_venue WHERE ven_id = :venue_id LIMIT 1");
+                        $stmtEventType->bindParam(':venue_id', $venueId, PDO::PARAM_INT);
+                        if ($stmtEventType->execute()) {
+                            $row = $stmtEventType->fetch(PDO::FETCH_ASSOC);
+                            if ($row && isset($row['event_type'])) {
+                                $eventType = $row['event_type'];
+                                // If any venue is Big Event, set hasBigEvent to true
+                                if ($eventType === 'Big Event') {
+                                    $hasBigEvent = true;
+                                    break; // No need to check further, one Big Event makes it null
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Set reservation_active based on whether any venue is Big Event
+                    if ($hasBigEvent) {
+                        $reservationActive = null;
+                    } else {
+                        // If no Big Event found, check if all are Small Event
+                        $allSmallEvents = true;
+                        foreach ($data['venues'] as $venueId) {
+                            $stmtEventType = $this->conn->prepare("SELECT event_type FROM tbl_venue WHERE ven_id = :venue_id LIMIT 1");
+                            $stmtEventType->bindParam(':venue_id', $venueId, PDO::PARAM_INT);
+                            if ($stmtEventType->execute()) {
+                                $row = $stmtEventType->fetch(PDO::FETCH_ASSOC);
+                                if ($row && isset($row['event_type']) && $row['event_type'] !== 'Small Event') {
+                                    $allSmallEvents = false;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if ($allSmallEvents) {
+                            $reservationActive = 1;
+                        } else {
+                            $reservationActive = null;
+                        }
+                    }
+                }
                 $statusSql = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 1, null, null, NOW())";
-                               
+                              VALUES (:reservation_id, 1, :reservation_active, null, NOW())";
                 $statusStmt = $this->conn->prepare($statusSql);
                 $statusStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $statusStmt->bindValue(':reservation_active', $reservationActive, $reservationActive === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
                 
                 if (!$statusStmt->execute()) {
                     $this->conn->rollBack();

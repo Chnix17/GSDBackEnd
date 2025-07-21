@@ -15,6 +15,11 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+// At the top of the file, after other use/require/include statements:
+require_once 'vendor/autoload.php';
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
 class User {
     private $conn;
 
@@ -185,7 +190,8 @@ class User {
                 status_availability_id, 
                 ven_pic, 
                 ven_operating_hours,
-                is_active
+                is_active,
+                event_type
                 FROM tbl_venue
                 WHERE is_active = 1
                 ORDER BY ven_id DESC
@@ -3052,7 +3058,7 @@ public function saveVenue($data) {
         if (!isset($data['user_admin_id'])) {
             return json_encode(['status' => 'error', 'message' => 'Admin ID is required']);
         }
-        if (!isset($data['name']) || !isset($data['occupancy'])) {
+        if (!isset($data['name']) || !isset($data['occupancy']) || !isset($data['event_type'])) {
             return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
         }
         if ($this->venueExists($data['name'])) {
@@ -3061,16 +3067,17 @@ public function saveVenue($data) {
 
         $sql = "INSERT INTO tbl_venue (
             ven_name, ven_occupancy, ven_created_at, ven_updated_at, 
-            status_availability_id, is_active, user_admin_id
+            status_availability_id, is_active, user_admin_id, event_type
         ) VALUES (
             :name, :occupancy, NOW(), NOW(), 
-            1, 1, :admin_id
+            1, 1, :admin_id, :event_type
         )";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
         $stmt->bindParam(':occupancy', $data['occupancy'], PDO::PARAM_INT);
         $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':event_type', $data['event_type'], PDO::PARAM_STR);
 
         if ($stmt->execute()) {
             return json_encode(['status' => 'success', 'message' => 'Venue added successfully']);
@@ -3085,14 +3092,15 @@ public function saveVenue($data) {
 
 public function updateVenue($venueData) {
     try {
-        if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'])) {
+        if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'], $venueData['event_type'])) {
             return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
         }
 
         $sql = "UPDATE tbl_venue SET 
                     ven_name = :venue_name, 
                     ven_occupancy = :max_occupancy,
-                    status_availability_id = :status_availability_id
+                    status_availability_id = :status_availability_id,
+                    event_type = :event_type
                 WHERE ven_id = :venue_id";
 
         $stmt = $this->conn->prepare($sql);
@@ -3100,6 +3108,7 @@ public function updateVenue($venueData) {
         $stmt->bindParam(':venue_name', $venueData['venue_name']);
         $stmt->bindParam(':max_occupancy', $venueData['max_occupancy']);
         $stmt->bindParam(':status_availability_id', $venueData['status_availability_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':event_type', $venueData['event_type'], PDO::PARAM_STR);
         $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
 
         return $stmt->execute()
@@ -3237,6 +3246,37 @@ public function saveUser($data) {
         $stmt->bindParam(':pic',          $picPath,              PDO::PARAM_STR);
 
         if ($stmt->execute()) {
+            // Send the default password to the user's email (not encrypted)
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'noreplygsd12@gmail.com';
+                $mail->Password = 'ckfo wpow pfmq ziwd'; // App password
+                $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                $mail->Port = 587;
+                $mail->SMTPOptions = array(
+                    'ssl' => array(
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                        'allow_self_signed' => true
+                    )
+                );
+                $mail->setFrom('vallechristianmark@gmail.com', 'GSD System');
+                $mail->addAddress($data['email']);
+                $mail->isHTML(true);
+                $mail->Subject = 'Your GSD Account Default Password';
+                $mail->Body = '<p>Dear ' . htmlspecialchars($data['fname']) . ',</p>' .
+                    '<p>Your account has been created.</p>' .
+                    '<p><b>Username (School ID):</b> ' . htmlspecialchars($data['schoolId']) . '<br>' .
+                    '<b>Default Password:</b> ' . htmlspecialchars($data['password']) . '</p>' .
+                    '<p>Please log in and change your password immediately.</p>' .
+                    '<p>Thank you,<br>GSD System</p>';
+                $mail->send();
+            } catch (Exception $e) {
+                // Optionally log or handle email sending failure
+            }
             return json_encode([
                 'status'  => 'success',
                 'message' => 'User added successfully.'
@@ -3581,6 +3621,7 @@ public function venueExists($venueName) {
                     r.reservation_participants, 
                     r.reservation_user_id,
                     r.reservation_created_at,
+                    r.additional_note,
 
                     latest_status.reservation_status_status_id AS status_id,
                     sm.status_master_name AS status_name,
@@ -3686,6 +3727,7 @@ public function venueExists($venueName) {
                     'reservation_start_date' => $row['reservation_start_date'],
                     'reservation_end_date' => $row['reservation_end_date'],
                     'reservation_participants' => $row['reservation_participants'],
+                    'additional_note' => $row['additional_note'],
                     'status_name' => $row['status_name'],
                     'active' => $row['active'],
                     'reservation_user_id' => $row['reservation_user_id'],
@@ -4143,6 +4185,468 @@ public function fetchNoAssignedReservation() {
         }
     }
 
+    public function insertNotificationTouser($notification_message, $notification_user_id, $reservation_id = null) {
+        try {
+            $sql = "INSERT INTO tbl_notification_reservation (
+                        notification_message, 
+                        notification_reservation_reservation_id, 
+                        notification_user_id, 
+                        notification_created_at, 
+                        is_read
+                    ) VALUES (
+                        :message, 
+                        :reservation_id, 
+                        :user_id, 
+                        NOW(), 
+                        0
+                    )";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':message', $notification_message, PDO::PARAM_STR);
+            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmt->bindParam(':user_id', $notification_user_id, PDO::PARAM_INT);
+            if ($stmt->execute()) {
+                return json_encode([
+                    'status' => 'success',
+                    'message' => 'Notification inserted successfully',
+                    'notification_id' => $this->conn->lastInsertId()
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Failed to insert notification'
+                ]);
+            }
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchVenueHistory($venueId = null) {
+        try {
+            $sql = "
+                SELECT 
+                    v.ven_name AS venue_name,
+                    CONCAT(u.users_fname, ' ', COALESCE(u.users_mname, ''), ' ', u.users_lname) AS requester,
+                    r.reservation_start_date,
+                    r.reservation_end_date
+                FROM tbl_reservation r
+                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                INNER JOIN tbl_reservation_venue rv ON r.reservation_id = rv.reservation_reservation_id
+                INNER JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                WHERE rs.reservation_status_status_id = 6
+                  AND rs.reservation_active = 0
+            ";
+            if ($venueId !== null) {
+                $sql .= " AND v.ven_id = :venueId";
+            }
+            $sql .= " ORDER BY r.reservation_start_date DESC";
+            $stmt = $this->conn->prepare($sql);
+            if ($venueId !== null) {
+                $stmt->bindParam(':venueId', $venueId, PDO::PARAM_INT);
+            }
+            $stmt->execute();
+            $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return json_encode([
+                'status' => 'success',
+                'data' => $history
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchVehicleHistory($vehicleId = null) {
+        try {
+            $sql = "
+                SELECT 
+                    vm.vehicle_model_name,
+                    vc.vehicle_category_name,
+                    vmake.vehicle_make_name,
+                    v.vehicle_license,
+                    rd.reservation_driver_user_id,
+                    rd.driver_name AS manual_driver_name,
+                    udriver.users_fname AS driver_fname,
+                    udriver.users_mname AS driver_mname,
+                    udriver.users_lname AS driver_lname,
+                    CONCAT(u.users_fname, ' ', COALESCE(u.users_mname, ''), ' ', u.users_lname) AS requester,
+                    r.reservation_start_date,
+                    r.reservation_end_date
+                FROM tbl_reservation r
+                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
+                INNER JOIN tbl_vehicle v ON rv.reservation_vehicle_vehicle_id = v.vehicle_id
+                INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                INNER JOIN tbl_vehicle_make vmake ON vm.vehicle_model_vehicle_make_id = vmake.vehicle_make_id
+                INNER JOIN tbl_vehicle_category vc ON vm.vehicle_category_id = vc.vehicle_category_id
+                LEFT JOIN tbl_reservation_driver rd ON rv.reservation_vehicle_id = rd.reservation_vehicle_id
+                LEFT JOIN tbl_users udriver ON rd.reservation_driver_user_id = udriver.users_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                WHERE rs.reservation_status_status_id = 6
+                  AND rs.reservation_active = 0
+            ";
+            if ($vehicleId !== null) {
+                $sql .= " AND v.vehicle_id = :vehicleId";
+            }
+            $sql .= " ORDER BY r.reservation_start_date DESC";
+            $stmt = $this->conn->prepare($sql);
+            if ($vehicleId !== null) {
+                $stmt->bindParam(':vehicleId', $vehicleId, PDO::PARAM_INT);
+            }
+            $stmt->execute();
+            $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Post-process driver name logic
+            foreach ($history as &$row) {
+                if (!empty($row['manual_driver_name']) && empty($row['reservation_driver_user_id'])) {
+                    $row['driver_name'] = $row['manual_driver_name'];
+                } elseif (empty($row['manual_driver_name']) && !empty($row['reservation_driver_user_id'])) {
+                    $row['driver_name'] = trim($row['driver_fname'] . ' ' . ($row['driver_mname'] ? $row['driver_mname'] . ' ' : '') . $row['driver_lname']);
+                } else {
+                    $row['driver_name'] = null;
+                }
+                unset($row['manual_driver_name'], $row['driver_fname'], $row['driver_mname'], $row['driver_lname'], $row['reservation_driver_user_id']);
+            }
+
+            return json_encode([
+                'status' => 'success',
+                'data' => $history
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchEquipmentHistory($equipId = null) {
+        try {
+            $sql = "
+                SELECT 
+                    e.equip_name,
+                    re.reservation_equipment_quantity,
+                    CONCAT(u.users_fname, ' ', COALESCE(u.users_mname, ''), ' ', u.users_lname) AS requester,
+                    r.reservation_start_date,
+                    r.reservation_end_date
+                FROM tbl_reservation_equipment re
+                INNER JOIN tbl_equipments e ON re.reservation_equipment_equip_id = e.equip_id
+                INNER JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                WHERE rs.reservation_status_status_id = 6
+                  AND rs.reservation_active = 0
+            ";
+            if ($equipId !== null) {
+                $sql .= " AND e.equip_id = :equipId";
+            }
+            $sql .= " ORDER BY r.reservation_start_date DESC";
+            $stmt = $this->conn->prepare($sql);
+            if ($equipId !== null) {
+                $stmt->bindParam(':equipId', $equipId, PDO::PARAM_INT);
+            }
+            $stmt->execute();
+            $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return json_encode([
+                'status' => 'success',
+                'data' => $history
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchEquipmentUnitHistory($unitId = null) {
+        try {
+            $sql = "
+                SELECT 
+                    eu.serial_number,
+                    e.equip_name,
+                    CONCAT(u.users_fname, ' ', COALESCE(u.users_mname, ''), ' ', u.users_lname) AS requester,
+                    r.reservation_start_date,
+                    r.reservation_end_date
+                FROM tbl_reservation_unit ru
+                INNER JOIN tbl_equipment_unit eu ON ru.unit_id = eu.unit_id
+                INNER JOIN tbl_equipments e ON eu.equip_id = e.equip_id
+                INNER JOIN tbl_reservation_equipment re ON ru.reservation_equipment_id = re.reservation_equipment_id
+                INNER JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                WHERE rs.reservation_status_status_id = 6
+                  AND rs.reservation_active = 0
+            ";
+            if ($unitId !== null) {
+                $sql .= " AND eu.unit_id = :unitId";
+            }
+            $sql .= " ORDER BY r.reservation_start_date DESC";
+            $stmt = $this->conn->prepare($sql);
+            if ($unitId !== null) {
+                $stmt->bindParam(':unitId', $unitId, PDO::PARAM_INT);
+            }
+            $stmt->execute();
+            $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return json_encode([
+                'status' => 'success',
+                'data' => $history
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    public function fetchReservationGenerateReport($month){
+        try {
+            // $month should be in 'YYYY-MM' format
+            $startDate = $month . '-01';
+            $endDate = date('Y-m-t', strtotime($startDate));
+
+            $sql = "
+                SELECT 
+                    r.reservation_id, 
+                    r.reservation_title, 
+                    r.reservation_description, 
+                    r.reservation_start_date, 
+                    r.reservation_end_date, 
+                    r.reservation_participants, 
+                    r.reservation_user_id,
+                    r.reservation_created_at,
+                    r.additional_note,
+
+                    latest_status.reservation_status_status_id AS status_id,
+                    sm.status_master_name AS status_name,
+                    latest_status.reservation_active AS active,
+
+                    ul.user_level_name,
+                    dep.departments_name,
+                    CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
+                    dep.departments_name AS department_name,
+
+                    -- Venue details
+                    GROUP_CONCAT(DISTINCT 
+                        CONCAT(
+                            COALESCE(v.reservation_venue_id, ''), ':', 
+                            COALESCE(v.reservation_venue_venue_id, ''), ':',
+                            COALESCE(venue.ven_name, ''), ':',
+                            COALESCE(venue.ven_occupancy, ''), ':',
+                            COALESCE(venue.ven_operating_hours, ''), ':',
+                            COALESCE(venue.ven_pic, '')
+                        ) SEPARATOR '|'
+                    ) as venue_data,
+
+                    -- Vehicle details
+                    GROUP_CONCAT(DISTINCT 
+                        CONCAT(
+                            ve.reservation_vehicle_id, ':',
+                            ve.reservation_vehicle_vehicle_id, ':',
+                            vm.vehicle_license, ':',
+                            vmm.vehicle_model_name
+                        ) SEPARATOR '|'
+                    ) as vehicle_data,
+
+                    -- Equipment details
+                    GROUP_CONCAT(DISTINCT 
+                        CONCAT(
+                            e.reservation_equipment_equip_id, ':',
+                            equip.equip_name, ':',
+                            e.reservation_equipment_quantity
+                        ) SEPARATOR '|'
+                    ) as equipment_data,
+
+                    -- Passenger details
+                    GROUP_CONCAT(DISTINCT 
+                        CONCAT(
+                            p.reservation_passenger_id, ':',
+                            p.reservation_passenger_name
+                        ) SEPARATOR '|'
+                    ) as passenger_data
+
+                FROM tbl_reservation r
+
+                -- Latest status subquery
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_status_id
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) rs2 ON rs1.reservation_reservation_id = rs2.reservation_reservation_id
+                    AND rs1.reservation_status_id = rs2.max_status_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+
+                LEFT JOIN tbl_status_master sm ON sm.status_master_id = latest_status.reservation_status_status_id
+                LEFT JOIN tbl_users u_req ON r.reservation_user_id = u_req.users_id
+                LEFT JOIN tbl_user_level ul ON u_req.users_user_level_id = ul.user_level_id
+                LEFT JOIN tbl_departments dep ON u_req.users_department_id = dep.departments_id
+
+                LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
+                LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
+
+                LEFT JOIN tbl_reservation_vehicle ve ON r.reservation_id = ve.reservation_reservation_id
+                LEFT JOIN tbl_vehicle vm ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
+                LEFT JOIN tbl_vehicle_model vmm ON vm.vehicle_model_id = vmm.vehicle_model_id
+
+                LEFT JOIN tbl_reservation_equipment e ON r.reservation_id = e.reservation_reservation_id
+                LEFT JOIN tbl_equipments equip ON e.reservation_equipment_equip_id = equip.equip_id
+
+                LEFT JOIN tbl_reservation_passenger p ON r.reservation_id = p.reservation_reservation_id
+
+                WHERE latest_status.reservation_status_status_id = 6
+                  AND latest_status.reservation_active = 0
+                  AND r.reservation_created_at BETWEEN :startDate AND :endDate
+                GROUP BY r.reservation_id
+                ORDER BY r.reservation_start_date DESC
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':startDate', $startDate);
+            $stmt->bindParam(':endDate', $endDate);
+            $stmt->execute();
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $finalResults = [];
+            foreach ($results as $row) {
+                $venues = [];
+                $vehicles = [];
+                $equipment = [];
+                $passengers = [];
+
+                // VENUES
+                if (!empty($row['venue_data']) && $row['venue_data'] !== '::::::') {
+                    foreach (explode('|', $row['venue_data']) as $venueStr) {
+                        $venueParts = explode(':', $venueStr);
+                        if (count($venueParts) >= 6 && !empty(array_filter($venueParts))) {
+                            $venues[] = [
+                                'reservation_venue_id' => $venueParts[0] ?: '',
+                                'venue_id' => $venueParts[1] ?: '',
+                                'venue_name' => $venueParts[2] ?: '',
+                                'occupancy' => $venueParts[3] ?: '',
+                                'operating_hours' => $venueParts[4] ?: '',
+                                'picture' => $venueParts[5] ?: ''
+                            ];
+                        }
+                    }
+                }
+
+                // VEHICLES
+                if (!empty($row['vehicle_data'])) {
+                    foreach (explode('|', $row['vehicle_data']) as $vehicleStr) {
+                        $vehicleParts = explode(':', $vehicleStr);
+                        if (count($vehicleParts) >= 4) {
+                            $vehicles[] = [
+                                'reservation_vehicle_id' => $vehicleParts[0],
+                                'vehicle_id' => $vehicleParts[1],
+                                'license' => $vehicleParts[2],
+                                'model' => $vehicleParts[3]
+                            ];
+                        }
+                    }
+                }
+
+                // EQUIPMENT
+                if (!empty($row['equipment_data'])) {
+                    foreach (explode('|', $row['equipment_data']) as $equipStr) {
+                        $equipParts = explode(':', $equipStr);
+                        if (count($equipParts) >= 3) {
+                            $equipment[] = [
+                                'equipment_id' => $equipParts[0],
+                                'name' => $equipParts[1],
+                                'quantity' => $equipParts[2]
+                            ];
+                        }
+                    }
+                }
+
+                // PASSENGERS
+                if (!empty($row['passenger_data'])) {
+                    foreach (explode('|', $row['passenger_data']) as $passengerStr) {
+                        $passengerParts = explode(':', $passengerStr);
+                        if (count($passengerParts) >= 2) {
+                            $passengers[] = [
+                                'passenger_id' => $passengerParts[0],
+                                'name' => $passengerParts[1]
+                            ];
+                        }
+                    }
+                }
+
+                // DRIVERS: fetch all drivers for this reservation and their details
+                $drivers = [];
+                $driverStmt = $this->conn->prepare(
+                    "SELECT rd.reservation_driver_id, rd.reservation_driver_user_id, rd.reservation_vehicle_id, rd.is_accepted_trip, rd.driver_name, rd.created_at, rd.updated_at, u.users_fname, u.users_mname, u.users_lname, u.users_birthdate, u.users_suffix, u.users_email, u.users_school_id, u.users_contact_number, u.users_user_level_id, u.users_pic, u.is_active, u.title_id
+                     FROM tbl_reservation_driver rd
+                     JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
+                     LEFT JOIN tbl_users u ON rd.reservation_driver_user_id = u.users_id
+                     WHERE rv.reservation_reservation_id = :reservation_id"
+                );
+                $driverStmt->execute([':reservation_id' => $row['reservation_id']]);
+                while ($driverRow = $driverStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $drivers[] = [
+                        'reservation_driver_id' => $driverRow['reservation_driver_id'],
+                        'driver_id' => $driverRow['reservation_driver_user_id'],
+                        'driver_name' => $driverRow['driver_name'] ?? trim($driverRow['users_fname'] . ' ' . $driverRow['users_mname'] . ' ' . $driverRow['users_lname']),
+                        'reservation_vehicle_id' => $driverRow['reservation_vehicle_id'],
+                        'is_accepted_trip' => $driverRow['is_accepted_trip'],
+                        'created_at' => $driverRow['created_at'],
+                        'updated_at' => $driverRow['updated_at'],
+                        'user_details' => [
+                            'users_fname' => $driverRow['users_fname'],
+                            'users_mname' => $driverRow['users_mname'],
+                            'users_lname' => $driverRow['users_lname'],
+                            'users_birthdate' => $driverRow['users_birthdate'],
+                            'users_suffix' => $driverRow['users_suffix'],
+                            'users_email' => $driverRow['users_email'],
+                            'users_school_id' => $driverRow['users_school_id'],
+                            'users_contact_number' => $driverRow['users_contact_number'],
+                            'users_user_level_id' => $driverRow['users_user_level_id'],
+                            'users_pic' => $driverRow['users_pic'],
+                            'is_active' => $driverRow['is_active'],
+                            'title_id' => $driverRow['title_id']
+                        ]
+                    ];
+                }
+
+                $finalResults[] = [
+                    'reservation_id' => $row['reservation_id'],
+                    'reservation_created_at' => $row['reservation_created_at'],
+                    'reservation_title' => $row['reservation_title'],
+                    'reservation_description' => $row['reservation_description'],
+                    'reservation_start_date' => $row['reservation_start_date'],
+                    'reservation_end_date' => $row['reservation_end_date'],
+                    'reservation_participants' => $row['reservation_participants'],
+                    'additional_note' => $row['additional_note'],
+                    'status_name' => $row['status_name'],
+                    'active' => $row['active'],
+                    'reservation_user_id' => $row['reservation_user_id'],
+                    'requester_name' => $row['requester_name'],
+                    'department_name' => $row['department_name'],
+                    'user_level_name' => $row['user_level_name'],
+                    'venues' => $venues,
+                    'vehicles' => $vehicles,
+                    'equipment' => $equipment,
+                    'drivers' => $drivers,
+                    'passengers' => $passengers
+                ];
+            }
+
+            return json_encode(['status' => 'success', 'data' => $finalResults]);
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
     
 
     
@@ -4290,7 +4794,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case "fetchHoliday":
             echo $user->fetchHoliday();
-            break;        case "updateHoliday":
+            break;        
+        case "updateHoliday":
             $holidayId = $input['holiday_id'] ?? null;
             $holidayName = $input['holiday_name'] ?? null;
             $holidayDate = $input['holiday_date'] ?? null;
@@ -4503,6 +5008,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "countCompletedAndCancelledReservations":
             echo $user->countCompletedAndCancelledReservations();
             break;
+        case "insertNotificationTouser":
+            $notification_message = $input['notification_message'] ?? null;
+            $notification_user_id = $input['notification_user_id'] ?? null;
+            $reservation_id = $input['reservation_id'] ?? null;
+            if (!$notification_message || !$notification_user_id) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing notification message or user ID']);
+                break;
+            }
+            echo $user->insertNotificationTouser($notification_message, $notification_user_id, $reservation_id);
+            break;
+        case "fetchVenueHistory":
+            $venueId = $input['venue_id'] ?? null;
+            echo $user->fetchVenueHistory($venueId);
+            break;
+        case "fetchVehicleHistory":
+            $vehicleId = $input['vehicle_id'] ?? null;
+            echo $user->fetchVehicleHistory($vehicleId);
+            break;
+        case "fetchEquipmentHistory":
+            $equipId = $input['equip_id'] ?? null;
+            echo $user->fetchEquipmentHistory($equipId);
+            break;
+        case "fetchEquipmentUnitHistory":
+            $unitId = $input['unit_id'] ?? null;
+            echo $user->fetchEquipmentUnitHistory($unitId);
+            break;
+        case "fetchReservationGenerateReport":
+            $month = $input['month'] ?? null;
+            if ($month === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Month is required']);
+                break;
+            }
+            echo $user->fetchReservationGenerateReport($month);
+            break;
+        // Remove or fix the incomplete fetchReservation case
+
         
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
