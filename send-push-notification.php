@@ -2,11 +2,12 @@
 // Fix OpenSSL configuration issue
 if (function_exists('openssl_get_cipher_methods')) {
     // Try to create a more comprehensive OpenSSL config
-    $configContent = "openssl_conf = default_conf\n[default_conf]\nssl_conf = ssl_sect\n[ssl_sect]\nsystem_default = system_default_sect\n[system_default_sect]\nMinProtocol = TLSv1.2\nCipherString = DEFAULT@SECLEVEL=1\n\n[req]\ndefault_bits = 2048\ndefault_keyfile = server-key.pem\ndistinguished_name = req_distinguished_name\nreq_extensions = v3_req\n\n[req_distinguished_name]\ncountryName = Country Name (2 letter code)\ncountryName_default = US\nstateOrProvinceName = State or Province Name (full name)\nstateOrProvinceName_default = NY\nlocalityName = Locality Name (eg, city)\nlocalityName_default = New York\norganizationName = Organization Name (eg, company)\norganizationName_default = Internet Widgits Pty Ltd\ncommonName = Common Name (e.g. server FQDN or YOUR name)\ncommonName_default = localhost\n\n[v3_req]\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n";
+    $configContent = "openssl_conf = default_conf\n[default_conf]\nssl_conf = ssl_sect\n[ssl_sect]\nsystem_default = system_default_sect\n[system_default_sect]\nMinProtocol = TLSv1.2\nCipherString = DEFAULT@SECLEVEL=1\n\n[req]\ndefault_bits = 2048\ndefault_keyfile = server-key.pem\ndistinguished_name = req_distinguished_name\nreq_extensions = v3_req\n\n[req_distinguished_name]\ncountryName = Country Name (2 letter code)\ncountryName_default = US\nstateOrProvinceName = State or Province Name (full name)\nstateOrProvinceName_default = NY\nlocalityName = Locality Name (eg, city)\nlocalityName_default = New York\norganizationName = Organization Name (eg, company)\norganizationName_default = Internet Widgits Pty Ltd\ncommonName = Common Name (e.g. server FQDN or YOUR name)\ncommonName_default = localhost\n\n[v3_req]\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n\n[ec]\nelliptic_curve = prime256v1\n";
     
     $configPath = __DIR__ . '/temp_openssl.cnf';
     file_put_contents($configPath, $configContent);
     putenv('OPENSSL_CONF=' . $configPath);
+    define('OPENSSL_CONF_PATH', $configPath);
     
     // Register shutdown function to clean up
     register_shutdown_function(function() use ($configPath) {
@@ -102,38 +103,6 @@ class PushNotificationHandler {
             $this->webPush = new WebPush($auth);
             error_log("WebPush initialized successfully");
             
-            // Try to create a local key object to test OpenSSL functionality
-            try {
-                $this->localKeyObject = $this->createLocalKeyObject();
-                error_log("Local key object created successfully");
-            } catch (Exception $e) {
-                error_log("Failed to create local key object: " . $e->getMessage());
-                // Continue anyway, the WebPush library might handle it differently
-            }
-            
-            // Test VAPID key functionality
-            try {
-                $testKey = openssl_pkey_new([
-                    'curve_name' => 'prime256v1',
-                    'private_key_type' => OPENSSL_KEYTYPE_EC,
-                ]);
-                if ($testKey) {
-                    error_log("OpenSSL EC key creation test successful");
-                    openssl_free_key($testKey);
-                } else {
-                    error_log("OpenSSL EC key creation returned null");
-                }
-            } catch (Exception $e) {
-                error_log("OpenSSL EC key creation test failed: " . $e->getMessage());
-            }
-            
-            // Test if we can create a simple WebPush instance without VAPID
-            try {
-                $testWebPush = new WebPush([]);
-                error_log("WebPush without VAPID created successfully");
-            } catch (Exception $e) {
-                error_log("WebPush without VAPID failed: " . $e->getMessage());
-            }
         } catch (Exception $e) {
             error_log("WebPush initialization error: " . $e->getMessage());
             throw $e;
@@ -144,20 +113,44 @@ class PushNotificationHandler {
         try {
             $stmt = $this->conn->prepare("SELECT * FROM tbl_push_subscriptions WHERE user_id = ? AND is_active = 1");
             $stmt->execute([$userId]);
-            $subscription = $stmt->fetch(PDO::FETCH_ASSOC);
+            $subscriptionData = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$subscription) {
+            if (!$subscriptionData) {
                 return ['status' => 'error', 'message' => 'No active subscription found for user ID: ' . $userId];
             }
 
-            error_log("Raw subscription data: " . print_r($subscription, true));
+            error_log("Raw subscription data: " . print_r($subscriptionData, true));
 
-            if (empty($subscription['endpoint']) || empty($subscription['p256dh_key']) || empty($subscription['auth_key'])) {
+            if (empty($subscriptionData['endpoint']) || empty($subscriptionData['p256dh_key']) || empty($subscriptionData['auth_key'])) {
                 return ['status' => 'error', 'message' => 'Incomplete subscription data.'];
             }
+            
+            $subscription = Subscription::create([
+                'endpoint' => $subscriptionData['endpoint'],
+                'publicKey' => $subscriptionData['p256dh_key'],
+                'authToken' => $subscriptionData['auth_key'],
+            ]);
 
-            // Use custom VAPID notification instead of WebPush library
-            return $this->sendVAPIDNotification($subscription);
+            $payload = json_encode([
+                'title' => 'Test Notification',
+                'body' => 'This is a test from the server!',
+                'data' => ['url' => '/viewRequest']
+            ]);
+
+            $this->webPush->queueNotification($subscription, $payload);
+            
+            foreach ($this->webPush->flush() as $report) {
+                if ($report->isSuccess()) {
+                    error_log("Message sent successfully for subscription {$report->getEndpoint()}.");
+                } else {
+                    error_log("Message failed to send for subscription {$report->getEndpoint()}: {$report->getReason()}");
+                    if ($report->isSubscriptionExpired()) {
+                        $this->markSubscriptionInactive($userId);
+                    }
+                }
+            }
+
+            return ['status' => 'success', 'message' => 'Test notification sent.'];
 
         } catch (Exception $e) {
             error_log("Exception in sendTestNotification: " . $e->getMessage());
@@ -170,112 +163,51 @@ class PushNotificationHandler {
         }
     }
     
-    public function sendNotification($userId, $title = 'Notification', $body = 'You have a new notification', $data = []) {
+    public function sendNotification($userId, $title = 'Notification', $body = 'You have a new basta', $data = []) {
         try {
             $stmt = $this->conn->prepare("SELECT * FROM tbl_push_subscriptions WHERE user_id = ? AND is_active = 1");
             $stmt->execute([$userId]);
-            $subscription = $stmt->fetch(PDO::FETCH_ASSOC);
+            $subscriptionData = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if (!$subscription) {
+            if (!$subscriptionData) {
                 return ['status' => 'error', 'message' => 'No active subscription found for user ID: ' . $userId];
             }
 
-            if (empty($subscription['endpoint']) || empty($subscription['p256dh_key']) || empty($subscription['auth_key'])) {
+            if (empty($subscriptionData['endpoint']) || empty($subscriptionData['p256dh_key']) || empty($subscriptionData['auth_key'])) {
                 return ['status' => 'error', 'message' => 'Incomplete subscription data.'];
             }
 
-            // Use custom VAPID notification
-            return $this->sendVAPIDNotification($subscription, $title, $body, $data);
+            $subscription = Subscription::create([
+                'endpoint' => $subscriptionData['endpoint'],
+                'publicKey' => $subscriptionData['p256dh_key'],
+                'authToken' => $subscriptionData['auth_key'],
+            ]);
+
+            $payload = json_encode([
+                'title' => $title,
+                'body' => $body,
+                'data' => $data,
+            ]);
+
+            $this->webPush->queueNotification($subscription, $payload);
+
+            foreach ($this->webPush->flush() as $report) {
+                if ($report->isSuccess()) {
+                    error_log("Notification for user {$userId} sent successfully.");
+                } else {
+                    error_log("Notification for user {$userId} failed: {$report->getReason()}");
+                    if ($report->isSubscriptionExpired()) {
+                        $this->markSubscriptionInactive($userId);
+                    }
+                }
+            }
+
+            return ['status' => 'success', 'message' => 'Notification sent.'];
 
         } catch (Exception $e) {
             error_log("Exception in sendNotification: " . $e->getMessage());
             return ['status' => 'error', 'message' => 'Server error: ' . $e->getMessage()];
         }
-    }
-    
-    private function sendVAPIDNotification($subscription, $title = 'Notification', $body = 'You have a new notification', $data = []) {
-        try {
-            $endpoint = trim($subscription['endpoint']);
-            
-            // Create notification payload (without encryption)
-            $payload = json_encode([
-                'title' => $title,
-                'body' => $body,
-                'data' => $data,
-                'timestamp' => time()
-            ]);
-            
-            // Create headers
-            $headers = [
-                'Content-Type: application/json',
-                'TTL: 86400'
-            ];
-            
-            // Add VAPID headers
-            try {
-                $audience = parse_url($endpoint, PHP_URL_SCHEME) . '://' . parse_url($endpoint, PHP_URL_HOST);
-                
-                // Decode the VAPID keys to get uncompressed format
-                $publicKeyDecoded = \Base64Url\Base64Url::decode(VAPID_PUBLIC_KEY);
-                $privateKeyDecoded = \Base64Url\Base64Url::decode(VAPID_PRIVATE_KEY);
-                
-                $vapidHeaders = \Minishlink\WebPush\VAPID::getVapidHeaders(
-                    $audience,
-                    VAPID_SUBJECT,
-                    $publicKeyDecoded,  // Use decoded (uncompressed) public key
-                    $privateKeyDecoded,  // Use decoded private key
-                    'aesgcm'
-                );
-                
-                foreach ($vapidHeaders as $key => $value) {
-                    $headers[] = "$key: $value";
-                }
-                
-                error_log("VAPID headers created successfully");
-            } catch (Exception $e) {
-                error_log("Failed to create VAPID headers: " . $e->getMessage());
-                return ['status' => 'error', 'message' => 'VAPID header creation failed: ' . $e->getMessage()];
-            }
-            
-            // Send the request using cURL
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $endpoint);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // For development
-            
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $error = curl_error($ch);
-            curl_close($ch);
-            
-            error_log("HTTP Response Code: " . $httpCode);
-            error_log("cURL Error: " . $error);
-            error_log("Response: " . $response);
-            
-            if ($error) {
-                return ['status' => 'error', 'message' => 'cURL error: ' . $error];
-            }
-            
-            if ($httpCode >= 200 && $httpCode < 300) {
-                return ['status' => 'success', 'message' => 'VAPID notification sent successfully'];
-            } else {
-                return ['status' => 'error', 'message' => "HTTP error: $httpCode, Response: $response"];
-            }
-            
-        } catch (Exception $e) {
-            error_log("Exception in sendVAPIDNotification: " . $e->getMessage());
-            return ['status' => 'error', 'message' => 'VAPID notification failed: ' . $e->getMessage()];
-        }
-    }
-
-    private function cleanKey($key) {
-        $cleaned = trim($key);
-        // Keep keys in base64url format as expected by WebPush library
-        return $cleaned;
     }
 
     private function isValidBase64($str) {
@@ -409,95 +341,6 @@ class PushNotificationHandler {
             return false;
         }
     }
-    
-    private function createLocalKeyObject() {
-        // Try multiple approaches to create the local key
-        $attempts = [
-            [
-                'curve_name' => 'prime256v1',
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-            ],
-            [
-                'curve_name' => 'secp256r1', // Alternative name for prime256v1
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-            ],
-            [
-                'curve_name' => 'prime256v1',
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-                'private_key_bits' => 256,
-            ]
-        ];
-        
-        foreach ($attempts as $i => $config) {
-            try {
-                error_log("Attempting to create local key with config " . ($i + 1));
-                $keyResource = openssl_pkey_new($config);
-                if ($keyResource) {
-                    $details = openssl_pkey_get_details($keyResource);
-                    if ($details) {
-                        error_log("Local key created successfully with config " . ($i + 1));
-                        return [$keyResource, $details];
-                    }
-                }
-            } catch (Exception $e) {
-                error_log("Local key creation attempt " . ($i + 1) . " failed: " . $e->getMessage());
-            }
-        }
-        
-        throw new Exception("Failed to create local key object after multiple attempts");
-    }
-    
-    private function sendCustomNotification($subscription, $payload) {
-        // Custom notification approach that bypasses the WebPush library's encryption
-        $endpoint = $subscription->getEndpoint();
-        
-        // Create a simple HTTP request without encryption
-        $headers = [
-            'Content-Type: application/json',
-            'TTL: 86400'
-        ];
-        
-        // Add VAPID headers if available
-        try {
-            $vapidHeaders = \Minishlink\WebPush\VAPID::getVapidHeaders(
-                parse_url($endpoint, PHP_URL_SCHEME) . '://' . parse_url($endpoint, PHP_URL_HOST),
-                VAPID_SUBJECT,
-                VAPID_PUBLIC_KEY,
-                VAPID_PRIVATE_KEY,
-                'aesgcm'
-            );
-            
-            foreach ($vapidHeaders as $key => $value) {
-                $headers[] = "$key: $value";
-            }
-        } catch (Exception $e) {
-            error_log("Failed to create VAPID headers: " . $e->getMessage());
-        }
-        
-        // Send the request
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $endpoint);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-        
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-        
-        if ($error) {
-            throw new Exception("cURL error: " . $error);
-        }
-        
-        if ($httpCode >= 200 && $httpCode < 300) {
-            return ['status' => 'success', 'message' => 'Custom notification sent successfully'];
-        } else {
-            return ['status' => 'error', 'message' => "HTTP error: $httpCode, Response: $response"];
-        }
-    }
 }
 
 // Handle request
@@ -535,7 +378,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'send':
                 if (isset($input['user_id'])) {
                     $title = $input['title'] ?? 'Notification';
-                    $body = $input['body'] ?? 'You have a new notification';
+                    $body = $input['body'] ?? 'mao ni syang notification';
                     $data = $input['data'] ?? [];
                     echo json_encode($handler->sendNotification($input['user_id'], $title, $body, $data));
                 } else {

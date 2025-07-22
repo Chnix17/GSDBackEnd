@@ -894,6 +894,73 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification request'];
                 }
+
+                // --- PUSH NOTIFICATION TO ADMIN LOGIC (for user levels 5, 18) ---
+                $pushUserLevel = 1; // Admin user level
+                $pushDeptId = null;
+
+                if ($userLevelId == 18) {
+                    $pushDeptId = 27; // Specific department for VPAA requests
+                }
+
+                $sqlPushUsers = "SELECT u.users_id
+                                    FROM tbl_users u
+                                    INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                                    WHERE u.users_user_level_id = :push_user_level
+                                    AND ps.is_active = 1";
+                
+                if ($pushDeptId !== null) {
+                    $sqlPushUsers .= " AND u.users_department_id = :push_dept_id";
+                }
+
+                $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
+                $stmtPushUsers->bindValue(':push_user_level', $pushUserLevel, PDO::PARAM_INT);
+                if ($pushDeptId !== null) {
+                    $stmtPushUsers->bindValue(':push_dept_id', $pushDeptId, PDO::PARAM_INT);
+                }
+                $stmtPushUsers->execute();
+                $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
+
+                error_log("Found " . count($pushUsers) . " admin users for push notification (level 5/18 request).");
+
+                // Prepare push notification data
+                $pushTitle = 'New Reservation Request';
+                $pushBody = 'A new reservation request waiting for approval.';
+                $pushData = [
+                    'reservation_id' => $reservationId,
+                    'type' => 'reservation_confirmation'
+                ];
+                $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+
+                foreach ($pushUsers as $pushUser) {
+                    $pushPayload = [
+                        'operation' => 'send',
+                        'user_id' => $pushUser['users_id'],
+                        'title' => $pushTitle,
+                        'body' => $pushBody,
+                        'data' => $pushData
+                    ];
+                    
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushPayload));
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    
+                    $response = curl_exec($ch);
+                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $error = curl_error($ch);
+                    curl_close($ch);
+                    
+                    if ($error || $httpCode < 200 || $httpCode >= 300) {
+                        error_log("Push notification to admin failed for user {$pushUser['users_id']}: " . ($error ?: "HTTP $httpCode"));
+                    } else {
+                        error_log("Push notification to admin sent successfully to user {$pushUser['users_id']}");
+                    }
+                }
             } else {
                 // Default case: set as pending with active 1
                 $statusSql = "INSERT INTO tbl_reservation_status 

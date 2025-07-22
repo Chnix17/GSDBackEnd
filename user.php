@@ -765,93 +765,91 @@ public function fetchEquipmentsWithStatus() {
         }
     }
 
-    public function fetchAvailableDrivers() {
-        try {
-            $sql = "
-                SELECT 
-                    u.users_id,
-                    u.users_fname,
-                    u.users_mname,
-                    u.users_lname,
-                    u.users_suffix,
+        public function fetchAvailableDrivers() {
+            try {
+                $sql = "
+                    SELECT 
+                        u.users_id,
+                        u.users_fname,
+                        u.users_mname,
+                        u.users_lname,
+                        u.users_suffix,
 
-                    u.title_id,
-                    r.reservation_id,
-                    r.reservation_title,
-                    r.reservation_start_date,
-                    r.reservation_end_date,
-                    rs.reservation_status_status_id,
-                    rs.reservation_active,
-                    CASE 
-                        WHEN r.reservation_id IS NULL THEN 'Available'
-                        WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 'Reserved'
-                        ELSE 'Available'
-                    END AS availability_status,
-                    CASE 
-                        WHEN r.reservation_id IS NULL THEN 1
-                        WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 0
-                        ELSE 1
-                    END AS is_available
-                FROM 
-                    tbl_users u
-                LEFT JOIN tbl_reservation_driver rd ON u.users_id = rd.reservation_driver_user_id
-                LEFT JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
-                LEFT JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
-                LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                WHERE 
-                    u.users_user_level_id = 19
-                    AND u.is_active = 1
-                    AND (
-                        r.reservation_id IS NULL
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    )
-                ORDER BY 
-                    u.users_lname, u.users_fname, r.reservation_start_date DESC
-            ";
+                        u.title_id,
+                        r.reservation_id,
+                        r.reservation_title,
+                        r.reservation_start_date,
+                        r.reservation_end_date,
+                        rs.reservation_status_status_id,
+                        rs.reservation_active,
+                        CASE 
+                        
+                            WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 'Reserved'
+                            ELSE 'Available'
+                        END AS availability_status,
+                        CASE 
+                            WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 0
+                            ELSE 1
+                        END AS is_available
+                    FROM 
+                        tbl_users u
+                    LEFT JOIN tbl_reservation_driver rd ON u.users_id = rd.reservation_driver_user_id
+                    LEFT JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
+                    LEFT JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                    WHERE 
+                        u.users_user_level_id = 19
+                        AND u.is_active = 1
+                        AND (
+                            rs.reservation_status_status_id = 6 AND rs.reservation_active = 1
+                        )
+                    ORDER BY 
+                        u.users_lname, u.users_fname, r.reservation_start_date DESC
+                ";
 
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute();
-            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute();
+                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // Group drivers by user_id to handle multiple reservations
-            $drivers = [];
-            foreach ($results as $row) {
-                $userId = $row['users_id'];
-                
-                if (!isset($drivers[$userId])) {
-                    // Initialize driver data
-                    $drivers[$userId] = [
-                        'users_id' => $row['users_id'],
-                        'users_fname' => $row['users_fname'],
-                        'users_mname' => $row['users_mname'],
-                        'users_lname' => $row['users_lname'],
-                        'users_suffix' => $row['users_suffix'],
-                        'title_id' => $row['title_id'],
-                        'availability_status' => $row['availability_status'],
-                        'is_available' => $row['is_available'],
-                        'reservations' => []
-                    ];
+                // Group drivers by user_id to handle multiple reservations
+                $drivers = [];
+                foreach ($results as $row) {
+                    $userId = $row['users_id'];
+                    
+                    if (!isset($drivers[$userId])) {
+                        // Initialize driver data
+                        $drivers[$userId] = [
+                            'users_id' => $row['users_id'],
+                            'users_fname' => $row['users_fname'],
+                            'users_mname' => $row['users_mname'],
+                            'users_lname' => $row['users_lname'],
+                            'users_suffix' => $row['users_suffix'],
+                            'title_id' => $row['title_id'],
+                            'availability_status' => $row['availability_status'],
+                            'is_available' => $row['is_available'],
+                            'reservations' => []
+                        ];
+                    }
+
+                    // Add reservation data if exists and matches criteria
+                    if ($row['reservation_id'] && $row['reservation_status_status_id'] == 6 && $row['reservation_active'] == 1) {
+                        $drivers[$userId]['reservations'][] = [
+                            'reservation_id' => $row['reservation_id'],
+                            'reservation_title' => $row['reservation_title'],
+                            'reservation_start_date' => $row['reservation_start_date'],
+                            'reservation_end_date' => $row['reservation_end_date'],
+                            'reservation_status_status_id' => $row['reservation_status_status_id'],
+                            'reservation_active' => $row['reservation_active']
+                        ];
+                    }
                 }
 
-                // Add reservation data if exists and matches criteria
-                if ($row['reservation_id'] && $row['reservation_status_status_id'] == 6 && $row['reservation_active'] == 1) {
-                    $drivers[$userId]['reservations'][] = [
-                        'reservation_id' => $row['reservation_id'],
-                        'reservation_title' => $row['reservation_title'],
-                        'reservation_start_date' => $row['reservation_start_date'],
-                        'reservation_end_date' => $row['reservation_end_date'],
-                        'reservation_status_status_id' => $row['reservation_status_status_id'],
-                        'reservation_active' => $row['reservation_active']
-                    ];
-                }
+                return json_encode(['status' => 'success', 'data' => array_values($drivers)]);
+
+            } catch (PDOException $e) {
+                return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
             }
-
-            return json_encode(['status' => 'success', 'data' => array_values($drivers)]);
-
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
         }
-    }
     
 
     public function fetchAllReservations() {

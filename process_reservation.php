@@ -1028,8 +1028,27 @@ class User {
             }
             
             if (empty($allUsers)) {
-                error_log("No users with push subscriptions found for notification targets");
-                return;
+                // If no users found, fetch all admins in department 27 with active push subscriptions
+                $sqlAdmins = "SELECT 
+                                u.users_id,
+                                CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
+                                ps.subscription_id,
+                                ps.endpoint,
+                                ps.p256dh_key,
+                                ps.auth_key
+                            FROM tbl_users u
+                            INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                            WHERE u.users_department_id = 27 
+                            AND u.users_user_level_id = 1
+                            AND ps.is_active = 1";
+                $stmtAdmins = $this->conn->prepare($sqlAdmins);
+                $stmtAdmins->execute();
+                $admins = $stmtAdmins->fetchAll(PDO::FETCH_ASSOC);
+                if (empty($admins)) {
+                    error_log("No admin users with push subscriptions found in department 27");
+                    return;
+                }
+                $allUsers = $admins;
             }
             
             // Prepare admin notification message
@@ -1039,7 +1058,12 @@ class User {
             if ($status === 'cancelled') {
                 $adminTitle = "Reservation Cancelled";
                 $adminBody = "A reservation '{$reservation['reservation_title']}' by {$reservation['requester_name']} has been cancelled.";
-            } else {
+            } else if ($status === 'approved') {
+                 // Approved by Dept Head, waiting for GSD
+                $adminTitle = "New Request for GSD";
+                $adminBody = "Waiting Approval For GSD";
+            }
+            else {
                 $adminTitle = "Reservation " . ucfirst($status);
                 $adminBody = "A reservation '{$reservation['reservation_title']}' by {$reservation['requester_name']} has been {$status}.";
             }
@@ -1051,7 +1075,7 @@ class User {
                 'recipient_type' => 'admin'
             ]);
             
-            $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+            $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '../send-push-notification.php';
             $successCount = 0;
             $errorCount = 0;
             
@@ -1171,7 +1195,16 @@ class User {
             
             // Send push notification to the requester after successful database operations
             $notificationUserId = $notification_user_id ?? $userId;
-            $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
+            // Compose notification content
+            $status = $isAccepted ? 'approved' : 'declined';
+            $title = "Reservation " . ucfirst($status);
+            $body = "Your reservation has been {$status}.";
+            $data = [
+                'reservation_id' => $reservationId,
+                'status' => $status,
+                'type' => 'reservation_approval'
+            ];
+            $this->sendPushNotificationToUser($notificationUserId, $title, $body, $data);
 
             return json_encode([
                 'status' => 'success', 
