@@ -215,15 +215,15 @@ class User {
         }
     }
 
-    public function updateVehicleMake($id, $name) {
-        $sql = "UPDATE tbl_vehicle_make SET vehicle_make_name = :name WHERE vehicle_make_id = :id";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bindParam(':name', $name);
-        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+    // public function updateVehicleMake($id, $name) {
+    //     $sql = "UPDATE tbl_vehicle_make SET vehicle_make_name = :name WHERE vehicle_make_id = :id";
+    //     $stmt = $this->conn->prepare($sql);
+    //     $stmt->bindParam(':name', $name);
+    //     $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         
-        return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']) 
-                                 : json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
-    }
+    //     return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']) 
+    //                              : json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+    // }
 
     // New method to update vehicle category
     public function updateVehicleCategory($id, $name) {
@@ -512,11 +512,9 @@ class User {
             // Map the allowed fields that can be updated
             $allowedFields = [
                 'serial_number' => PDO::PARAM_STR,
-                'brand' => PDO::PARAM_STR,
-                'size' => PDO::PARAM_STR,
-                'color' => PDO::PARAM_STR,
                 'is_active' => PDO::PARAM_BOOL,
-                'user_admin_id' => PDO::PARAM_INT
+                'user_admin_id' => PDO::PARAM_INT,
+                'status_availability_id' => PDO::PARAM_INT // <-- add this line
             ];
 
             $updateFields = [];

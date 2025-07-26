@@ -480,11 +480,11 @@ class User {
                 return ["status" => "error", "message" => "User not found"];
             }
 
-            // Generate 6-digit verification token
-            $token = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-            
-            // Set expiration time to 24 hours from now
-            $expires_at = (new DateTime())->modify('+24 hours')->format('Y-m-d H:i:s');
+            // Generate 6-digit verification code
+            $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+            // Set expiration time to 5 minutes from now
+            $expires_at = (new DateTime())->modify('+5 minutes')->format('Y-m-d H:i:s');
 
             // Check if there's an existing verification record
             $checkStmt = $this->conn->prepare("SELECT id FROM tbl_email_verification WHERE user_id = ? LIMIT 1");
@@ -496,16 +496,16 @@ class User {
                 $updateStmt = $this->conn->prepare("UPDATE tbl_email_verification 
                     SET verification_token = ?, expires_at = ?, created_at = NOW()
                     WHERE user_id = ?");
-                $updateStmt->execute([$token, $expires_at, $user_id]);
+                $updateStmt->execute([$code, $expires_at, $user_id]);
             } else {
                 // Insert new verification record
                 $insertStmt = $this->conn->prepare("INSERT INTO tbl_email_verification 
                     (user_id, verification_token, expires_at, created_at) 
                     VALUES (?, ?, ?, NOW())");
-                $insertStmt->execute([$user_id, $token, $expires_at]);
+                $insertStmt->execute([$user_id, $code, $expires_at]);
             }
 
-            // Send verification email
+            // Send verification email (code only, no link)
             $mail = new PHPMailer(true);
             $mail->isSMTP();
             $mail->Host = 'smtp.gmail.com';
@@ -526,19 +526,35 @@ class User {
             $mail->setFrom('vallechristianmark@gmail.com', 'General Services Department');
             $mail->addAddress($user['users_email']);
             $mail->isHTML(true);
-            $mail->Subject = 'Verify Your Email Address';
-            $mail->Body = $this->getEmailVerificationTemplate($token, $user_id);
+            $mail->Subject = 'Your Email Verification Code';
+            $mail->Body = '
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <h2 style="color: #2C3E50;">Email Verification Code</h2>
+                    </div>
+                    <div style="margin-bottom: 20px; color: #555;">
+                        <p>Use the following code to verify your email address:</p>
+                        <div style="background-color: #f8f9fa; padding: 15px; text-align: center; border-radius: 5px;">
+                            <h1 style="color: #2C3E50; letter-spacing: 5px; margin: 0;">' . $code . '</h1>
+                        </div>
+                        <p style="color: #e74c3c; margin-top: 15px;"><strong>This code will expire in 5 minutes.</strong></p>
+                    </div>
+                    <div style="border-top: 1px solid #ddd; padding-top: 15px; font-size: 12px; color: #777;">
+                        <p>If you did not create an account, please ignore this email.</p>
+                        <p>This is an automated message, please do not reply.</p>
+                    </div>
+                </div>';
 
             $mail->send();
-            
+
             return [
                 "status" => "success",
-                "message" => "Verification email sent successfully",
+                "message" => "Verification code sent successfully",
                 "expires" => $expires_at
             ];
 
         } catch (Exception $e) {
-            return ["status" => "error", "message" => "Failed to send verification email: " . $e->getMessage()];
+            return ["status" => "error", "message" => "Failed to send verification code: " . $e->getMessage()];
         }
     }
 

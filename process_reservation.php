@@ -1231,21 +1231,49 @@ class User {
             $stmtDeactivate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
             $stmtDeactivate->execute();
 
+            // Fetch reservation and requester info for notification message
+            $sqlInfo = "SELECT 
+                            r.reservation_title,
+                            CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS requester_name
+                        FROM tbl_reservation r
+                        LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                        WHERE r.reservation_id = :reservation_id";
+            $stmtInfo = $this->conn->prepare($sqlInfo);
+            $stmtInfo->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmtInfo->execute();
+            $info = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+
+            if ($info) {
+                $cancelMessage = "Reservation '{$info['reservation_title']}' by {$info['requester_name']} has been cancelled.";
+            } else {
+                $cancelMessage = 'Reservation Cancelled';
+            }
+
             // Then insert: Add new cancelled status (5) with active = 1
             $sqlInsert = "
                 INSERT INTO tbl_reservation_status 
                 (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
                 VALUES (:reservation_id, 5, 1, NOW(), :user_id)";
-            
             $stmtInsert = $this->conn->prepare($sqlInsert);
             $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
             $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
             $stmtInsert->execute();
 
+            // Insert notification for GSD (department 27, user level 1)
+            $sqlDepartmentNotification = "INSERT INTO notification_requests 
+                                           (notification_message, notification_department_id, notification_user_level_id, notification_create) 
+                                           VALUES (:message, 27, 1, NOW())";
+            $stmtDepartmentNotification = $this->conn->prepare($sqlDepartmentNotification);
+            $stmtDepartmentNotification->bindParam(':message', $cancelMessage, PDO::PARAM_STR);
+            $stmtDepartmentNotification->execute();
+
             $this->conn->commit();
             
             // Send push notification to the requester after successful cancellation
             $this->sendApprovalPushNotification($reservationId, false, $userId);
+
+            // Send push notification to GSD admins (department 27, user level 1)
+            $this->sendPushNotificationToAdminsAfterCancel($reservationId);
 
             return json_encode([
                 'status' => 'success', 
@@ -1256,6 +1284,84 @@ class User {
         } catch (PDOException $e) {
             $this->conn->rollBack();
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    // Send push notification to GSD admins after cancellation
+    private function sendPushNotificationToAdminsAfterCancel($reservationId) {
+        try {
+            // Get reservation and requester info
+            $sql = "SELECT 
+                        r.reservation_title,
+                        r.reservation_description,
+                        r.reservation_start_date,
+                        r.reservation_end_date,
+                        r.reservation_user_id,
+                        CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS requester_name
+                    FROM tbl_reservation r
+                    LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                    WHERE r.reservation_id = :reservation_id";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmt->execute();
+            $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$reservation) return;
+
+            // Fetch all GSD admins (department 27, user level 1) with active push subscriptions
+            $sqlAdmins = "SELECT 
+                            u.users_id,
+                            CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
+                            ps.subscription_id,
+                            ps.endpoint,
+                            ps.p256dh_key,
+                            ps.auth_key
+                        FROM tbl_users u
+                        INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                        WHERE u.users_department_id = 27 
+                        AND u.users_user_level_id = 1
+                        AND ps.is_active = 1";
+            $stmtAdmins = $this->conn->prepare($sqlAdmins);
+            $stmtAdmins->execute();
+            $admins = $stmtAdmins->fetchAll(PDO::FETCH_ASSOC);
+            if (empty($admins)) return;
+
+            $title = 'Reservation Cancelled';
+            $body = "A reservation '{$reservation['reservation_title']}' by {$reservation['requester_name']} has been cancelled.";
+            $data = [
+                'reservation_id' => $reservationId,
+                'status' => 'cancelled',
+                'title' => $reservation['reservation_title'],
+                'requester_name' => $reservation['requester_name'],
+                'type' => 'reservation_cancelled',
+                'notification_id' => uniqid('admin_cancel_', true),
+                'timestamp' => time(),
+                'recipient_type' => 'admin'
+            ];
+            $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '../send-push-notification.php';
+            foreach ($admins as $user) {
+                $pushData = [
+                    'operation' => 'send',
+                    'user_id' => $user['users_id'],
+                    'title' => $title,
+                    'body' => $body,
+                    'data' => $data
+                ];
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushData));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Content-Type: application/json',
+                    'Content-Length: ' . strlen(json_encode($pushData))
+                ]);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_exec($ch);
+                curl_close($ch);
+            }
+        } catch (Exception $e) {
+            error_log("Error sending push notifications to GSD admins after cancel: " . $e->getMessage());
         }
     }
 

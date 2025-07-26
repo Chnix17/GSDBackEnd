@@ -34,188 +34,188 @@ class User {
         return $this->executeQuery($sql);
     }
 
-    public function fetchVehicles() {
-        $sql = "SELECT  
-                    v.vehicle_id,
-                    v.vehicle_pic,
-                    v.year,
-                    vm.vehicle_make_name, 
-                    vc.vehicle_category_name,
-                    vmd.vehicle_model_name,      
-                    v.vehicle_license,
-                    sa.status_availability_name
-                FROM 
-                    tbl_vehicle v 
-                INNER JOIN 
-                    tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id 
-                INNER JOIN 
-                    tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
-                INNER JOIN 
-                    tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
-                INNER JOIN
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
-                WHERE 
-                    v.status_availability_id != 7 AND v.status_availability_id != 8";
-                 // Added condition for availability
+    // public function fetchVehicles() {
+    //     $sql = "SELECT  
+    //                 v.vehicle_id,
+    //                 v.vehicle_pic,
+    //                 v.year,
+    //                 vm.vehicle_make_name, 
+    //                 vc.vehicle_category_name,
+    //                 vmd.vehicle_model_name,      
+    //                 v.vehicle_license,
+    //                 sa.status_availability_name
+    //             FROM 
+    //                 tbl_vehicle v 
+    //             INNER JOIN 
+    //                 tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id 
+    //             INNER JOIN 
+    //                 tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
+    //             INNER JOIN 
+    //                 tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
+    //             INNER JOIN
+    //                 tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+    //             WHERE 
+    //                 v.status_availability_id != 7 AND v.status_availability_id != 8";
+    //              // Added condition for availability
 
-        return $this->executeQuery($sql);
-    }
+    //     return $this->executeQuery($sql);
+    // }
 
-    public function fetchEquipments($startDateTime = null, $endDateTime = null) {
-    header('Content-Type: application/json');
+//     public function fetchEquipments($startDateTime = null, $endDateTime = null) {
+//     header('Content-Type: application/json');
 
-    // 1. Validate date inputs (if provided)
-    if ($startDateTime !== null && $endDateTime !== null) {
-        if (!strtotime($startDateTime) || !strtotime($endDateTime)) {
-            http_response_code(400);
-            die(json_encode([
-                'status'    => 'error',
-                'message'   => 'Invalid date format',
-                'timestamp' => date('Y-m-d H:i:s')
-            ]));
-        }
-    }
+//     // 1. Validate date inputs (if provided)
+//     if ($startDateTime !== null && $endDateTime !== null) {
+//         if (!strtotime($startDateTime) || !strtotime($endDateTime)) {
+//             http_response_code(400);
+//             die(json_encode([
+//                 'status'    => 'error',
+//                 'message'   => 'Invalid date format',
+//                 'timestamp' => date('Y-m-d H:i:s')
+//             ]));
+//         }
+//     }
 
-    try {
-        // 2. Build reserved-quantity map if date range provided
-        $reservedQuantities = [];
-        if ($startDateTime !== null && $endDateTime !== null) {
-            $reservedStmt = $this->conn->prepare("
-                SELECT
-                    re.reservation_equipment_equip_id AS equip_id,
-                    SUM(re.reservation_equipment_quantity) AS reserved_quantity
-                FROM tbl_reservation_equipment re
-                INNER JOIN tbl_reservation r
-                    ON r.reservation_id = re.reservation_reservation_id
-                INNER JOIN tbl_reservation_status rs
-                    ON rs.reservation_reservation_id = r.reservation_id
-                WHERE
-                    rs.reservation_status_status_id = 6 -- Assuming 6 is 'Reserved'
-                    AND rs.reservation_active = 1
-                    AND (
-                        (r.reservation_start_date <= :end AND r.reservation_end_date >= :start)
-                    )
-                GROUP BY re.reservation_equipment_equip_id
-            ");
-            $reservedStmt->execute([
-                ':start' => $startDateTime,
-                ':end'   => $endDateTime
-            ]);
-            while ($row = $reservedStmt->fetch(PDO::FETCH_ASSOC)) {
-                $reservedQuantities[(int)$row['equip_id']] = (int)$row['reserved_quantity'];
-            }
-        }
+//     try {
+//         // 2. Build reserved-quantity map if date range provided
+//         $reservedQuantities = [];
+//         if ($startDateTime !== null && $endDateTime !== null) {
+//             $reservedStmt = $this->conn->prepare("
+//                 SELECT
+//                     re.reservation_equipment_equip_id AS equip_id,
+//                     SUM(re.reservation_equipment_quantity) AS reserved_quantity
+//                 FROM tbl_reservation_equipment re
+//                 INNER JOIN tbl_reservation r
+//                     ON r.reservation_id = re.reservation_reservation_id
+//                 INNER JOIN tbl_reservation_status rs
+//                     ON rs.reservation_reservation_id = r.reservation_id
+//                 WHERE
+//                     rs.reservation_status_status_id = 6 -- Assuming 6 is 'Reserved'
+//                     AND rs.reservation_active = 1
+//                     AND (
+//                         (r.reservation_start_date <= :end AND r.reservation_end_date >= :start)
+//                     )
+//                 GROUP BY re.reservation_equipment_equip_id
+//             ");
+//             $reservedStmt->execute([
+//                 ':start' => $startDateTime,
+//                 ':end'   => $endDateTime
+//             ]);
+//             while ($row = $reservedStmt->fetch(PDO::FETCH_ASSOC)) {
+//                 $reservedQuantities[(int)$row['equip_id']] = (int)$row['reserved_quantity'];
+//             }
+//         }
 
-        // 3. Main Query: Fetch all active equipment with their total on-hand quantity
-        // This query combines logic for both consumable and unit-based equipment
-        $mainQuery = "
-            SELECT
-                e.equip_id,
-                e.equip_name,
-                e.equip_type, -- Crucial for distinguishing consumable vs. unit
-                e.equip_created_at,
-                tec.equipments_category_name AS category_name, -- Alias for consistency
-                e.equipments_category_id, -- Correct column name
-                -- Calculate total on-hand quantity based on equip_type
-                CASE
-                    WHEN e.equip_type = 'Consumable' THEN COALESCE(eq.quantity, 0)
-                    ELSE COALESCE(eu.unit_count, 0)
-                END AS total_on_hand
-            FROM tbl_equipments e
-            LEFT JOIN tbl_equipment_category tec
-                ON e.equipments_category_id = tec.equipments_category_id
-            -- Join for Consumable quantities (get the latest quantity)
-            LEFT JOIN (
-                SELECT
-                    equip_id,
-                    quantity
-                FROM tbl_equipment_quantity
-                WHERE (equip_id, last_updated) IN (
-                    SELECT equip_id, MAX(last_updated)
-                    FROM tbl_equipment_quantity
-                    GROUP BY equip_id
-                )
-            ) AS eq ON e.equip_id = eq.equip_id AND e.equip_type = 'Consumable'
-            -- Join for Unit-based equipment (count active units)
-            LEFT JOIN (
-                SELECT
-                    equip_id,
-                    COUNT(*) AS unit_count
-                FROM tbl_equipment_unit
-                WHERE is_active = 1 AND status_availability_id = 1 -- Only count active and available units
-                GROUP BY equip_id
-            ) AS eu ON e.equip_id = eu.equip_id AND e.equip_type != 'Consumable'
-            WHERE e.is_active = 1 -- Only fetch active equipment
-            ORDER BY e.equip_name;
-        ";
+//         // 3. Main Query: Fetch all active equipment with their total on-hand quantity
+//         // This query combines logic for both consumable and unit-based equipment
+//         $mainQuery = "
+//             SELECT
+//                 e.equip_id,
+//                 e.equip_name,
+//                 e.equip_type, -- Crucial for distinguishing consumable vs. unit
+//                 e.equip_created_at,
+//                 tec.equipments_category_name AS category_name, -- Alias for consistency
+//                 e.equipments_category_id, -- Correct column name
+//                 -- Calculate total on-hand quantity based on equip_type
+//                 CASE
+//                     WHEN e.equip_type = 'Consumable' THEN COALESCE(eq.quantity, 0)
+//                     ELSE COALESCE(eu.unit_count, 0)
+//                 END AS total_on_hand
+//             FROM tbl_equipments e
+//             LEFT JOIN tbl_equipment_category tec
+//                 ON e.equipments_category_id = tec.equipments_category_id
+//             -- Join for Consumable quantities (get the latest quantity)
+//             LEFT JOIN (
+//                 SELECT
+//                     equip_id,
+//                     quantity
+//                 FROM tbl_equipment_quantity
+//                 WHERE (equip_id, last_updated) IN (
+//                     SELECT equip_id, MAX(last_updated)
+//                     FROM tbl_equipment_quantity
+//                     GROUP BY equip_id
+//                 )
+//             ) AS eq ON e.equip_id = eq.equip_id AND e.equip_type = 'Consumable'
+//             -- Join for Unit-based equipment (count active units)
+//             LEFT JOIN (
+//                 SELECT
+//                     equip_id,
+//                     COUNT(*) AS unit_count
+//                 FROM tbl_equipment_unit
+//                 WHERE is_active = 1 AND status_availability_id = 1 -- Only count active and available units
+//                 GROUP BY equip_id
+//             ) AS eu ON e.equip_id = eu.equip_id AND e.equip_type != 'Consumable'
+//             WHERE e.is_active = 1 -- Only fetch active equipment
+//             ORDER BY e.equip_name;
+//         ";
 
-        $mainStmt = $this->conn->prepare($mainQuery);
-        $mainStmt->execute();
-        $equipments = $mainStmt->fetchAll(PDO::FETCH_ASSOC);
+//         $mainStmt = $this->conn->prepare($mainQuery);
+//         $mainStmt->execute();
+//         $equipments = $mainStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // 4. Process availability and filter
-        $finalResults = [];
-        foreach ($equipments as $equip) {
-            $id = (int)$equip['equip_id'];
-            $totalOnHand = (int)$equip['total_on_hand'];
-            $reserved = $reservedQuantities[$id] ?? 0;
-            $available = max(0, $totalOnHand - $reserved);
+//         // 4. Process availability and filter
+//         $finalResults = [];
+//         foreach ($equipments as $equip) {
+//             $id = (int)$equip['equip_id'];
+//             $totalOnHand = (int)$equip['total_on_hand'];
+//             $reserved = $reservedQuantities[$id] ?? 0;
+//             $available = max(0, $totalOnHand - $reserved);
 
-            // Only include equipment that has availability or has reserved items
-            if ($available > 0 || $reserved > 0) {
-                $equip['current_quantity'] = $totalOnHand; // Renamed for clarity in output
-                $equip['reserved_quantity'] = $reserved;
-                $equip['available_quantity'] = $available;
-                $equip['is_available'] = ($available > 0); // Boolean flag for availability
-                $finalResults[] = $equip;
-            }
-        }
+//             // Only include equipment that has availability or has reserved items
+//             if ($available > 0 || $reserved > 0) {
+//                 $equip['current_quantity'] = $totalOnHand; // Renamed for clarity in output
+//                 $equip['reserved_quantity'] = $reserved;
+//                 $equip['available_quantity'] = $available;
+//                 $equip['is_available'] = ($available > 0); // Boolean flag for availability
+//                 $finalResults[] = $equip;
+//             }
+//         }
 
-        // 5. Return JSON
-        http_response_code(200);
-        echo json_encode([
-            'status'    => 'success',
-            'data'      => $finalResults,
-            'timestamp' => date('Y-m-d H:i:s')
-        ], JSON_UNESCAPED_SLASHES);
+//         // 5. Return JSON
+//         http_response_code(200);
+//         echo json_encode([
+//             'status'    => 'success',
+//             'data'      => $finalResults,
+//             'timestamp' => date('Y-m-d H:i:s')
+//         ], JSON_UNESCAPED_SLASHES);
 
-    } catch (PDOException $e) {
-        http_response_code(500);
-        echo json_encode([
-            'status'    => 'error',
-            'message'   => 'Database error: ' . $e->getMessage(),
-            'timestamp' => date('Y-m-d H:i:s')
-        ]);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode([
-            'status'    => 'error',
-            'message'   => 'General error: ' . $e->getMessage(),
-            'timestamp' => date('Y-m-d H:i:s')
-        ]);
-    }
-}
+//     } catch (PDOException $e) {
+//         http_response_code(500);
+//         echo json_encode([
+//             'status'    => 'error',
+//             'message'   => 'Database error: ' . $e->getMessage(),
+//             'timestamp' => date('Y-m-d H:i:s')
+//         ]);
+//     } catch (Exception $e) {
+//         http_response_code(500);
+//         echo json_encode([
+//             'status'    => 'error',
+//             'message'   => 'General error: ' . $e->getMessage(),
+//             'timestamp' => date('Y-m-d H:i:s')
+//         ]);
+//     }
+// }
    
-    public function fetchVenue() {
-        $sql = "SELECT 
-                    ven_id, 
-                    ven_name, 
-                    ven_occupancy, 
-                    ven_created_at, 
-                    ven_updated_at, 
-                    v.status_availability_id,
-                    sa.status_availability_name,
-                    ven_pic
-                FROM 
-                    tbl_venue v
-                INNER JOIN 
-                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id 
-                WHERE 
-                    v.status_availability_id != 7 AND v.status_availability_id != 8 
-                ORDER BY 
-                    ven_name"; 
-        return $this->executeQuery($sql);
-    }
+    // public function fetchVenue() {
+    //     $sql = "SELECT 
+    //                 ven_id, 
+    //                 ven_name, 
+    //                 ven_occupancy, 
+    //                 ven_created_at, 
+    //                 ven_updated_at, 
+    //                 v.status_availability_id,
+    //                 sa.status_availability_name,
+    //                 ven_pic
+    //             FROM 
+    //                 tbl_venue v
+    //             INNER JOIN 
+    //                 tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id 
+    //             WHERE 
+    //                 v.status_availability_id != 7 AND v.status_availability_id != 8 
+    //             ORDER BY 
+    //                 ven_name"; 
+    //     return $this->executeQuery($sql);
+    // }
 
 
 
@@ -223,78 +223,78 @@ class User {
         unset($this->conn);
     }
 
-    public function fetchAllResources($type = null) {
-        // SQL query for vehicles - only fetch vehicle_license and vehicle_model_name (vehicle model title)
-        $vehicleQuery = "
-            SELECT v.vehicle_license AS vehicle_registration, v.vehicle_id,
-                   vm.vehicle_model_name AS vehicle_model_title
-            FROM tbl_vehicle v
-            INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
-            LEFT JOIN tbl_checklist_vehicle_master cvm ON v.vehicle_id = cvm.checklist_vehicle_vehicle_id
-            WHERE cvm.checklist_vehicle_id IS NULL
-        ";
+    // public function fetchAllResources($type = null) {
+    //     // SQL query for vehicles - only fetch vehicle_license and vehicle_model_name (vehicle model title)
+    //     $vehicleQuery = "
+    //         SELECT v.vehicle_license AS vehicle_registration, v.vehicle_id,
+    //                vm.vehicle_model_name AS vehicle_model_title
+    //         FROM tbl_vehicle v
+    //         INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+    //         LEFT JOIN tbl_checklist_vehicle_master cvm ON v.vehicle_id = cvm.checklist_vehicle_vehicle_id
+    //         WHERE cvm.checklist_vehicle_id IS NULL
+    //     ";
     
-        // SQL query for venues - only fetch venue name
-        $venueQuery = "
-            SELECT ve.ven_name, ve.ven_id
-            FROM tbl_venue ve
-            LEFT JOIN tbl_checklist_venue_master cvm ON ve.ven_id = cvm.checklist_venue_ven_id
-            WHERE cvm.checklist_venue_id IS NULL
-        ";
+    //     // SQL query for venues - only fetch venue name
+    //     $venueQuery = "
+    //         SELECT ve.ven_name, ve.ven_id
+    //         FROM tbl_venue ve
+    //         LEFT JOIN tbl_checklist_venue_master cvm ON ve.ven_id = cvm.checklist_venue_ven_id
+    //         WHERE cvm.checklist_venue_id IS NULL
+    //     ";
     
-        // SQL query for equipment - only fetch equipment name
-        $equipmentQuery = "
-            SELECT eq.equip_name, eq.equip_id
-            FROM tbl_equipments eq
-            LEFT JOIN tbl_checklist_equipment_master cem ON eq.equip_id = cem.checklist_equipment_equip_id
-            WHERE cem.checklist_equipment_id IS NULL
-        ";
+    //     // SQL query for equipment - only fetch equipment name
+    //     $equipmentQuery = "
+    //         SELECT eq.equip_name, eq.equip_id
+    //         FROM tbl_equipments eq
+    //         LEFT JOIN tbl_checklist_equipment_master cem ON eq.equip_id = cem.checklist_equipment_equip_id
+    //         WHERE cem.checklist_equipment_id IS NULL
+    //     ";
     
-        try {
-            $result = [];
+    //     try {
+    //         $result = [];
             
-            switch ($type) {
-                case 'vehicle':
-                    $stmt = $this->conn->prepare($vehicleQuery);
-                    $stmt->execute();
-                    $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    break;
-                case 'venue':
-                    $stmt = $this->conn->prepare($venueQuery);
-                    $stmt->execute();
-                    $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    break;
-                case 'equipment':
-                    $stmt = $this->conn->prepare($equipmentQuery);
-                    $stmt->execute();
-                    $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                    break;
-                default:
-                    // Fetch all resources if no type specified
-                    $stmt = $this->conn->prepare($vehicleQuery);
-                    $stmt->execute();
-                    $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //         switch ($type) {
+    //             case 'vehicle':
+    //                 $stmt = $this->conn->prepare($vehicleQuery);
+    //                 $stmt->execute();
+    //                 $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //                 break;
+    //             case 'venue':
+    //                 $stmt = $this->conn->prepare($venueQuery);
+    //                 $stmt->execute();
+    //                 $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //                 break;
+    //             case 'equipment':
+    //                 $stmt = $this->conn->prepare($equipmentQuery);
+    //                 $stmt->execute();
+    //                 $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //                 break;
+    //             default:
+    //                 // Fetch all resources if no type specified
+    //                 $stmt = $this->conn->prepare($vehicleQuery);
+    //                 $stmt->execute();
+    //                 $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-                    $stmt = $this->conn->prepare($venueQuery);
-                    $stmt->execute();
-                    $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //                 $stmt = $this->conn->prepare($venueQuery);
+    //                 $stmt->execute();
+    //                 $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-                    $stmt = $this->conn->prepare($equipmentQuery);
-                    $stmt->execute();
-                    $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+    //                 $stmt = $this->conn->prepare($equipmentQuery);
+    //                 $stmt->execute();
+    //                 $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //         }
     
-            return json_encode([
-                'status' => 'success',
-                'data' => $result
-            ]);
-        } catch (PDOException $e) {
-            return json_encode([
-                'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage()
-            ]);
-        }
-    }
+    //         return json_encode([
+    //             'status' => 'success',
+    //             'data' => $result
+    //         ]);
+    //     } catch (PDOException $e) {
+    //         return json_encode([
+    //             'status' => 'error',
+    //             'message' => 'Database error: ' . $e->getMessage()
+    //         ]);
+    //     }
+    // }
    
     
     public function fetchChecklist() {
@@ -504,210 +504,193 @@ class User {
 }
 
     
-    public function fetchPersonnel() {
-        $sql = "SELECT users_id,
-                CONCAT(
-                    users_fname,
-                    CASE 
-                        WHEN users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.')
-                        ELSE ''
-                    END,
-                    ' ',
-                    users_lname
-                ) AS full_name
-                FROM tbl_users
-                WHERE is_active = 1 
-                AND users_user_level_id = 2
-                ORDER BY users_fname";
-        return $this->executeQuery($sql);
-    }
 
-    public function getReservedById($reservation_id) {
-        try {
-            // 1. Fetch the reservation details
-            $reservationSql = "
-                SELECT 
-                    reservation_id,
-                    reservation_title,
-                    reservation_description,
-                    reservation_start_date,
-                    reservation_end_date,
-                    reservation_participants,
-                    reservation_user_id,
-                    reservation_created_at
-                FROM 
-                    tbl_reservation
-                WHERE 
-                    reservation_id = :reservation_id
-            ";
-            $stmt = $this->conn->prepare($reservationSql);
-            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-            $stmt->execute();
-            $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+    // public function getReservedById($reservation_id) {
+    //     try {
+    //         // 1. Fetch the reservation details
+    //         $reservationSql = "
+    //             SELECT 
+    //                 reservation_id,
+    //                 reservation_title,
+    //                 reservation_description,
+    //                 reservation_start_date,
+    //                 reservation_end_date,
+    //                 reservation_participants,
+    //                 reservation_user_id,
+    //                 reservation_created_at
+    //             FROM 
+    //                 tbl_reservation
+    //             WHERE 
+    //                 reservation_id = :reservation_id
+    //         ";
+    //         $stmt = $this->conn->prepare($reservationSql);
+    //         $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+    //         $stmt->execute();
+    //         $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
     
-            if (!$reservation) {
-                return json_encode(['status' => 'error', 'message' => 'Reservation not found']);
-            }
+    //         if (!$reservation) {
+    //             return json_encode(['status' => 'error', 'message' => 'Reservation not found']);
+    //         }
     
-            $result = [
-                'reservation' => $reservation,
-                'venues'      => [],
-                'vehicles'    => [],
-                'equipments'  => []
-            ];
+    //         $result = [
+    //             'reservation' => $reservation,
+    //             'venues'      => [],
+    //             'vehicles'    => [],
+    //             'equipments'  => []
+    //         ];
     
-            // 2. Fetch venues
-            $venueSql = "
-                SELECT 
-                    rv.reservation_venue_id, 
-                    rv.reservation_venue_venue_id AS venue_id
-                FROM 
-                    tbl_reservation_venue rv
-                WHERE 
-                    rv.reservation_reservation_id = :reservation_id
-            ";
-            $stmt = $this->conn->prepare($venueSql);
-            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-            $stmt->execute();
-            $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //         // 2. Fetch venues
+    //         $venueSql = "
+    //             SELECT 
+    //                 rv.reservation_venue_id, 
+    //                 rv.reservation_venue_venue_id AS venue_id
+    //             FROM 
+    //                 tbl_reservation_venue rv
+    //             WHERE 
+    //                 rv.reservation_reservation_id = :reservation_id
+    //         ";
+    //         $stmt = $this->conn->prepare($venueSql);
+    //         $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+    //         $stmt->execute();
+    //         $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-            foreach ($venues as $venueRow) {
-                $venueDetail = [
-                    'reservation_venue_id' => $venueRow['reservation_venue_id'],
-                    'venue_id' => $venueRow['venue_id'],
-                    'name' => null,
-                    'checklists' => []
-                ];
+    //         foreach ($venues as $venueRow) {
+    //             $venueDetail = [
+    //                 'reservation_venue_id' => $venueRow['reservation_venue_id'],
+    //                 'venue_id' => $venueRow['venue_id'],
+    //                 'name' => null,
+    //                 'checklists' => []
+    //             ];
     
-                $venNameSql = "SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id";
-                $stmtName = $this->conn->prepare($venNameSql);
-                $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
-                $stmtName->execute();
-                $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
-                $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
+    //             $venNameSql = "SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id";
+    //             $stmtName = $this->conn->prepare($venNameSql);
+    //             $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+    //             $stmtName->execute();
+    //             $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
+    //             $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
     
-                $checklistVenueSql = "
-                    SELECT checklist_venue_id, checklist_name 
-                    FROM tbl_checklist_venue_master 
-                    WHERE checklist_venue_ven_id = :venue_id
-                ";
-                $stmtChecklist = $this->conn->prepare($checklistVenueSql);
-                $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
-                $stmtChecklist->execute();
-                $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    //             $checklistVenueSql = "
+    //                 SELECT checklist_venue_id, checklist_name 
+    //                 FROM tbl_checklist_venue_master 
+    //                 WHERE checklist_venue_ven_id = :venue_id
+    //             ";
+    //             $stmtChecklist = $this->conn->prepare($checklistVenueSql);
+    //             $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+    //             $stmtChecklist->execute();
+    //             $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
     
-                $result['venues'][] = $venueDetail;
-            }
+    //             $result['venues'][] = $venueDetail;
+    //         }
     
-            // 3. Fetch vehicles
-            $vehicleSql = "
-                SELECT 
-                    rvh.reservation_vehicle_id, 
-                    rvh.reservation_vehicle_vehicle_id AS vehicle_id
-                FROM 
-                    tbl_reservation_vehicle rvh
-                WHERE 
-                    rvh.reservation_reservation_id = :reservation_id
-            ";
-            $stmt = $this->conn->prepare($vehicleSql);
-            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-            $stmt->execute();
-            $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //         // 3. Fetch vehicles
+    //         $vehicleSql = "
+    //             SELECT 
+    //                 rvh.reservation_vehicle_id, 
+    //                 rvh.reservation_vehicle_vehicle_id AS vehicle_id
+    //             FROM 
+    //                 tbl_reservation_vehicle rvh
+    //             WHERE 
+    //                 rvh.reservation_reservation_id = :reservation_id
+    //         ";
+    //         $stmt = $this->conn->prepare($vehicleSql);
+    //         $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+    //         $stmt->execute();
+    //         $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-            foreach ($vehicles as $vehicleRow) {
-                $vehicleDetail = [
-                    'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
-                    'vehicle_id' => $vehicleRow['vehicle_id'],
-                    'model' => null,
-                    'license' => null,
-                    'checklists' => []
-                ];
+    //         foreach ($vehicles as $vehicleRow) {
+    //             $vehicleDetail = [
+    //                 'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
+    //                 'vehicle_id' => $vehicleRow['vehicle_id'],
+    //                 'model' => null,
+    //                 'license' => null,
+    //                 'checklists' => []
+    //             ];
     
-                $vehicleDetailSql = "
-                    SELECT 
-                        vm.vehicle_model_name, 
-                        v.vehicle_license 
-                    FROM 
-                        tbl_vehicle v
-                    LEFT JOIN 
-                        tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
-                    WHERE 
-                        v.vehicle_id = :vehicle_id
-                ";
-                $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
-                $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
-                $stmtVehicle->execute();
-                $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
+    //             $vehicleDetailSql = "
+    //                 SELECT 
+    //                     vm.vehicle_model_name, 
+    //                     v.vehicle_license 
+    //                 FROM 
+    //                     tbl_vehicle v
+    //                 LEFT JOIN 
+    //                     tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+    //                 WHERE 
+    //                     v.vehicle_id = :vehicle_id
+    //             ";
+    //             $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
+    //             $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+    //             $stmtVehicle->execute();
+    //             $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
     
-                if ($vehicleInfo) {
-                    $vehicleDetail['model'] = $vehicleInfo['vehicle_model_name'];
-                    $vehicleDetail['license'] = $vehicleInfo['vehicle_license'];
-                }
+    //             if ($vehicleInfo) {
+    //                 $vehicleDetail['model'] = $vehicleInfo['vehicle_model_name'];
+    //                 $vehicleDetail['license'] = $vehicleInfo['vehicle_license'];
+    //             }
     
-                $checklistVehicleSql = "
-                    SELECT checklist_vehicle_id, checklist_name 
-                    FROM tbl_checklist_vehicle_master 
-                    WHERE checklist_vehicle_vehicle_id = :vehicle_id
-                ";
-                $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
-                $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
-                $stmtChecklist->execute();
-                $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    //             $checklistVehicleSql = "
+    //                 SELECT checklist_vehicle_id, checklist_name 
+    //                 FROM tbl_checklist_vehicle_master 
+    //                 WHERE checklist_vehicle_vehicle_id = :vehicle_id
+    //             ";
+    //             $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
+    //             $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+    //             $stmtChecklist->execute();
+    //             $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
     
-                $result['vehicles'][] = $vehicleDetail;
-            }
+    //             $result['vehicles'][] = $vehicleDetail;
+    //         }
     
-            // 4. Fetch equipments
-            $equipmentSql = "
-                SELECT 
-                    re.reservation_equipment_id, 
-                    re.reservation_equipment_quantity,
-                    re.reservation_equipment_equip_id AS equipment_id
-                FROM 
-                    tbl_reservation_equipment re
-                WHERE 
-                    re.reservation_reservation_id = :reservation_id
-            ";
-            $stmt = $this->conn->prepare($equipmentSql);
-            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-            $stmt->execute();
-            $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    //         // 4. Fetch equipments
+    //         $equipmentSql = "
+    //             SELECT 
+    //                 re.reservation_equipment_id, 
+    //                 re.reservation_equipment_quantity,
+    //                 re.reservation_equipment_equip_id AS equipment_id
+    //             FROM 
+    //                 tbl_reservation_equipment re
+    //             WHERE 
+    //                 re.reservation_reservation_id = :reservation_id
+    //         ";
+    //         $stmt = $this->conn->prepare($equipmentSql);
+    //         $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+    //         $stmt->execute();
+    //         $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-            foreach ($equipments as $equipRow) {
-                $equipmentDetail = [
-                    'reservation_equipment_id' => $equipRow['reservation_equipment_id'],
-                    'equipment_id' => $equipRow['equipment_id'],
-                    'quantity' => $equipRow['reservation_equipment_quantity'],
-                    'name' => null,
-                    'checklists' => []
-                ];
+    //         foreach ($equipments as $equipRow) {
+    //             $equipmentDetail = [
+    //                 'reservation_equipment_id' => $equipRow['reservation_equipment_id'],
+    //                 'equipment_id' => $equipRow['equipment_id'],
+    //                 'quantity' => $equipRow['reservation_equipment_quantity'],
+    //                 'name' => null,
+    //                 'checklists' => []
+    //             ];
     
-                $equipNameSql = "SELECT equip_name FROM tbl_equipments WHERE equip_id = :equipment_id";
-                $stmtEquip = $this->conn->prepare($equipNameSql);
-                $stmtEquip->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
-                $stmtEquip->execute();
-                $equipInfo = $stmtEquip->fetch(PDO::FETCH_ASSOC);
-                $equipmentDetail['name'] = $equipInfo ? $equipInfo['equip_name'] : null;
+    //             $equipNameSql = "SELECT equip_name FROM tbl_equipments WHERE equip_id = :equipment_id";
+    //             $stmtEquip = $this->conn->prepare($equipNameSql);
+    //             $stmtEquip->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+    //             $stmtEquip->execute();
+    //             $equipInfo = $stmtEquip->fetch(PDO::FETCH_ASSOC);
+    //             $equipmentDetail['name'] = $equipInfo ? $equipInfo['equip_name'] : null;
     
-                $checklistEquipSql = "
-                    SELECT checklist_equipment_id, checklist_name 
-                    FROM tbl_checklist_equipment_master 
-                    WHERE checklist_equipment_equip_id = :equipment_id
-                ";
-                $stmtChecklist = $this->conn->prepare($checklistEquipSql);
-                $stmtChecklist->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
-                $stmtChecklist->execute();
-                $equipmentDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    //             $checklistEquipSql = "
+    //                 SELECT checklist_equipment_id, checklist_name 
+    //                 FROM tbl_checklist_equipment_master 
+    //                 WHERE checklist_equipment_equip_id = :equipment_id
+    //             ";
+    //             $stmtChecklist = $this->conn->prepare($checklistEquipSql);
+    //             $stmtChecklist->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+    //             $stmtChecklist->execute();
+    //             $equipmentDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
     
-                $result['equipments'][] = $equipmentDetail;
-            }
+    //             $result['equipments'][] = $equipmentDetail;
+    //         }
     
-            return json_encode(['status' => 'success', 'data' => $result]);
+    //         return json_encode(['status' => 'success', 'data' => $result]);
     
-        } catch (PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
-        }
-    }
+    //     } catch (PDOException $e) {
+    //         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    //     }
+    // }
     
     
     

@@ -61,10 +61,10 @@ class VehicleMake {
     }
 
     // New method to fetch departments
-    public function fetchDepartments() {
-        $sql = "SELECT departments_id, departments_name FROM tbl_departments ORDER BY departments_name";
-        return $this->executeQuery($sql);
-    }
+    // public function fetchDepartments() {
+    //     $sql = "SELECT departments_id, departments_name FROM tbl_departments ORDER BY departments_name";
+    //     return $this->executeQuery($sql);
+    // }
 
     // New method to fetch department by ID
     public function fetchDepartmentById($id) {
@@ -102,29 +102,29 @@ class VehicleMake {
         return $this->executeQuery($sql, [':id' => $id]);
     }
 
-    public function fetchModels() {
-        $sql = "
-            SELECT 
-                vm.vehicle_model_id,
-                vm.vehicle_model_name,
-                vm.vehicle_model_created_at,
-                vm.vehicle_model_updated_at,
-                vm.vehicle_model_vehicle_make_id,
-                vm.vehicle_category_id,
-                make.vehicle_make_name,
-                category.vehicle_category_name
-            FROM 
-                tbl_vehicle_model vm
-            LEFT JOIN 
-                tbl_vehicle_make make ON vm.vehicle_model_vehicle_make_id = make.vehicle_make_id
-            LEFT JOIN 
-                tbl_vehicle_category category ON vm.vehicle_category_id = category.vehicle_category_id
-            ORDER BY 
-                vm.vehicle_model_name
-        ";
+    // public function fetchModels() {
+    //     $sql = "
+    //         SELECT 
+    //             vm.vehicle_model_id,
+    //             vm.vehicle_model_name,
+    //             vm.vehicle_model_created_at,
+    //             vm.vehicle_model_updated_at,
+    //             vm.vehicle_model_vehicle_make_id,
+    //             vm.vehicle_category_id,
+    //             make.vehicle_make_name,
+    //             category.vehicle_category_name
+    //         FROM 
+    //             tbl_vehicle_model vm
+    //         LEFT JOIN 
+    //             tbl_vehicle_make make ON vm.vehicle_model_vehicle_make_id = make.vehicle_make_id
+    //         LEFT JOIN 
+    //             tbl_vehicle_category category ON vm.vehicle_category_id = category.vehicle_category_id
+    //         ORDER BY 
+    //             vm.vehicle_model_name
+    //     ";
     
-        return $this->executeQuery($sql);
-    }
+    //     return $this->executeQuery($sql);
+    // }
     
     
 
@@ -237,9 +237,6 @@ class VehicleMake {
                     unit_id,
                     equip_id,
                     serial_number,
-                    brand,
-                    size,
-                    color,
                     status_availability_id,
                     unit_created_at,
                     is_active,
@@ -257,9 +254,6 @@ class VehicleMake {
                 return [
                     'unit_id'               => (int)$u['unit_id'],
                     'serial_number'         => $u['serial_number'],
-                    'brand'                 => $u['brand'],
-                    'size'                  => $u['size'],
-                    'color'                 => $u['color'],
                     'status_availability_id'=> (int)$u['status_availability_id'],
                     'unit_created_at'       => $u['unit_created_at'],
                     'user_admin_id'         => (int)$u['user_admin_id'],
@@ -513,10 +507,10 @@ public function fetchUsersById($id) {
         return $this->executeQuery($sql, [':userid' => $userid]);
     }
 
-    public function fetchMake() {
-        $sql = "SELECT vehicle_make_id, vehicle_make_name FROM tbl_vehicle_make ORDER BY vehicle_make_name";
-        return $this->executeQuery($sql);
-    }
+    // public function fetchMake() {
+    //     $sql = "SELECT vehicle_make_id, vehicle_make_name FROM tbl_vehicle_make ORDER BY vehicle_make_name";
+    //     return $this->executeQuery($sql);
+    // }
 
     public function fetchAllVehicles() {
     $sql = "

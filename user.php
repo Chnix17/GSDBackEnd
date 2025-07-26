@@ -293,49 +293,7 @@ public function fetchEquipmentsWithStatus() {
         return $this->executeQuery($sql);
     }
 
-    public function fetchPersonnel() {
-        $sql = "SELECT 
-                    p.jo_personel_id,
-                    p.jo_personel_lname, 
-                    p.jo_personel_fname, 
-                    p.jo_personel_contact, 
-                    p.username, 
-                    p.password, 
-                    ul.user_level_name, 
-                    pp.position_name 
-                FROM 
-                    tbl_personel p
-                INNER JOIN 
-                    tbl_personnel_position pp ON p.jo_personel_position_id = pp.position_id
-                INNER JOIN 
-                    tbl_user_level ul ON p.jo_user_level_id = ul.user_level_id";
-    
-        return $this->executeQuery($sql);
-    }
 
-    public function fetchPersonnelActive() {
-        $sql = "SELECT 
-                    p.jo_personel_id,
-                    p.jo_personel_lname, 
-                    p.jo_personel_fname, 
-                    p.jo_personel_contact, 
-                    p.username, 
-                    p.login_time,
-                    ul.user_level_name, 
-                    pp.position_name 
-            FROM 
-                tbl_personel p
-            INNER JOIN 
-                tbl_personnel_position pp ON p.jo_personel_position_id = pp.position_id
-            INNER JOIN 
-                tbl_user_level ul ON p.jo_user_level_id = ul.user_level_id
-            WHERE 
-                p.login_time >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-            ORDER BY 
-                p.login_time DESC";
-
-        return $this->executeQuery($sql);
-    }
 
     public function fetchPositions() {
         $sql = "SELECT position_id, position_name FROM tbl_personnel_position ORDER BY position_name";
@@ -351,6 +309,213 @@ public function fetchEquipmentsWithStatus() {
         $sql = "SELECT departments_id, departments_name FROM tbl_departments ORDER BY departments_name"; // Adjust table name as needed
         return $this->executeQuery($sql);
     }
+
+        public function fetchPersonnel() {
+        $sql = "SELECT users_id,
+                CONCAT(
+                    users_fname,
+                    CASE 
+                        WHEN users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.')
+                        ELSE ''
+                    END,
+                    ' ',
+                    users_lname
+                ) AS full_name
+                FROM tbl_users
+                WHERE is_active = 1 
+                AND users_user_level_id = 2
+                ORDER BY users_fname";
+        return $this->executeQuery($sql);
+    }
+
+    public function getReservedById($reservation_id) {
+        try {
+            // 1. Fetch the reservation details
+            $reservationSql = "
+                SELECT 
+                    reservation_id,
+                    reservation_title,
+                    reservation_description,
+                    reservation_start_date,
+                    reservation_end_date,
+                    reservation_participants,
+                    reservation_user_id,
+                    reservation_created_at
+                FROM 
+                    tbl_reservation
+                WHERE 
+                    reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($reservationSql);
+            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmt->execute();
+            $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+            if (!$reservation) {
+                return json_encode(['status' => 'error', 'message' => 'Reservation not found']);
+            }
+    
+            $result = [
+                'reservation' => $reservation,
+                'venues'      => [],
+                'vehicles'    => [],
+                'equipments'  => []
+            ];
+    
+            // 2. Fetch venues
+            $venueSql = "
+                SELECT 
+                    rv.reservation_venue_id, 
+                    rv.reservation_venue_venue_id AS venue_id
+                FROM 
+                    tbl_reservation_venue rv
+                WHERE 
+                    rv.reservation_reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($venueSql);
+            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmt->execute();
+            $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+            foreach ($venues as $venueRow) {
+                $venueDetail = [
+                    'reservation_venue_id' => $venueRow['reservation_venue_id'],
+                    'venue_id' => $venueRow['venue_id'],
+                    'name' => null,
+                    'checklists' => []
+                ];
+    
+                $venNameSql = "SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id";
+                $stmtName = $this->conn->prepare($venNameSql);
+                $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtName->execute();
+                $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
+                $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
+    
+                $checklistVenueSql = "
+                    SELECT checklist_venue_id, checklist_name 
+                    FROM tbl_checklist_venue_master 
+                    WHERE checklist_venue_ven_id = :venue_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistVenueSql);
+                $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['venues'][] = $venueDetail;
+            }
+    
+            // 3. Fetch vehicles
+            $vehicleSql = "
+                SELECT 
+                    rvh.reservation_vehicle_id, 
+                    rvh.reservation_vehicle_vehicle_id AS vehicle_id
+                FROM 
+                    tbl_reservation_vehicle rvh
+                WHERE 
+                    rvh.reservation_reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($vehicleSql);
+            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmt->execute();
+            $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+            foreach ($vehicles as $vehicleRow) {
+                $vehicleDetail = [
+                    'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
+                    'vehicle_id' => $vehicleRow['vehicle_id'],
+                    'model' => null,
+                    'license' => null,
+                    'checklists' => []
+                ];
+    
+                $vehicleDetailSql = "
+                    SELECT 
+                        vm.vehicle_model_name, 
+                        v.vehicle_license 
+                    FROM 
+                        tbl_vehicle v
+                    LEFT JOIN 
+                        tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                    WHERE 
+                        v.vehicle_id = :vehicle_id
+                ";
+                $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
+                $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtVehicle->execute();
+                $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
+    
+                if ($vehicleInfo) {
+                    $vehicleDetail['model'] = $vehicleInfo['vehicle_model_name'];
+                    $vehicleDetail['license'] = $vehicleInfo['vehicle_license'];
+                }
+    
+                $checklistVehicleSql = "
+                    SELECT checklist_vehicle_id, checklist_name 
+                    FROM tbl_checklist_vehicle_master 
+                    WHERE checklist_vehicle_vehicle_id = :vehicle_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
+                $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['vehicles'][] = $vehicleDetail;
+            }
+    
+            // 4. Fetch equipments
+            $equipmentSql = "
+                SELECT 
+                    re.reservation_equipment_id, 
+                    re.reservation_equipment_quantity,
+                    re.reservation_equipment_equip_id AS equipment_id
+                FROM 
+                    tbl_reservation_equipment re
+                WHERE 
+                    re.reservation_reservation_id = :reservation_id
+            ";
+            $stmt = $this->conn->prepare($equipmentSql);
+            $stmt->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmt->execute();
+            $equipments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+            foreach ($equipments as $equipRow) {
+                $equipmentDetail = [
+                    'reservation_equipment_id' => $equipRow['reservation_equipment_id'],
+                    'equipment_id' => $equipRow['equipment_id'],
+                    'quantity' => $equipRow['reservation_equipment_quantity'],
+                    'name' => null,
+                    'checklists' => []
+                ];
+    
+                $equipNameSql = "SELECT equip_name FROM tbl_equipments WHERE equip_id = :equipment_id";
+                $stmtEquip = $this->conn->prepare($equipNameSql);
+                $stmtEquip->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+                $stmtEquip->execute();
+                $equipInfo = $stmtEquip->fetch(PDO::FETCH_ASSOC);
+                $equipmentDetail['name'] = $equipInfo ? $equipInfo['equip_name'] : null;
+    
+                $checklistEquipSql = "
+                    SELECT checklist_equipment_id, checklist_name 
+                    FROM tbl_checklist_equipment_master 
+                    WHERE checklist_equipment_equip_id = :equipment_id
+                ";
+                $stmtChecklist = $this->conn->prepare($checklistEquipSql);
+                $stmtChecklist->bindParam(':equipment_id', $equipRow['equipment_id'], PDO::PARAM_INT);
+                $stmtChecklist->execute();
+                $equipmentDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
+    
+                $result['equipments'][] = $equipmentDetail;
+            }
+    
+            return json_encode(['status' => 'success', 'data' => $result]);
+    
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
+    
+
 
     public function fetchAllUserTypes() {
     $sql = "SELECT 
@@ -783,7 +948,6 @@ public function fetchEquipmentsWithStatus() {
                         rs.reservation_status_status_id,
                         rs.reservation_active,
                         CASE 
-                        
                             WHEN rs.reservation_status_status_id = 6 AND rs.reservation_active = 1 THEN 'Reserved'
                             ELSE 'Available'
                         END AS availability_status,
@@ -800,9 +964,6 @@ public function fetchEquipmentsWithStatus() {
                     WHERE 
                         u.users_user_level_id = 19
                         AND u.is_active = 1
-                        AND (
-                            rs.reservation_status_status_id = 6 AND rs.reservation_active = 1
-                        )
                     ORDER BY 
                         u.users_lname, u.users_fname, r.reservation_start_date DESC
                 ";
@@ -1106,6 +1267,32 @@ public function fetchEquipmentsWithStatus() {
 
     public function updateProfile($userData){
         try {
+            $userId = isset($userData['users_id']) ? $userData['users_id'] : null;
+            $email = isset($userData['users_email']) ? $userData['users_email'] : null;
+            $schoolId = isset($userData['users_school_id']) ? $userData['users_school_id'] : null;
+            $original = null;
+            if ($userId) {
+                $sql = "SELECT users_email, users_school_id FROM tbl_users WHERE users_id = :userId LIMIT 1";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute([':userId' => $userId]);
+                $original = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            $checkDuplicate = false;
+            if ($original) {
+                if (($email && $email !== $original['users_email']) || ($schoolId && $schoolId !== $original['users_school_id'])) {
+                    $checkDuplicate = true;
+                }
+            }
+            if ($checkDuplicate) {
+                $checkResult = json_decode($this->checkUniqueEmailAndSchoolId($email, $schoolId, $userId), true);
+                if ($checkResult && $checkResult['exists'] && !empty($checkResult['duplicates'])) {
+                    return json_encode([
+                        'status' => 'error',
+                        'message' => 'Duplicate found',
+                        'duplicates' => $checkResult['duplicates']
+                    ]);
+                }
+            }
             // Define allowed fields to update
             $allowedFields = [
                 'users_fname',
@@ -1115,7 +1302,10 @@ public function fetchEquipmentsWithStatus() {
                 'users_school_id',
                 'users_contact_number',
                 'users_department_id',
-                'users_pic'
+                'users_pic',
+                'users_suffix', // Added
+                'title_id',     // Added
+                'users_user_level_id' // Allow updating user level
             ];
 
             // Build update query dynamically based on provided data
@@ -1150,11 +1340,7 @@ public function fetchEquipmentsWithStatus() {
 
             if ($success) {
                 // Fetch updated user data
-                $selectSql = "SELECT users_id, users_fname, users_mname, users_lname, users_email, 
-                                    users_school_id, users_contact_number, users_department_id, 
-                                    users_pic, users_updated_at 
-                             FROM tbl_users 
-                             WHERE users_id = :userId";
+                $selectSql = "SELECT users_id, users_fname, users_mname, users_lname, users_birthdate, users_suffix, users_email, users_school_id, users_contact_number, users_user_level_id, users_password, first_login, users_department_id, users_pic, users_created_at, users_updated_at, is_active, is_2FAactive, title_id FROM tbl_users WHERE users_id = :userId";
                 $selectStmt = $this->conn->prepare($selectSql);
                 $selectStmt->execute(['userId' => $userData['users_id']]);
                 $updatedUser = $selectStmt->fetch(PDO::FETCH_ASSOC);
@@ -1348,6 +1534,8 @@ public function getVenueUsage($venueId) {
         // Count conditions
         $totalUsage = count($reservations);
         $brokenCount = 0;
+        $inspectionCount = 0;
+        
         $missingCount = 0;
 
         foreach ($reservations as $reservation) {
@@ -1355,6 +1543,8 @@ public function getVenueUsage($venueId) {
                 $brokenCount++;
             } elseif ($reservation['condition_id'] == 3) {
                 $missingCount++;
+            } elseif ($reservation['condition_id'] == 7) {
+                $inspectionCount++;
             }
         }
 
@@ -1366,8 +1556,9 @@ public function getVenueUsage($venueId) {
                 'usage_statistics' => [
                     'total_usage' => $totalUsage,
                     'broken_count' => $brokenCount,
+                    'inspection_count' => $inspectionCount,
                     'missing_count' => $missingCount,
-                    'good_condition_count' => $totalUsage - ($brokenCount + $missingCount)
+                    'good_condition_count' => $totalUsage - ($brokenCount + $missingCount + $inspectionCount)
                 ],
                 'reservations' => $reservations
             ]
@@ -1390,9 +1581,7 @@ public function getEquipmentUnitUsage($unitId) {
             SELECT 
                 eu.unit_id,
                 eu.serial_number,
-                eu.brand,
-                eu.size,
-                eu.color,
+     
                 eu.status_availability_id,
                 sa.status_availability_name,
                 eu.unit_created_at,
@@ -2504,26 +2693,16 @@ public function saveUnit($data) {
             return json_encode(['status' => 'error', 'message' => 'This serial number already exists']);
         }
 
-        // Optional fields
-        $brand = $data['brand'] ?? null;
-        $size = $data['size'] ?? null;
-        $color = $data['color'] ?? null;
-
-        // Insert query
+        // Insert query (brand, size, color removed)
         $sql = "INSERT INTO tbl_equipment_unit (
-                    equip_id, serial_number, brand, size, color, 
-                    status_availability_id, unit_created_at, is_active, user_admin_id
+                    equip_id, serial_number, status_availability_id, unit_created_at, is_active, user_admin_id
                 ) VALUES (
-                    :equip_id, :serial_number, :brand, :size, :color,
-                    :status_id, NOW(), 1, :admin_id
+                    :equip_id, :serial_number, :status_id, NOW(), 1, :admin_id
                 )";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':equip_id', $data['equip_id'], PDO::PARAM_INT);
         $stmt->bindParam(':serial_number', $data['serial_number']);
-        $stmt->bindParam(':brand', $brand);
-        $stmt->bindParam(':size', $size);
-        $stmt->bindParam(':color', $color);
         $stmt->bindParam(':status_id', $data['status_availability_id'], PDO::PARAM_INT);
         $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
 
@@ -2898,9 +3077,16 @@ public function saveEquipment($json) {
         // Validate required fields
         $required = ['name', 'equipments_category_id', 'equip_type', 'user_admin_id'];
         foreach ($required as $field) {
-            if (empty($data[$field]) || ($field !== 'name' && !is_numeric($data[$field]))) {
+            if (empty($data[$field])) {
                 return json_encode(['status' => 'error', 'message' => "$field is required or invalid"]);
             }
+        }
+        // Numeric validation for specific fields
+        if (!is_numeric($data['equipments_category_id'])) {
+            return json_encode(['status' => 'error', 'message' => 'equipments_category_id must be numeric']);
+        }
+        if (!is_numeric($data['user_admin_id'])) {
+            return json_encode(['status' => 'error', 'message' => 'user_admin_id must be numeric']);
         }
 
         // Check for duplicate equipment name (case-insensitive)
@@ -3297,6 +3483,13 @@ public function saveUser($data) {
 
 public function updateUser($userData) {
     try {
+        // Check required keys
+        if (!isset($userData['userId'], $userData['schoolId'], $userData['email'])) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Missing required fields: userId, schoolId, or email.'
+            ]);
+        }
         // Cast and extract
         $userId    = (int)   $userData['userId'];
         $schoolId  = (string)$userData['schoolId'];
@@ -3484,16 +3677,16 @@ public function venueExists($venueName) {
                     r.reservation_end_date,
                     r.reservation_participants,
                     r.reservation_user_id AS requester_id,
-                    CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS requester_name,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS requester_name,
                     d.departments_name,
                     rs.reservation_status_status_id AS status_id,
                     rs.reservation_active AS active,
                     sm.status_master_name AS reservation_status
                 FROM 
                     tbl_reservation r
-                INNER JOIN 
+                LEFT JOIN 
                     tbl_users u ON r.reservation_user_id = u.users_id
-                INNER JOIN 
+                LEFT JOIN 
                     tbl_departments d ON u.users_department_id = d.departments_id
                 LEFT JOIN 
                     tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
@@ -3627,7 +3820,15 @@ public function venueExists($venueName) {
 
                     ul.user_level_name,
                     dep.departments_name,
-                    CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
+                    TRIM(
+                        CONCAT(
+                            COALESCE(u_req.users_fname, ''),
+                            ' ',
+                            COALESCE(u_req.users_mname, ''),
+                            ' ',
+                            COALESCE(u_req.users_lname, '')
+                        )
+                    ) AS requester_name,
                     dep.departments_name AS department_name,
 
                     -- Venue details
@@ -4428,7 +4629,15 @@ public function fetchNoAssignedReservation() {
 
                     ul.user_level_name,
                     dep.departments_name,
-                    CONCAT(u_req.users_fname, ' ', u_req.users_mname, ' ', u_req.users_lname) AS requester_name,
+                    TRIM(
+                        CONCAT(
+                            COALESCE(u_req.users_fname, ''),
+                            ' ',
+                            COALESCE(u_req.users_mname, ''),
+                            ' ',
+                            COALESCE(u_req.users_lname, '')
+                        )
+                    ) AS requester_name,
                     dep.departments_name AS department_name,
 
                     -- Venue details
@@ -4501,9 +4710,7 @@ public function fetchNoAssignedReservation() {
 
                 LEFT JOIN tbl_reservation_passenger p ON r.reservation_id = p.reservation_reservation_id
 
-                WHERE latest_status.reservation_status_status_id = 6
-                  AND latest_status.reservation_active = 0
-                  AND r.reservation_created_at BETWEEN :startDate AND :endDate
+                WHERE r.reservation_created_at BETWEEN :startDate AND :endDate
                 GROUP BY r.reservation_id
                 ORDER BY r.reservation_start_date DESC
             ";
@@ -4645,6 +4852,709 @@ public function fetchNoAssignedReservation() {
         }
     }
 
+    public function fetchStatusAvailability() {
+        $sql = "SELECT `status_availability_id`, `status_availability_name` FROM `tbl_status_availability` WHERE 1";
+        return $this->executeQuery($sql);
+    }
+
+    public function saveModelData($json) {
+        // Handle both string and array inputs
+        if (is_array($json)) {
+            $data = $json;
+        } else {
+            $data = json_decode($json, true);
+        }
+        error_log(print_r($data, true)); 
+
+        try {
+            // Check if the model name already exists globally (unique across all models)
+            $sql = "SELECT COUNT(*) FROM tbl_vehicle_model WHERE vehicle_model_name = :name";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $data['name']);
+            $stmt->execute();
+            if ($stmt->fetchColumn() > 0) {
+                return json_encode(['status' => 'error', 'message' => 'This vehicle model name already exists.']);
+            }
+
+            // Prepare bind variables
+            $name = $data['name'];
+            $category_id = $data['category_id'];
+            $make_id = $data['make_id'];
+
+            // Insert if not existing
+            $sql = "INSERT INTO tbl_vehicle_model (vehicle_model_name, vehicle_category_id, vehicle_model_vehicle_make_id) 
+                    VALUES (:name, :category_id, :make_id)";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $name, PDO::PARAM_STR);
+            $stmt->bindParam(':category_id', $category_id, PDO::PARAM_INT);
+            $stmt->bindParam(':make_id', $make_id, PDO::PARAM_INT);
+            $stmt->execute();
+
+            return json_encode(['status' => 'success', 'message' => 'Model added successfully.']);
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function saveCategoryData($json) {
+        // Handle both string and array inputs
+        if (is_array($json)) {
+            $data = $json;
+        } else {
+            $data = json_decode($json, true);
+        }
+    
+        // Check if category name is set
+        if (!isset($data['vehicle_category_name'])) {
+            return json_encode(['status' => 'error', 'message' => 'Category name is required.']);
+        }
+    
+        // Inline existence check
+        $sql = "SELECT COUNT(*) FROM tbl_vehicle_category WHERE vehicle_category_name = :name";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['vehicle_category_name']);
+        $stmt->execute();
+        if ($stmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'Category already exists.']);
+        }
+    
+        try {
+            $sql = "INSERT INTO tbl_vehicle_category (vehicle_category_name) VALUES (:name)";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $data['vehicle_category_name']);
+            $stmt->execute();
+            return json_encode(['status' => 'success', 'message' => 'Category added successfully.']);
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function saveMakeData($json) {
+        // Check if $json is already an array
+        if (is_array($json)) {
+            $data = $json;
+        } else {
+            $data = json_decode($json, true);
+        }
+        
+        // Inline existence check
+        $sql = "SELECT COUNT(*) FROM tbl_vehicle_make WHERE vehicle_make_name = :name";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['vehicle_make_name']);
+        $stmt->execute();
+        if ($stmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'Make already exists.']);
+        }
+
+        try {
+            $sql = "INSERT INTO tbl_vehicle_make (vehicle_make_name) VALUES (:name)";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $data['vehicle_make_name']);
+            $stmt->execute();
+            return json_encode(['status' => 'success', 'message' => 'Make added successfully.']);
+        } catch(PDOException $e) {
+            // Log the error message
+            error_log("Error inserting make: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+
+// Check if equipment category exists
+    public function equipmentCategoryExists($categoryName) {
+        try {
+            $sql = "SELECT COUNT(*) FROM tbl_equipment_category WHERE equipments_category_name = :name";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $categoryName);
+            $stmt->execute();
+            return $stmt->fetchColumn() > 0;
+        } catch(PDOException $e) {
+            return false; // Treat as not existing on error
+        }
+    }
+    public function saveEquipmentCategory($json) {
+        // Handle both string and array inputs
+        $data = is_array($json) ? $json : json_decode($json, true);
+        
+        // Check if category name is set
+        if (!isset($data['equipments_category_name'])) {
+            return json_encode(['status' => 'error', 'message' => 'Category name is required.']);
+        }
+    
+        if ($this->equipmentCategoryExists($data['equipments_category_name'])) {
+            return json_encode(['status' => 'error', 'message' => 'Equipment category already exists.']);
+        }
+    
+        try {
+            $sql = "INSERT INTO tbl_equipment_category (equipments_category_name) 
+                    VALUES (:name)";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $data['equipments_category_name']);
+            $stmt->execute();
+            return json_encode(['status' => 'success', 'message' => 'Equipment category added successfully.']);
+        } catch(PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function saveDepartmentData($json) {
+        // Check if $json is already an array
+        if (is_array($json)) {
+            $data = $json;
+        } else {
+            $data = json_decode($json, true);
+        }
+    
+        // Check if the department name exists in the input
+        if (!isset($data['departments_name'])) {
+            return json_encode(['status' => 'error', 'message' => 'Department name is required.']);
+        }
+    
+        // Check if the department already exists (inline, not via departmentExists)
+        $sql = "SELECT COUNT(*) FROM tbl_departments WHERE departments_name = :name";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $data['departments_name']);
+        $stmt->execute();
+        if ($stmt->fetchColumn() > 0) {
+            return json_encode(['status' => 'error', 'message' => 'Department already exists.']);
+        }
+    
+        try {
+            $sql = "INSERT INTO tbl_departments (departments_name) VALUES (:name)";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $data['departments_name']);
+            $stmt->execute();
+            return json_encode(['status' => 'success', 'message' => 'Department added successfully.']);
+        } catch (PDOException $e) {
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function fetchMake() {
+        $sql = "SELECT vehicle_make_id, vehicle_make_name FROM tbl_vehicle_make ORDER BY vehicle_make_id DESC";
+        return $this->executeQuery($sql);
+    }
+
+    public function updateVehicleMake($id, $name) {
+        $sql = "UPDATE tbl_vehicle_make SET vehicle_make_name = :name WHERE vehicle_make_id = :id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+        
+        return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']) 
+                                 : json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+    }
+
+    public function fetchVehicleCategories() {
+        $sql = "SELECT vehicle_category_id, vehicle_category_name FROM tbl_vehicle_category ORDER BY vehicle_category_name";
+        return $this->executeQuery($sql);
+    }
+
+
+    public function updateVehicleCategory($id, $name) {
+        $sql = "UPDATE tbl_vehicle_category SET vehicle_category_name = :name WHERE vehicle_category_id = :id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+        
+        if ($stmt->execute()) {
+            // Fetch updated list
+            $categories = $this->fetchVehicleCategories();
+            $categoriesData = json_decode($categories, true)['data'] ?? [];
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Vehicle category updated successfully',
+                'categories' => $categoriesData
+            ]);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Could not update vehicle category']);
+        }
+    }
+
+    public function fetchModels() {
+        $sql = "
+            SELECT 
+                vm.vehicle_model_id,
+                vm.vehicle_model_name,
+                vm.vehicle_model_created_at,
+                vm.vehicle_model_updated_at,
+                vm.vehicle_model_vehicle_make_id,
+                vm.vehicle_category_id,
+                make.vehicle_make_name,
+                category.vehicle_category_name
+            FROM 
+                tbl_vehicle_model vm
+            LEFT JOIN 
+                tbl_vehicle_make make ON vm.vehicle_model_vehicle_make_id = make.vehicle_make_id
+            LEFT JOIN 
+                tbl_vehicle_category category ON vm.vehicle_category_id = category.vehicle_category_id
+            ORDER BY 
+                vm.vehicle_model_id DESC
+        ";
+    
+        return $this->executeQuery($sql);
+    }
+
+    public function updateVehicleModel($modelData) {
+        // Validate input data
+        if (!isset($modelData['id']) || !isset($modelData['name']) || 
+            !isset($modelData['category_id']) || !isset($modelData['make_id'])) {
+            error_log("Missing required fields in modelData: " . print_r($modelData, true));
+            return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
+        }
+
+        error_log("Starting vehicle model update with data: " . print_r($modelData, true));
+        
+        $sql = "UPDATE tbl_vehicle_model SET 
+                    vehicle_model_name = :modelName, 
+                    vehicle_category_id = :categoryId, 
+                    vehicle_model_vehicle_make_id = :makeId 
+                WHERE 
+                    vehicle_model_id = :modelId";
+
+
+        try {
+            $stmt = $this->conn->prepare($sql);
+            
+            // Convert values to appropriate types
+            $modelId = intval($modelData['id']);
+            $categoryId = intval($modelData['category_id']);
+            $makeId = intval($modelData['make_id']);
+            
+            $stmt->bindValue(':modelName', $modelData['name'], PDO::PARAM_STR);
+            $stmt->bindValue(':categoryId', $categoryId, PDO::PARAM_INT);
+            $stmt->bindValue(':makeId', $makeId, PDO::PARAM_INT);
+            $stmt->bindValue(':modelId', $modelId, PDO::PARAM_INT);
+
+            // Log the actual values being used
+            error_log("Executing query with values: modelId=$modelId, name={$modelData['name']}, categoryId=$categoryId, makeId=$makeId");
+            
+            $result = $stmt->execute();
+            $rowCount = $stmt->rowCount();
+            
+            error_log("Query execution result: " . ($result ? "success" : "failed"));
+            error_log("Rows affected: $rowCount");
+            
+            if ($result) {
+                if ($rowCount > 0) {
+                    return json_encode(['status' => 'success', 'message' => 'Vehicle model updated successfully']);
+                } else {
+                    return json_encode(['status' => 'error', 'message' => 'No matching record found']);
+                }
+            } else {
+                $error = $stmt->errorInfo();
+                error_log("Database error: " . print_r($error, true));
+                return json_encode(['status' => 'error', 'message' => 'Database error: ' . $error[2]]);
+            }
+        } catch (PDOException $e) {
+            error_log("PDO Exception: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
+
+    public function fetchEquipmentsCategory() {
+        $sql = "SELECT equipments_category_id, equipments_category_name FROM tbl_equipment_category ORDER BY equipments_category_id DESC";
+        return $this->executeQuery($sql);
+    }
+
+    public function updateEquipmentCategory($categoryData) {
+        try {
+            $sql = "UPDATE tbl_equipment_category SET 
+                        equipments_category_name = :name
+                    WHERE 
+                        equipments_category_id = :categoryId";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':name', $categoryData['name']);
+            $stmt->bindParam(':categoryId', $categoryData['categoryId'], PDO::PARAM_INT);
+
+            // Add these lines for debugging
+            error_log("Updating category: " . print_r($categoryData, true));
+            $result = $stmt->execute();
+            error_log("Update result: " . ($result ? "true" : "false"));
+            error_log("Rows affected: " . $stmt->rowCount());
+
+            if ($result) {
+                return json_encode(['status' => 'success', 'message' => 'Category updated successfully.']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'Failed to update category.']);
+            }
+        } catch (PDOException $e) {
+            error_log("PDO Exception: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Error: ' . $e->getMessage()]);
+        }
+    }
+
+        public function updateDepartment(fetchModelsByCategoryAndMake$id, $name) {
+        $sql = "UPDATE tbl_departments SET departments_name = :name WHERE departments_id = :id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+        
+        return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Department updated successfully']) 
+                                 : json_encode(['status' => 'error', 'message' => 'Could not update department']);
+    }
+
+    public function fetchModelsByCategoryAndMake($categoryId, $makeId) {
+        $sql = "
+            SELECT 
+                vm.vehicle_model_id, 
+                vm.vehicle_model_name
+            FROM 
+                tbl_vehicle_model AS vm
+            WHERE 
+                vm.vehicle_category_id = :categoryId
+            AND 
+                vm.vehicle_model_vehicle_make_id = :makeId
+            ORDER BY 
+                vm.vehicle_model_name
+        ";
+    
+        return $this->executeQuery($sql, [':categoryId' => $categoryId, ':makeId' => $makeId]);
+    }
+
+    public function fetchUsersById($id) {
+        if (!is_numeric($id)) {
+            return json_encode(['status' => 'error', 'message' => 'Invalid ID format']);
+        }
+    
+        $sql = "SELECT 
+                    u.*,
+                    t.abbreviation AS title_abbreviation,
+                    d.departments_name,
+                    ul.user_level_name
+                FROM 
+                    tbl_users u
+                LEFT JOIN 
+                    titles t ON u.title_id = t.id
+                LEFT JOIN 
+                    tbl_departments d ON u.users_department_id = d.departments_id
+                LEFT JOIN 
+                    tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+                WHERE 
+                    u.users_id = :id";
+    
+        return $this->executeQuery($sql, [':id' => $id]);
+    }
+    public function fetchVenueById($id) {
+        $sql = "SELECT 
+            v.ven_id, 
+            v.ven_name, 
+            v.ven_occupancy, 
+            v.ven_created_at, 
+            v.ven_updated_at, 
+            v.status_availability_id, 
+            v.ven_pic, 
+            v.ven_operating_hours, 
+            v.is_active, 
+            v.user_admin_id,
+            sa.status_availability_name,
+            v.event_type
+        FROM tbl_venue v
+        INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+        WHERE v.ven_id = :id";
+        
+        return $this->executeQuery($sql, [':id' => $id]);
+    }
+
+    public function fetchEquipmentById($id) { // Removed $type as it's not used directly in the initial fetch
+        try {
+            // 1) Fetch the equipment with its category name
+            $sql = "
+                SELECT
+                    te.equip_id,
+                    te.equip_name,
+                    tec.equipments_category_name AS category_name, -- Fetch category name from joined table
+                    te.is_active,
+                    te.user_admin_id,
+                    te.equip_created_at,
+                    te.equip_type,
+                    te.equipments_category_id -- Include category ID if needed for other logic
+                FROM
+                    tbl_equipments AS te
+                INNER JOIN
+                    tbl_equipment_category AS tec ON te.equipments_category_id = tec.equipments_category_id
+                WHERE
+                    te.equip_id = :id
+                    AND te.is_active = 1
+                LIMIT 1
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':id' => $id]);
+            $equip = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+            if (!$equip) {
+                return json_encode([
+                    'status'  => 'error',
+                    'message' => 'Equipment not found or inactive.'
+                ]);
+            }
+    
+            $displayQty = 0;
+            $onHandQty = 0;
+            $formattedUnits = [];
+    
+            // Determine logic based on equip_type from the fetched equipment
+            if ($equip['equip_type'] === 'Consumable') {
+                // Fetch quantity from tbl_equipment_quantity for Consumable type
+                $quantitySql = "
+                    SELECT quantity, on_hand_quantity
+                    FROM tbl_equipment_quantity
+                    WHERE equip_id = :id
+                    ORDER BY last_updated DESC
+                    LIMIT 1
+                ";
+                $quantityStmt = $this->conn->prepare($quantitySql);
+                $quantityStmt->execute([':id' => $id]);
+                $quantityResult = $quantityStmt->fetch(PDO::FETCH_ASSOC);
+                $displayQty = $quantityResult ? (int)$quantityResult['quantity'] : 0;
+                $onHandQty = $quantityResult ? (int)$quantityResult['on_hand_quantity'] : 0;
+            } else {
+                // For non-Consumable types, fetch from tbl_equipment_unit
+                $unitSql = "
+                    SELECT
+                        unit_id,
+                        equip_id,
+                        serial_number,
+                        status_availability_id,
+                        unit_created_at,
+                        is_active,
+                        user_admin_id
+                    FROM tbl_equipment_unit
+                    WHERE equip_id = :id
+                    AND is_active = 1
+                    ORDER BY unit_id
+                ";
+                $unitStmt = $this->conn->prepare($unitSql);
+                $unitStmt->execute([':id' => $id]);
+                $units = $unitStmt->fetchAll(PDO::FETCH_ASSOC);
+    
+                $formattedUnits = array_map(function($u) {
+                    return [
+                        'unit_id'               => (int)$u['unit_id'],
+                        'serial_number'         => $u['serial_number'],
+                        'status_availability_id'=> (int)$u['status_availability_id'],
+                        'unit_created_at'       => $u['unit_created_at'],
+                        'user_admin_id'         => (int)$u['user_admin_id'],
+                    ];
+                }, $units);
+    
+                $displayQty = count($formattedUnits);
+                $onHandQty = $displayQty; // For non-consumables, on_hand_quantity equals total units
+            }
+    
+            // Build and return final response
+            $response = [
+                'equip_id'         => (int)$equip['equip_id'],
+                'equip_name'       => $equip['equip_name'],
+                'category_name'    => $equip['category_name'], // This now comes from the joined table
+                'equip_type'       => $equip['equip_type'],
+                'user_admin_id'    => (int)$equip['user_admin_id'],
+                'equip_created_at' => $equip['equip_created_at'],
+                'is_active'        => (bool)$equip['is_active'],
+                'equip_quantity'   => $displayQty,
+                'on_hand_quantity' => $onHandQty,
+                'units'            => $formattedUnits,
+            ];
+    
+            return json_encode([
+                'status' => 'success',
+                'data'   => $response
+            ]);
+    
+        } catch (PDOException $e) {
+            error_log("Database error in fetchEquipmentById: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        } catch (Exception $e) {
+            error_log("Error in fetchEquipmentById: " . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        }
+    }
+
+    public function getTotals() {
+        try {
+            // Query for approved reservations (status_id = 3)
+
+
+            // Query for vehicles
+            $vehicleQuery = "SELECT COUNT(*) AS total FROM tbl_vehicle WHERE is_active = 1";
+
+            // Query for venues
+            $venueQuery = "SELECT COUNT(*) AS total FROM tbl_venue WHERE is_active = 1";
+
+            // Query for equipment
+            $equipmentQuery = "SELECT COUNT(*) AS total FROM tbl_equipments WHERE is_active = 1";
+
+            // Query for users (only from tbl_users)
+            $userQuery = "SELECT COUNT(*) AS total FROM tbl_users WHERE is_active = 1";
+
+            // Execute all queries
+            $queries = [
+                'vehicles' => $vehicleQuery,
+                'venues' => $venueQuery,
+                'equipments' => $equipmentQuery,
+                'users' => $userQuery
+            ];
+
+            $totals = [];
+            foreach ($queries as $key => $query) {
+                $stmt = $this->conn->query($query);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                $totals[$key] = (int)$result['total'];
+            }
+
+            return json_encode([
+                'status' => 'success',
+                'data' => $totals
+            ]);
+
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+    
+    public function fetchVenues() {
+        $sql = "SELECT 
+                    ven_id, 
+                    ven_name, 
+                    ven_occupancy, 
+                    ven_created_at, 
+                    ven_updated_at, 
+                    v.status_availability_id,
+                    sa.status_availability_name,
+                    ven_pic
+                FROM 
+                    tbl_venue v
+                INNER JOIN 
+                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id 
+                WHERE 
+                    v.status_availability_id != 7 AND v.status_availability_id != 8 
+                ORDER BY 
+                    ven_name"; 
+        return $this->executeQuery($sql);
+    }
+
+    public function fetchVehicles() {
+        $sql = "SELECT  
+                    v.vehicle_id,
+                    v.vehicle_pic,
+                    v.year,
+                    vm.vehicle_make_name, 
+                    vc.vehicle_category_name,
+                    vmd.vehicle_model_name,      
+                    v.vehicle_license,
+                    sa.status_availability_name
+                FROM 
+                    tbl_vehicle v 
+                INNER JOIN 
+                    tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id 
+                INNER JOIN 
+                    tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
+                INNER JOIN 
+                    tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
+                INNER JOIN
+                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+                WHERE 
+                    v.status_availability_id != 7 AND v.status_availability_id != 8";
+                 // Added condition for availability
+
+        return $this->executeQuery($sql);
+    }
+
+    public function fetchAllResources($type = null) {
+        // SQL query for vehicles - only fetch vehicle_license and vehicle_model_name (vehicle model title)
+        $vehicleQuery = "
+            SELECT v.vehicle_license AS vehicle_registration, v.vehicle_id,
+                   vm.vehicle_model_name AS vehicle_model_title
+            FROM tbl_vehicle v
+            INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+            LEFT JOIN tbl_checklist_vehicle_master cvm ON v.vehicle_id = cvm.checklist_vehicle_vehicle_id
+            WHERE cvm.checklist_vehicle_id IS NULL
+        ";
+    
+        // SQL query for venues - only fetch venue name
+        $venueQuery = "
+            SELECT ve.ven_name, ve.ven_id
+            FROM tbl_venue ve
+            LEFT JOIN tbl_checklist_venue_master cvm ON ve.ven_id = cvm.checklist_venue_ven_id
+            WHERE cvm.checklist_venue_id IS NULL
+        ";
+    
+        // SQL query for equipment - only fetch equipment name
+        $equipmentQuery = "
+            SELECT eq.equip_name, eq.equip_id
+            FROM tbl_equipments eq
+            LEFT JOIN tbl_checklist_equipment_master cem ON eq.equip_id = cem.checklist_equipment_equip_id
+            WHERE cem.checklist_equipment_id IS NULL
+        ";
+    
+        try {
+            $result = [];
+            
+            switch ($type) {
+                case 'vehicle':
+                    $stmt = $this->conn->prepare($vehicleQuery);
+                    $stmt->execute();
+                    $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    break;
+                case 'venue':
+                    $stmt = $this->conn->prepare($venueQuery);
+                    $stmt->execute();
+                    $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    break;
+                case 'equipment':
+                    $stmt = $this->conn->prepare($equipmentQuery);
+                    $stmt->execute();
+                    $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    break;
+                default:
+                    // Fetch all resources if no type specified
+                    $stmt = $this->conn->prepare($vehicleQuery);
+                    $stmt->execute();
+                    $result['vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+                    $stmt = $this->conn->prepare($venueQuery);
+                    $stmt->execute();
+                    $result['venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+                    $stmt = $this->conn->prepare($equipmentQuery);
+                    $stmt->execute();
+                    $result['equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+    
+            return json_encode([
+                'status' => 'success',
+                'data' => $result
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+
+
+    
+    
+
+
+    
+
+
+    
+
+    
+
+
+    
+
+
     
 
     
@@ -4673,12 +5583,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     switch ($operation) {
 
+        case "fetchVenueById":
+            $venueId = $input['id'] ?? ($_POST['id'] ?? null);
+            if ($venueId) {
+                echo $user->fetchVenueById($venueId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
+            }
+            break;
+
+        case "updateDepartment":
+            $id = $jsonInput['id'] ?? '';
+            $name = $jsonInput['name'] ?? '';
+            echo $user->updateDepartment($id, $name);
+            break;
+
+        case "updateVehicleMake":
+            $id = $input['id'] ?? null;
+            $name = $input['name'] ?? null;
+            if (!$id || !$name) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing id or name']);
+                break;
+            }
+            echo $user->updateVehicleMake($id, $name);
+            break;
+
+        case "fetchMake":
+            echo $user->fetchMake();
+            break;
+
         case "fetchNoAssignedReservation":
             echo $user->fetchNoAssignedReservation();
             break;
 
         case "fetchRecord":
             echo $user->fetchRecord();
+            break;
+        case "fetchStatusAvailability":
+            echo $user->fetchStatusAvailability();
             break;
 
         case "fetchEquipments":
@@ -4859,7 +5801,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             break;
         case "fetchDepartments":
-            echo $user->fetchDepartments($json);
+            echo $user->fetchDepartments();
             break;
         case "fetchVehicles":
             echo $user->fetchVehicles();
@@ -4963,9 +5905,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "fetchAvailableDrivers":
             echo $user->fetchAvailableDrivers();
             break;
-        case "updateUsers":
-            echo $user->updateUsers($input);
-            break;
+
         case "fetchAllReservations":
             echo $user->fetchAllReservations();
             break;
@@ -5042,7 +5982,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
         // Remove or fix the incomplete fetchReservation case
 
+        case "saveModelData":
+            echo $user->saveModelData($input);
+            break;
+        case "saveMakeData":
+            echo $user->saveMakeData($input);
+            break;
+        case "saveEquipmentCategory":
+            echo $user->saveEquipmentCategory($input);
+            break;
+        case "saveDepartmentData":
+            echo $user->saveDepartmentData($input);
+            break;
+        case "saveCategoryData":
+            echo $user->saveCategoryData($input);
+            break;
+
+        case "fetchVehicleCategories":
+            echo $user->fetchVehicleCategories();
+            break;
+
+        case "updateVehicleCategory":
+            $id = $input['id'] ?? null;
+            $name = $input['name'] ?? null;
+            if (!$id || !$name) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing id or name']);
+                break;
+            }
+            echo $user->updateVehicleCategory($id, $name);
+            break;
+
+        case "updateVehicleModel":
+            if (isset($input['modelData'])) {
+                echo $user->updateVehicleModel($input['modelData']);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Missing modelData']);
+            }
+            break;
+
+        case "fetchModels":
+            echo $user->fetchModels();
+            break;
+
+        case "fetchEquipmentsCategory":
+            echo $user->fetchEquipmentsCategory();
+            break;
+        case "updateEquipmentCategory":
+            $categoryData = $input['categoryData'] ?? null;
+            if (!$categoryData) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing categoryData']);
+                break;
+            }
+            echo $user->updateEquipmentCategory($categoryData);
+            break;
         
+        case "fetchModelsByCategoryAndMake":
+            $categoryId = $input['categoryId'] ?? null;
+            $makeId = $input['makeId'] ?? null;
+            if ($categoryId && $makeId) {
+                echo $user->fetchModelsByCategoryAndMake($categoryId, $makeId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Category ID and Make ID are required']);
+            }
+            break;
+        
+        case "fetchUsersById":
+            $id = $input['id'] ?? null;
+            if (!$id) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing id']);
+                break;
+            }
+            echo $user->fetchUsersById($id);
+            break;
+        
+        case "fetchEquipmentById":
+            $equipmentId = $input['id'] ?? ($_POST['id'] ?? null);
+            if ($equipmentId) {
+                echo $user->fetchEquipmentById($equipmentId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
+            }
+            break;
+        
+        case "getTotals":
+            echo $user->getTotals();
+            break;
+        
+        case "getReservedById":
+            $reservationId = $input['reservation_id'] ?? ($_POST['reservation_id'] ?? null);
+            if ($reservationId) {
+                echo $user->getReservedById($reservationId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Reservation ID parameter is missing.']);
+            }
+            break;
+        
+        case "fetchVenues":
+            echo $user->fetchVenues();
+            break;
+        case "fetchVehicles":
+            echo $user->fetchVehicles();
+            break;
+        case "fetchAllResources":
+            $type = $input['type'] ?? ($_POST['type'] ?? null);
+            echo $user->fetchAllResources($type);
+            break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
             break;
