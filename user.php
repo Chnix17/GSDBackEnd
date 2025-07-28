@@ -4296,93 +4296,7 @@ public function fetchNoAssignedReservation() {
     }
 }
 
-    public function fetchChecklist() {
-        try {
-            // SQL query for vehicle checklist with vehicle model name
-            $vehicleSql = "
-                SELECT 
-                    cvm.checklist_vehicle_vehicle_id,
-                    vm.vehicle_model_name AS vehicle_model,  -- Join on vehicle_model_name
-                    v.vehicle_license AS vehicle_license,    -- License from tbl_vehicle
-                    COUNT(cvm.checklist_vehicle_vehicle_id) AS vehicle_count
-                FROM 
-                    tbl_checklist_vehicle_master cvm
-                JOIN 
-                    tbl_vehicle v ON cvm.checklist_vehicle_vehicle_id = v.vehicle_id
-                JOIN 
-                    tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id  -- Join on vehicle_model_id
-                GROUP BY 
-                    cvm.checklist_vehicle_vehicle_id, vm.vehicle_model_name, v.vehicle_license
-                ORDER BY 
-                    cvm.checklist_vehicle_vehicle_id
-            ";
-    
-            // SQL query for venue checklist with venue name
-            $venueSql = "
-                SELECT 
-                    cve.checklist_venue_ven_id,
-                    ve.ven_name AS venue_name,  -- Correct column for venue name
-                    COUNT(cve.checklist_venue_ven_id) AS venue_count
-                FROM 
-                    tbl_checklist_venue_master cve
-                JOIN 
-                    tbl_venue ve ON cve.checklist_venue_ven_id = ve.ven_id  -- Use ven_id and ven_name from tbl_venue
-                GROUP BY 
-                    cve.checklist_venue_ven_id, ve.ven_name
-                ORDER BY 
-                    cve.checklist_venue_ven_id
-            ";
-    
-            // SQL query for equipment checklist with equipment name
-            $equipmentSql = "
-                SELECT 
-                    ce.checklist_equipment_equip_id,
-                    eq.equip_name AS equipment_name,
-                    COUNT(ce.checklist_equipment_equip_id) AS equipment_count
-                FROM 
-                    tbl_checklist_equipment_master ce
-                JOIN 
-                    tbl_equipments eq ON ce.checklist_equipment_equip_id = eq.equip_id
-                GROUP BY 
-                    ce.checklist_equipment_equip_id, eq.equip_name
-                ORDER BY 
-                    ce.checklist_equipment_equip_id
-            ";
-    
-            // Execute the queries
-            $vehicleStmt = $this->conn->prepare($vehicleSql);
-            $vehicleStmt->execute();
-            $vehicles = $vehicleStmt->fetchAll(PDO::FETCH_ASSOC);
-    
-            $venueStmt = $this->conn->prepare($venueSql);
-            $venueStmt->execute();
-            $venues = $venueStmt->fetchAll(PDO::FETCH_ASSOC);
-    
-            $equipmentStmt = $this->conn->prepare($equipmentSql);
-            $equipmentStmt->execute();
-            $equipment = $equipmentStmt->fetchAll(PDO::FETCH_ASSOC);
-    
-            // Format the results with only names, counts, and IDs
-            $formattedVehicles = $this->formatChecklistDataWithId($vehicles, 'checklist_vehicle_vehicle_id', 'vehicle_model', 'vehicle_license', 'vehicle');
-            $formattedVenues = $this->formatChecklistDataWithId($venues, 'checklist_venue_ven_id', 'venue_name', null, 'venue');
-            $formattedEquipment = $this->formatChecklistDataWithId($equipment, 'checklist_equipment_equip_id', 'equipment_name', null, 'equipment');
-    
-            // Return the result as a structured JSON response with the updated format
-            return json_encode([
-                'status' => 'success',
-                'data' => [
-                    'vehicles' => $formattedVehicles,
-                    'venues' => $formattedVenues,
-                    'equipment' => $formattedEquipment
-                ]
-            ]);
-        } catch (PDOException $e) {
-            return json_encode([
-                'status' => 'error',
-                'message' => 'Database error: ' . $e->getMessage()
-            ]);
-        }
-    }
+
 
     public function insertNotificationTouser($notification_message, $notification_user_id, $reservation_id = null) {
         try {
@@ -5539,6 +5453,730 @@ public function fetchNoAssignedReservation() {
     }
 
 
+    public function displayedMaintenanceResources() {
+        try {
+            $records = [];
+    
+            // 1) Equipment (consumable) under maintenance — display qty_bad
+            $sql = "
+                SELECT 
+                    rce.id                             AS record_id,
+                    'equipment_consumable'                        AS resource_type,
+                    e.equip_name                       AS resource_name,
+                    rce.qty_bad                        AS quantity,
+                    re.reservation_equipment_equip_id  AS resource_id,
+                    c.condition_name                   AS condition_name
+                FROM tbl_reservation_condition_equipment rce
+                JOIN tbl_reservation_equipment     re ON rce.reservation_equipment_id = re.reservation_equipment_id
+                JOIN tbl_equipments                e  ON re.reservation_equipment_equip_id = e.equip_id
+                JOIN tbl_condition                 c  ON rce.condition_id = c.id
+                WHERE rce.condition_id != 2
+                  AND rce.is_active = 1
+            ";
+            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+                $records[] = $row;
+            }
+    
+            // 2) Venues under maintenance
+            $sql = "
+                SELECT 
+                    rcv.id                            AS record_id,
+                    'venue'                           AS resource_type,
+                    v.ven_name                        AS resource_name,
+                    NULL                              AS quantity,
+                    rv.reservation_venue_venue_id     AS resource_id,
+                    c.condition_name                  AS condition_name
+                FROM tbl_reservation_condition_venue rcv
+                JOIN tbl_reservation_venue         rv ON rcv.reservation_venue_id = rv.reservation_venue_id
+                JOIN tbl_venue                     v  ON rv.reservation_venue_venue_id = v.ven_id
+                JOIN tbl_condition                 c  ON rcv.condition_id = c.id
+                WHERE rcv.condition_id != 2
+                  AND rcv.is_active = 1
+            ";
+            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+                $records[] = $row;
+            }
+    
+            // 3) Vehicles under maintenance
+            $sql = "
+                SELECT
+                    rcvh.id                           AS record_id,
+                    'vehicle'                         AS resource_type,
+                    CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
+                    NULL                              AS quantity,
+                    rv.reservation_vehicle_vehicle_id AS resource_id,
+                    c.condition_name                  AS condition_name
+                FROM tbl_reservation_condition_vehicle rcvh
+                JOIN tbl_reservation_vehicle        rv ON rcvh.reservation_vehicle_id = rv.reservation_vehicle_id
+                JOIN tbl_vehicle                    vh ON rv.reservation_vehicle_vehicle_id = vh.vehicle_id
+                JOIN tbl_vehicle_model              vm ON vh.vehicle_model_id = vm.vehicle_model_id
+                JOIN tbl_condition                  c  ON rcvh.condition_id = c.id
+                WHERE rcvh.condition_id != 2
+                  AND rcvh.is_active = 1
+            ";
+            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+                $records[] = $row;
+            }
+    
+            // 4) Equipment units (non-consumable) under maintenance
+            $sql = "
+                SELECT
+                    rcu.id           AS record_id,
+                    'equipment_unit' AS resource_type,
+                    eu.serial_number AS resource_name,
+                    eu.unit_id       AS resource_id,
+                    c.condition_name AS condition_name
+                FROM tbl_reservation_condition_unit rcu
+                JOIN tbl_reservation_unit           ru ON rcu.reservation_unit_id = ru.reservation_unit_id
+                JOIN tbl_equipment_unit             eu ON ru.unit_id = eu.unit_id
+                JOIN tbl_condition                  c  ON rcu.condition_id = c.id
+                WHERE rcu.condition_id != 2
+                  AND rcu.is_active = 1
+            ";
+            foreach ($this->conn->query($sql, PDO::FETCH_ASSOC) as $row) {
+                $records[] = $row;
+            }
+    
+            return json_encode([
+                'status' => 'success',
+                'data'   => $records
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status'  => 'error',
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+     public function updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed = false) {
+    try {
+        $type       = strtolower($type);
+        $resourceId = (int)$resourceId;
+        $recordId   = (int)$recordId;
+
+        // Mappings for venue/vehicle (unchanged)
+        $resourceMap  = [
+            'equipment' => ['table' => 'tbl_equipment_unit', 'pk' => 'unit_id'],
+            'venue'     => ['table' => 'tbl_venue',          'pk' => 'ven_id'],
+            'vehicle'   => ['table' => 'tbl_vehicle',        'pk' => 'vehicle_id'],
+        ];
+        $conditionMap = [
+            'equipment_unit'            => ['table' => 'tbl_reservation_condition_unit',      'fk' => 'reservation_unit_id'],
+            'venue'                => ['table' => 'tbl_reservation_condition_venue',     'fk' => 'reservation_venue_id'],
+            'vehicle'              => ['table' => 'tbl_reservation_condition_vehicle',   'fk' => 'reservation_vehicle_id'],
+            'equipment_consumable' => ['table' => 'tbl_reservation_condition_equipment', 'fk' => 'reservation_equipment_id'],
+        ];
+
+        if (! isset($conditionMap[$type])) {
+            return json_encode(['status'=>'error','message'=>'Invalid resource type.']);
+        }
+
+        $this->conn->beginTransaction();
+
+        switch ($type) {
+            case 'venue':
+            case 'vehicle':
+                // Update remarks if item is fixed
+                if ($isFixed) {
+                    $ctbl = $conditionMap[$type]['table'];
+                    $stmt = $this->conn->prepare("
+                        UPDATE {$ctbl}
+                           SET remarks = 'Fixed'
+                         WHERE id = :cid
+                    ");
+                    $stmt->execute(['cid' => $recordId]);
+                }
+
+                // 1) Update resource availability based on isFixed
+                $tbl    = $resourceMap[$type]['table'];
+                $pk     = $resourceMap[$type]['pk'];
+                $status = $isFixed ? 1 : 2;
+                $stmt   = $this->conn->prepare("
+                    UPDATE {$tbl}
+                       SET status_availability_id = :status
+                     WHERE {$pk} = :rid
+                ");
+                $stmt->execute(['status' => $status, 'rid' => $resourceId]);
+
+                // 2) Deactivate condition record
+                $ctbl   = $conditionMap[$type]['table'];
+                $stmt   = $this->conn->prepare("
+                    UPDATE {$ctbl}
+                       SET is_active = 0
+                     WHERE id = :cid
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                break;
+
+            case 'equipment_unit':
+                // 1) Ensure the condition record exists & is active
+                $stmt = $this->conn->prepare("
+                    SELECT 1
+                      FROM tbl_reservation_condition_unit
+                     WHERE id = :cid
+                       AND is_active = 1
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                if (! $stmt->fetch()) {
+                    throw new Exception("Condition record not found or already inactive.");
+                }
+
+                // 2) Update unit availability based on isFixed
+                $status = $isFixed ? 1 : 2;
+                $update = $this->conn->prepare("
+                    UPDATE tbl_equipment_unit
+                       SET status_availability_id = :status
+                     WHERE unit_id = :uid
+                ");
+                $update->execute(['status' => $status, 'uid' => $resourceId]);
+
+                // 3) Deactivate the condition record and set remarks
+                $updateFields = 'is_active = 0';
+                $params = ['cid' => $recordId];
+                if ($isFixed) {
+                    $updateFields .= ', remarks = :remarks';
+                    $params['remarks'] = 'Fixed';
+                }
+                $this->conn->prepare("
+                    UPDATE tbl_reservation_condition_unit
+                       SET $updateFields
+                     WHERE id = :cid
+                ")->execute($params);
+                break;
+
+            case 'equipment_consumable':
+                // Consumable equipment
+                // 1) fetch qty_bad
+                $stmt = $this->conn->prepare("
+                    SELECT qty_bad
+                      FROM tbl_reservation_condition_equipment
+                     WHERE id = :cid
+                       AND is_active = 1
+                ");
+                $stmt->execute(['cid' => $recordId]);
+                $cond = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (! $cond) {
+                    throw new Exception("Condition record not found or already inactive.");
+                }
+
+                if ($isFixed) {
+                    // Update remarks to 'Fixed'
+                    $this->conn->prepare("
+                        UPDATE tbl_reservation_condition_equipment
+                           SET remarks = 'Fixed'
+                         WHERE id = :cid
+                    ")->execute(['cid' => $recordId]);
+
+                    // 2) if fixed, update on_hand_quantity
+                    if ($cond['qty_bad'] > 0) {
+                        // find the row in equipment_quantity
+                        $stmt2 = $this->conn->prepare("
+                            UPDATE tbl_equipment_quantity
+                               SET on_hand_quantity = on_hand_quantity + :b
+                             WHERE equip_id = (
+                                 SELECT reservation_equipment_equip_id
+                                   FROM tbl_reservation_equipment
+                                  WHERE reservation_equipment_id = :rid
+                             )
+                        ");
+                        $stmt2->execute([
+                            'b'   => $cond['qty_bad'],
+                            'rid' => $resourceId
+                        ]);
+                    }
+                }
+
+                // 3) deactivate the condition record
+                $this->conn->prepare("
+                    UPDATE tbl_reservation_condition_equipment
+                       SET is_active = 0
+                     WHERE id = :cid
+                ")->execute(['cid' => $recordId]);
+                break;
+        }
+
+        $this->conn->commit();
+        return json_encode(['status'=>'success','message'=>"Updated {$type} and deactivated condition #{$recordId}."]);
+    }
+    catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode(['status'=>'error','message'=>$e->getMessage()]);
+    }
+}
+
+public function get_message($userid) {
+    $sql = "
+        SELECT 
+            c.*, 
+            CONCAT(u.users_fname, ' ', u.users_lname)     AS sender_name,
+            CONCAT(u2.users_fname, ' ', u2.users_lname)   AS receiver_name
+        FROM tbl_chat c
+        JOIN tbl_users u  ON c.sender_id   = u.users_id
+        JOIN tbl_users u2 ON c.receiver_id = u2.users_id
+        WHERE c.sender_id   = :userid
+           OR c.receiver_id = :userid
+        ORDER BY c.created_at ASC
+    ";
+    return $this->executeQuery($sql, [':userid' => $userid]);
+}
+
+public function fetchConditions() {
+    $sql = "SELECT `id`, `condition_name` FROM `tbl_condition` WHERE 1";
+    return $this->executeQuery($sql);
+}
+
+public function fetchModelById($id) {
+    $sql = "
+        SELECT 
+            vm.vehicle_model_id, 
+            vm.vehicle_model_name, 
+            vc.vehicle_category_name, 
+            vm2.vehicle_make_name
+        FROM 
+            tbl_vehicle_model AS vm
+        INNER JOIN 
+            tbl_vehicle_category AS vc ON vm.vehicle_category_id = vc.vehicle_category_id
+        INNER JOIN 
+            tbl_vehicle_make AS vm2 ON vm.vehicle_model_vehicle_make_id = vm2.vehicle_make_id
+        WHERE 
+            vm.vehicle_model_id = :id
+    ";
+
+    return $this->executeQuery($sql, [':id' => $id]);
+}
+
+public function fetchChecklist() {
+    try {
+        // SQL query for vehicle checklist with vehicle model name
+        $vehicleSql = "
+            SELECT 
+                cvm.checklist_vehicle_vehicle_id,
+                vm.vehicle_model_name AS vehicle_model,  -- Join on vehicle_model_name
+                v.vehicle_license AS vehicle_license,    -- License from tbl_vehicle
+                COUNT(cvm.checklist_vehicle_vehicle_id) AS vehicle_count
+            FROM 
+                tbl_checklist_vehicle_master cvm
+            JOIN 
+                tbl_vehicle v ON cvm.checklist_vehicle_vehicle_id = v.vehicle_id
+            JOIN 
+                tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id  -- Join on vehicle_model_id
+            GROUP BY 
+                cvm.checklist_vehicle_vehicle_id, vm.vehicle_model_name, v.vehicle_license
+            ORDER BY 
+                cvm.checklist_vehicle_vehicle_id
+        ";
+
+        // SQL query for venue checklist with venue name
+        $venueSql = "
+            SELECT 
+                cve.checklist_venue_ven_id,
+                ve.ven_name AS venue_name,  -- Correct column for venue name
+                COUNT(cve.checklist_venue_ven_id) AS venue_count
+            FROM 
+                tbl_checklist_venue_master cve
+            JOIN 
+                tbl_venue ve ON cve.checklist_venue_ven_id = ve.ven_id  -- Use ven_id and ven_name from tbl_venue
+            GROUP BY 
+                cve.checklist_venue_ven_id, ve.ven_name
+            ORDER BY 
+                cve.checklist_venue_ven_id
+        ";
+
+        // SQL query for equipment checklist with equipment name
+        $equipmentSql = "
+            SELECT 
+                ce.checklist_equipment_equip_id,
+                eq.equip_name AS equipment_name,
+                COUNT(ce.checklist_equipment_equip_id) AS equipment_count
+            FROM 
+                tbl_checklist_equipment_master ce
+            JOIN 
+                tbl_equipments eq ON ce.checklist_equipment_equip_id = eq.equip_id
+            GROUP BY 
+                ce.checklist_equipment_equip_id, eq.equip_name
+            ORDER BY 
+                ce.checklist_equipment_equip_id
+        ";
+
+        // Execute the queries
+        $vehicleStmt = $this->conn->prepare($vehicleSql);
+        $vehicleStmt->execute();
+        $vehicles = $vehicleStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $venueStmt = $this->conn->prepare($venueSql);
+        $venueStmt->execute();
+        $venues = $venueStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $equipmentStmt = $this->conn->prepare($equipmentSql);
+        $equipmentStmt->execute();
+        $equipment = $equipmentStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Format the results with only names, counts, and IDs
+        $formattedVehicles = $this->formatChecklistDataWithId($vehicles, 'checklist_vehicle_vehicle_id', 'vehicle_model', 'vehicle_license', 'vehicle');
+        $formattedVenues = $this->formatChecklistDataWithId($venues, 'checklist_venue_ven_id', 'venue_name', null, 'venue');
+        $formattedEquipment = $this->formatChecklistDataWithId($equipment, 'checklist_equipment_equip_id', 'equipment_name', null, 'equipment');
+
+        // Return the result as a structured JSON response with the updated format
+        return json_encode([
+            'status' => 'success',
+            'data' => [
+                'vehicles' => $formattedVehicles,
+                'venues' => $formattedVenues,
+                'equipment' => $formattedEquipment
+            ]
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function formatChecklistDataWithId($data, $idColumn, $nameColumn, $licenseColumn = null, $type) {
+    $formattedData = [];
+    foreach ($data as $item) {
+        $formattedItem = [
+            'id' => $item[$idColumn], // Include the ID in the output
+            'name' => $item[$nameColumn],
+            'count' => $item[$type . '_count']
+        ];
+        if ($licenseColumn && isset($item[$licenseColumn])) {
+            $formattedItem['license'] = $item[$licenseColumn];
+        }
+        $formattedData[] = $formattedItem;
+    }
+    return $formattedData;
+}
+
+
+private function formatChecklistData($data, $nameColumn, $licenseColumn = null, $type) {
+    $groupedData = [];
+    foreach ($data as $item) {
+        $name = $item[$nameColumn];
+        if (!isset($groupedData[$name])) {
+            $groupedData[$name] = [
+                'count' => 0,
+                'name' => $name
+            ];
+        }
+        
+        // For vehicle, we add the vehicle count (in case of different vehicle models)
+        if ($type == 'vehicle') {
+            $groupedData[$name]['count'] += (int) $item['vehicle_count'];
+        } else if ($type == 'venue') {
+            $groupedData[$name]['count'] += (int) $item['venue_count'];
+        } else if ($type == 'equipment') {
+            $groupedData[$name]['count'] += (int) $item['equipment_count'];
+        }
+    }
+
+    // Return the formatted data with name and count
+    return array_map(function($item) {
+        return [
+            'name' => $item['name'],
+            'count' => $item['count']
+        ];
+    }, $groupedData);
+}
+
+public function fetchChecklistById($type, $id) {
+    try {
+        if (empty($type) || empty($id)) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Type or ID is missing.'
+            ]);
+        }
+
+        $sql = '';
+        $idColumn = '';
+        $checklistTable = '';
+        $checklistIdColumn = '';
+
+        switch ($type) {
+            case 'vehicle':
+                $checklistTable = 'tbl_checklist_vehicle_master';
+                $idColumn = 'checklist_vehicle_vehicle_id';
+                $checklistIdColumn = 'checklist_vehicle_id';
+                break;
+            case 'venue':
+                $checklistTable = 'tbl_checklist_venue_master';
+                $idColumn = 'checklist_venue_ven_id';
+                $checklistIdColumn = 'checklist_venue_id';
+                break;
+            case 'equipment':
+                $checklistTable = 'tbl_checklist_equipment_master';
+                $idColumn = 'checklist_equipment_equip_id';
+                $checklistIdColumn = 'checklist_equipment_id';
+                break;
+            default:
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid type specified.'
+                ]);
+        }
+
+        $sql = "
+            SELECT 
+                $checklistIdColumn AS checklist_id,
+                checklist_name,
+                $idColumn AS foreign_id
+            FROM 
+                $checklistTable
+            WHERE 
+                $idColumn = :id
+        ";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute([':id' => $id]);
+        $checklists = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($checklists)) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'No checklists found for the given ID.'
+            ]);
+        }
+
+        return json_encode([
+            'status' => 'success',
+            'data' => $checklists
+        ]);
+    } catch (PDOException $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function updateChecklist($data) {
+    try {
+        if (empty($data['checklist_updates']) || !is_array($data['checklist_updates'])) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Missing or invalid checklist updates.'
+            ]);
+        }
+
+        $this->conn->beginTransaction();
+        $results = [];
+
+        foreach ($data['checklist_updates'] as $update) {
+            if (empty($update['type']) || !isset($update['id']) || empty($update['checklist_name'])) {
+                continue;
+            }
+
+            $updateSql = '';
+            $params = [
+                ':id' => $update['id'],
+                ':name' => $update['checklist_name']
+            ];
+
+            switch ($update['type']) {
+                case 'venue':
+                    $updateSql = "UPDATE tbl_checklist_venue_master 
+                                SET checklist_name = :name 
+                                WHERE checklist_venue_id = :id";
+                    break;
+
+                case 'vehicle':
+                    $updateSql = "UPDATE tbl_checklist_vehicle_master 
+                                SET checklist_name = :name 
+                                WHERE checklist_vehicle_id = :id";
+                    break;
+
+                case 'equipment':
+                    $updateSql = "UPDATE tbl_checklist_equipment_master 
+                                SET checklist_name = :name 
+                                WHERE checklist_equipment_id = :id";
+                    break;
+
+                default:
+                    continue 2;
+            }
+
+            $stmt = $this->conn->prepare($updateSql);
+            $success = $stmt->execute($params);
+            $results[] = [
+                'id' => $update['id'],
+                'type' => $update['type'],
+                'success' => $success
+            ];
+        }
+
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => 'Checklists updated successfully.',
+            'updates' => $results
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error', 
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function saveMasterChecklist($checklistNames, $type, $id) {
+    try {
+
+
+        $this->conn->beginTransaction();
+
+        // Determine which table to use based on type
+        switch ($type) {
+            case 'vehicle':
+                $sql = "INSERT INTO tbl_checklist_vehicle_master (checklist_name, checklist_vehicle_vehicle_id) VALUES (:name, :id)";
+                break;
+            case 'venue':
+                $sql = "INSERT INTO tbl_checklist_venue_master (checklist_name, checklist_venue_ven_id) VALUES (:name, :id)";
+                break;
+            case 'equipment':
+                $sql = "INSERT INTO tbl_checklist_equipment_master (checklist_name, checklist_equipment_equip_id) VALUES (:name, :id)";
+                break;
+            default:
+                return json_encode([
+                    'status' => 'error',
+                    'message' => 'Invalid resource type'
+                ]);
+        }
+
+        $stmt = $this->conn->prepare($sql);
+        
+        // Insert each checklist item
+        foreach ($checklistNames as $name) {
+            $stmt->execute([
+                ':name' => $name,
+                ':id' => $id
+            ]);
+        }
+
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => 'Checklist items saved successfully'
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    }
+}
+
+public function saveChecklist($data) {
+    try {
+        if (empty($data['checklist_ids']) || !is_array($data['checklist_ids'])) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Missing or invalid checklist_ids.'
+            ]);
+        }
+
+        $this->conn->beginTransaction();
+        $results = [];
+
+        foreach ($data['checklist_ids'] as $checklist) {
+            $admin_id = $data['admin_id'];
+            $personnel_id = $data['personnel_id'];
+            $isChecked = null;
+
+            // Common parameters
+            $params = [
+                ':admin_id' => $admin_id,
+                ':personnel_id' => $personnel_id,
+                ':isChecked' => $isChecked
+            ];
+
+            switch ($checklist['type']) {
+                case 'venue':
+                    if (empty($checklist['reservation_venue_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_venue
+                                (reservation_venue_id, checklist_venue_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_venue_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                case 'vehicle':
+                    if (empty($checklist['reservation_vehicle_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_vehicle
+                                (reservation_vehicle_id, checklist_vehicle_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_vehicle_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                case 'equipment':
+                    if (empty($checklist['reservation_equipment_id']) || empty($checklist['checklist_id'])) {
+                        continue 2;
+                    }
+                    $insertSql = "INSERT INTO tbl_reservation_checklist_equipment
+                                (reservation_equipment_id, checklist_equipment_id, admin_id, personnel_id, isChecked)
+                                VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
+                    $params[':reservation_id'] = $checklist['reservation_equipment_id'];
+                    $params[':checklist_id'] = $checklist['checklist_id'];
+                    break;
+
+                default:
+                    continue 2;
+            }
+
+            $stmt = $this->conn->prepare($insertSql);
+            $stmt->execute($params);
+            $results[] = $this->conn->lastInsertId();
+        }
+
+        // Insert notification for the personnel
+        $notificationSql = "INSERT INTO notification_user 
+                            (notification_message, notification_user_id, is_read, created_at)
+                            VALUES (:message, :user_id, 0, NOW())";
+
+        $notifMessage = "You have been assigned new checklist tasks.";
+        $stmtNotif = $this->conn->prepare($notificationSql);
+        $stmtNotif->bindParam(':message', $notifMessage, PDO::PARAM_STR);
+        $stmtNotif->bindParam(':user_id', $data['personnel_id'], PDO::PARAM_INT);
+        $stmtNotif->execute();
+
+        $this->conn->commit();
+
+        return json_encode([
+            'status' => 'success',
+            'message' => 'Checklists saved successfully.',
+            'inserted_ids' => $results
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error',
+            'message' => 'Database error: ' . $e->getMessage()
+        ]);
+    } catch (Exception $e) {
+        return json_encode([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
+    }
+}
+
+    
+
+
 
     
     
@@ -5582,6 +6220,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
+        case "saveChecklist":
+            $data = $input['data'] ?? null;
+            if (!$data) {
+                echo json_encode(['status' => 'error', 'message' => 'No data provided']);
+                break;
+            }
+            echo $user->saveChecklist($data);
+            break;
+
+        case "saveMasterChecklist":
+            $checklistNames = $input['checklistNames'] ?? [];
+            $type = $input['type'] ?? '';
+            $id = $input['id'] ?? 0;
+            echo $user->saveMasterChecklist($checklistNames, $type, $id);
+            break;
+
+        case "updateChecklist":
+            $data = $input['data'] ?? null;
+            if (!$data) {
+                echo json_encode(['status' => 'error', 'message' => 'No data provided']);
+                break;
+            }
+            echo $user->updateChecklist($data);
+            break;
+
+        case "fetchChecklistById":
+            $type = $input['type'] ?? '';
+            $id = $input['id'] ?? 0;
+            echo $user->fetchChecklistById($type, $id);
+            break;
+
+        case "fetchChecklist":
+            echo $user->fetchChecklist();
+            break;
+
+        case "fetchModelById":
+            $vehicleModelId = $input['id'] ?? ($_POST['id'] ?? null);
+            if ($vehicleModelId) {
+                echo $user->fetchModelById($vehicleModelId); // Fetch vehicle model by ID
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'ID parameter is missing.']);
+            }
+            break;
+
+        case 'fetchConditions':
+            echo $user->fetchConditions();
+            break;
+
+        case "get_message":
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            if ($userId) {
+                echo $user->get_message($userId);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'userid parameter is missing']);
+            }
+            break;
 
         case "fetchVenueById":
             $venueId = $input['id'] ?? ($_POST['id'] ?? null);
@@ -5759,6 +6453,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case "displayedMaintenanceResourcesDone":
             echo $user->displayedMaintenanceResourcesDone();
+            break;
+
+        case "displayedMaintenanceResources":
+            echo $user->displayedMaintenanceResources();
             break;
 
         case "fetchAllAssignedReleases":
@@ -6086,6 +6784,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "fetchAllResources":
             $type = $input['type'] ?? ($_POST['type'] ?? null);
             echo $user->fetchAllResources($type);
+            break;
+        case "updateResourceStatusAndCondition":
+            $type = $input['type'] ?? ($_POST['type'] ?? null);
+            $resourceId = $input['resourceId'] ?? ($_POST['resourceId'] ?? null);
+            $recordId = $input['recordId'] ?? ($_POST['recordId'] ?? null);
+            $isFixed = $input['isFixed'] ?? ($_POST['isFixed'] ?? false);
+            if ($type && $resourceId && $recordId) {
+                echo $user->updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed);
+            } else {
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters (type, resourceId, recordId)']);
+            }
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
