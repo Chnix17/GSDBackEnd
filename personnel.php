@@ -377,6 +377,7 @@ foreach ($reservations as $rid => &$res) {
         LEFT JOIN tbl_status_master sm
             ON rs_latest.reservation_status_status_id = sm.status_master_id
         WHERE r.reservation_id = :rid
+        ORDER BY r.reservation_id DESC
     ";
 
     $st = $this->conn->prepare($sqlR);
@@ -1073,7 +1074,7 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                 $stmtActive->execute(['reservation_id' => $reservation_id]);
                 break;
 
-            case 'equipment_consumable':
+            case 'equipment_bulk':
                 // Update active flag in tbl_reservation_equipment
                 $sqlUpdateActive = "UPDATE tbl_reservation_equipment SET active = 1 WHERE reservation_equipment_id = :reservation_id";
                 $stmtActive = $this->conn->prepare($sqlUpdateActive);
@@ -1248,11 +1249,11 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                     'user_personnel_id' => $user_personnel_id,
                     'remarks' => $remarksValue
                 ]);
-                // Also deactivate consumable equipment reservation if exists
+                // Also deactivate bulk equipment reservation if exists
                 $stmtDeactivateConsumable = $this->conn->prepare("UPDATE tbl_reservation_equipment SET active = -1 WHERE reservation_equipment_id = :reservation_id");
                 $stmtDeactivateConsumable->execute(['reservation_id' => $reservation_id]);
                 break;
-            case 'equipment_consumable':
+            case 'equipment_bulk':
                 $stmtFetchEquip = $this->conn->prepare("SELECT reservation_equipment_equip_id FROM tbl_reservation_equipment WHERE reservation_equipment_id = :rid");
                 $stmtFetchEquip->execute(['rid' => $reservation_id]);
                 $equipRow = $stmtFetchEquip->fetch(PDO::FETCH_ASSOC);

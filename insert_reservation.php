@@ -602,7 +602,7 @@ class Reservation {
     
             // Determine additional_note value (null if not set)
             $additionalNote = isset($data['additional_note']) ? $data['additional_note'] : null;
-
+    
             switch($type) {
                 case 'venue':
                     $stmt->bindParam(':title', $data['title']);
@@ -656,7 +656,7 @@ class Reservation {
     
             $userLevel = $userLevelStmt->fetch(PDO::FETCH_ASSOC);
             $userLevelId = $userLevel['users_user_level_id'];
-
+    
             // Initialize status SQL based on user level
             $statusSql = "";
     
@@ -708,6 +708,38 @@ class Reservation {
                         }
                     }
                 }
+    
+                // If it's a Big Event, insert department approvals for Academic departments
+                if ($hasBigEvent) {
+                    // Get all Academic departments
+                    $academicDeptSql = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                    $academicDeptStmt = $this->conn->prepare($academicDeptSql);
+                    
+                    if (!$academicDeptStmt->execute()) {
+                        $this->conn->rollBack();
+                        return ['status' => 'error', 'message' => 'Failed to fetch academic departments'];
+                    }
+                    
+                    $academicDepartments = $academicDeptStmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    // Insert department approval records for each academic department
+                    $deptApprovalSql = "INSERT INTO tbl_department_approval 
+                                       (department_is_approved, department_approval_department_id, 
+                                        department_user_id, department_updated_at, department_request_reservation_id) 
+                                       VALUES (0, :dept_id, NULL, NULL, :reservation_id)";
+                    $deptApprovalStmt = $this->conn->prepare($deptApprovalSql);
+                    
+                    foreach ($academicDepartments as $dept) {
+                        $deptApprovalStmt->bindValue(':dept_id', $dept['departments_id'], PDO::PARAM_INT);
+                        $deptApprovalStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                        
+                        if (!$deptApprovalStmt->execute()) {
+                            $this->conn->rollBack();
+                            return ['status' => 'error', 'message' => 'Failed to create department approval record'];
+                        }
+                    }
+                }
+    
                 $statusSql = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
@@ -720,7 +752,7 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create reservation status'];
                 }
-
+    
                 // Insert notification for waiting for approval (keeping existing notification)
                 $notificationSql = "INSERT INTO tbl_notification_reservation 
                                   (notification_message, notification_reservation_reservation_id, 
@@ -735,13 +767,13 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification'];
                 }
-
+    
                 // Insert notifications in notification_requests for user levels 5 and 6
                 $requestNotifSql = "INSERT INTO notification_requests 
                                   (notification_message, notification_department_id, 
                                    notification_user_level_id, notification_create) 
                                   VALUES ('New Reservation Request Pending', :dept_id, :user_level_id, NOW())";
-
+    
                 // Insert for user level 5
                 $requestNotifStmt = $this->conn->prepare($requestNotifSql);
                 $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
@@ -751,7 +783,7 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification request for level 5'];
                 }
-
+    
                 // Insert for user level 6
                 $requestNotifStmt = $this->conn->prepare($requestNotifSql);
                 $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
@@ -761,7 +793,7 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
                 }
-
+    
                 // --- PUSH NOTIFICATION LOGIC (for user levels 3, 6, 16, 17) ---
                 // Find all users with active push subscriptions in the same department and user level 5 or 6
                 $sqlPushUsers = "SELECT u.users_id
@@ -774,10 +806,10 @@ class Reservation {
                 $stmtPushUsers->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
                 $stmtPushUsers->execute();
                 $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
-
+    
                 // Log the number of users found for push notifications
                 error_log("Found " . count($pushUsers) . " users with push subscriptions for department " . $userLevel['users_department_id'] . " and user levels 5,6");
-
+    
                 // Prepare push notification data
                 $pushTitle = 'New Reservation Request';
                 $pushBody = 'A new reservation request is pending approval.';
@@ -787,10 +819,10 @@ class Reservation {
                     'department_id' => $userLevel['users_department_id'],
                 ];
                 $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
-
+    
                 $successCount = 0;
                 $errorCount = 0;
-
+    
                 foreach ($pushUsers as $pushUser) {
                     $pushPayload = [
                         'operation' => 'send',
@@ -831,33 +863,33 @@ class Reservation {
                 }
                 
                 error_log("Push notifications sent after reservation creation: $successCount successful, $errorCount failed");
-
+    
             } elseif ($userLevelId == 5 || $userLevelId == 18) {
                 // Status SQL 1 and 2 remain the same
                 $statusSql1 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
                               VALUES (:reservation_id, 1, 1, null, NOW())";
-
+    
                 $statusSql2 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
                               VALUES (:reservation_id, 3, 1, null, NOW())";
-
+    
                 $statusStmt1 = $this->conn->prepare($statusSql1);
                 $statusStmt1->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
                 if (!$statusStmt1->execute()) {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create first reservation status'];
                 }
-
+    
                 $statusStmt2 = $this->conn->prepare($statusSql2);
                 $statusStmt2->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
                 if (!$statusStmt2->execute()) {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create second reservation status'];
                 }
-
+    
                 // Insert notification for waiting for confirmation (keeping existing notification)
                 $notificationSql = "INSERT INTO tbl_notification_reservation 
                                   (notification_message, notification_reservation_reservation_id, 
@@ -872,13 +904,13 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification'];
                 }
-
+    
                 // Insert notification in notification_requests based on user level
                 $requestNotifSql = "INSERT INTO notification_requests 
                                   (notification_message, notification_department_id, 
                                    notification_user_level_id, notification_create) 
                                   VALUES ('New Reservation Request Pending', :dept_id, :user_level_id, NOW())";
-
+    
                 $requestNotifStmt = $this->conn->prepare($requestNotifSql);
                 
                 // If user level is 18, use department 27 and user level 1, else use department from user and level 5
@@ -894,15 +926,15 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification request'];
                 }
-
+    
                 // --- PUSH NOTIFICATION TO ADMIN LOGIC (for user levels 5, 18) ---
                 $pushUserLevel = 1; // Admin user level
                 $pushDeptId = null;
-
+    
                 if ($userLevelId == 18) {
                     $pushDeptId = 27; // Specific department for VPAA requests
                 }
-
+    
                 $sqlPushUsers = "SELECT u.users_id
                                     FROM tbl_users u
                                     INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
@@ -912,7 +944,7 @@ class Reservation {
                 if ($pushDeptId !== null) {
                     $sqlPushUsers .= " AND u.users_department_id = :push_dept_id";
                 }
-
+    
                 $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
                 $stmtPushUsers->bindValue(':push_user_level', $pushUserLevel, PDO::PARAM_INT);
                 if ($pushDeptId !== null) {
@@ -920,9 +952,9 @@ class Reservation {
                 }
                 $stmtPushUsers->execute();
                 $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
-
+    
                 error_log("Found " . count($pushUsers) . " admin users for push notification (level 5/18 request).");
-
+    
                 // Prepare push notification data
                 $pushTitle = 'New Reservation Request';
                 $pushBody = 'A new reservation request waiting for approval.';
@@ -931,7 +963,7 @@ class Reservation {
                     'type' => 'reservation_confirmation'
                 ];
                 $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
-
+    
                 foreach ($pushUsers as $pushUser) {
                     $pushPayload = [
                         'operation' => 'send',
@@ -974,6 +1006,29 @@ class Reservation {
                 if (!$statusStmt->execute()) {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create reservation status'];
+                }
+            }
+            
+            // Insert statuses for users 114 and 99
+            $userIds = [114, 99];
+            $statusIds = [1, 8];
+            
+            foreach ($userIds as $userId) {
+                foreach ($statusIds as $statusId) {
+                    $statusSql = "INSERT INTO tbl_reservation_status 
+                                (reservation_reservation_id, reservation_status_status_id, 
+                                 reservation_active, reservation_users_id, reservation_updated_at) 
+                                VALUES (:reservation_id, :status_id, 1, :user_id, NOW())";
+                    
+                    $statusStmt = $this->conn->prepare($statusSql);
+                    $statusStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $statusStmt->bindValue(':status_id', $statusId, PDO::PARAM_INT);
+                    $statusStmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
+                    
+                    if (!$statusStmt->execute()) {
+                        $this->conn->rollBack();
+                        return ['status' => 'error', 'message' => 'Failed to create additional status for user ' . $userId];
+                    }
                 }
             }
     

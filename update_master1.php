@@ -226,24 +226,24 @@ class User {
     // }
 
     // New method to update vehicle category
-    public function updateVehicleCategory($id, $name) {
-        $sql = "UPDATE tbl_vehicle_category SET vehicle_category_name = :name WHERE vehicle_category_id = :id";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bindParam(':name', $name);
-        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+    // public function updateVehicleCategory($id, $name) {
+    //     $sql = "UPDATE tbl_vehicle_category SET vehicle_category_name = :name WHERE vehicle_category_id = :id";
+    //     $stmt = $this->conn->prepare($sql);
+    //     $stmt->bindParam(':name', $name);
+    //     $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         
-        return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle category updated successfully']) 
-                                 : json_encode(['status' => 'error', 'message' => 'Could not update vehicle category']);
-    }
-    public function updateDepartment($id, $name) {
-        $sql = "UPDATE tbl_departments SET departments_name = :name WHERE departments_id = :id";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bindParam(':name', $name);
-        $stmt->bindParam(':id', $id, PDO::PARAM_INT);
+    //     return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle category updated successfully']) 
+    //                              : json_encode(['status' => 'error', 'message' => 'Could not update vehicle category']);
+    // }
+    // public function updateDepartment($id, $name) {
+    //     $sql = "UPDATE tbl_departments SET departments_name = :name WHERE departments_id = :id";
+    //     $stmt = $this->conn->prepare($sql);
+    //     $stmt->bindParam(':name', $name);
+    //     $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         
-        return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Department updated successfully']) 
-                                 : json_encode(['status' => 'error', 'message' => 'Could not update department']);
-    }
+    //     return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Department updated successfully']) 
+    //                              : json_encode(['status' => 'error', 'message' => 'Could not update department']);
+    // }
 
 
     public function updateVenue($venueData) {
@@ -298,33 +298,33 @@ class User {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
-    public function updateEquipmentCategory($categoryData) {
-        try {
-            $sql = "UPDATE tbl_equipment_category SET 
-                        equipments_category_name = :name
-                    WHERE 
-                        equipments_category_id = :categoryId";
+    // public function updateEquipmentCategory($categoryData) {
+    //     try {
+    //         $sql = "UPDATE tbl_equipment_category SET 
+    //                     equipments_category_name = :name
+    //                 WHERE 
+    //                     equipments_category_id = :categoryId";
 
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $categoryData['name']);
-            $stmt->bindParam(':categoryId', $categoryData['categoryId'], PDO::PARAM_INT);
+    //         $stmt = $this->conn->prepare($sql);
+    //         $stmt->bindParam(':name', $categoryData['name']);
+    //         $stmt->bindParam(':categoryId', $categoryData['categoryId'], PDO::PARAM_INT);
 
-            // Add these lines for debugging
-            error_log("Updating category: " . print_r($categoryData, true));
-            $result = $stmt->execute();
-            error_log("Update result: " . ($result ? "true" : "false"));
-            error_log("Rows affected: " . $stmt->rowCount());
+    //         // Add these lines for debugging
+    //         error_log("Updating category: " . print_r($categoryData, true));
+    //         $result = $stmt->execute();
+    //         error_log("Update result: " . ($result ? "true" : "false"));
+    //         error_log("Rows affected: " . $stmt->rowCount());
 
-            if ($result) {
-                return json_encode(['status' => 'success', 'message' => 'Category updated successfully.']);
-            } else {
-                return json_encode(['status' => 'error', 'message' => 'Failed to update category.']);
-            }
-        } catch (PDOException $e) {
-            error_log("PDO Exception: " . $e->getMessage());
-            return json_encode(['status' => 'error', 'message' => 'Error: ' . $e->getMessage()]);
-        }
-    }
+    //         if ($result) {
+    //             return json_encode(['status' => 'success', 'message' => 'Category updated successfully.']);
+    //         } else {
+    //             return json_encode(['status' => 'error', 'message' => 'Failed to update category.']);
+    //         }
+    //     } catch (PDOException $e) {
+    //         error_log("PDO Exception: " . $e->getMessage());
+    //         return json_encode(['status' => 'error', 'message' => 'Error: ' . $e->getMessage()]);
+    //     }
+    // }
 
     public function updateVehicleModel($modelData) {
         // Validate input data
@@ -336,14 +336,82 @@ class User {
 
         error_log("Starting vehicle model update with data: " . print_r($modelData, true));
         
-        $sql = "UPDATE tbl_vehicle_model SET 
-                    vehicle_model_name = :modelName, 
-                    vehicle_category_id = :categoryId, 
-                    vehicle_model_vehicle_make_id = :makeId 
-                WHERE 
-                    vehicle_model_id = :modelId";
-
         try {
+            // First, get the current vehicle model name to check if it's the same
+            $currentSql = "SELECT vehicle_model_name FROM tbl_vehicle_model WHERE vehicle_model_id = :id";
+            $currentStmt = $this->conn->prepare($currentSql);
+            $currentStmt->bindParam(':id', $modelData['id'], PDO::PARAM_INT);
+            $currentStmt->execute();
+            $currentModel = $currentStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$currentModel) {
+                return json_encode(['status' => 'error', 'message' => 'Vehicle model not found']);
+            }
+            
+            $currentName = $currentModel['vehicle_model_name'];
+            
+            // If the new name is the same as the current name, allow the update
+            if ($currentName === $modelData['name']) {
+                $sql = "UPDATE tbl_vehicle_model SET 
+                            vehicle_model_name = :modelName, 
+                            vehicle_category_id = :categoryId, 
+                            vehicle_model_vehicle_make_id = :makeId 
+                        WHERE 
+                            vehicle_model_id = :modelId";
+
+                $stmt = $this->conn->prepare($sql);
+                
+                // Convert values to appropriate types
+                $modelId = intval($modelData['id']);
+                $categoryId = intval($modelData['category_id']);
+                $makeId = intval($modelData['make_id']);
+                
+                $stmt->bindValue(':modelName', $modelData['name'], PDO::PARAM_STR);
+                $stmt->bindValue(':categoryId', $categoryId, PDO::PARAM_INT);
+                $stmt->bindValue(':makeId', $makeId, PDO::PARAM_INT);
+                $stmt->bindValue(':modelId', $modelId, PDO::PARAM_INT);
+
+                // Log the actual values being used
+                error_log("Executing query with values: modelId=$modelId, name={$modelData['name']}, categoryId=$categoryId, makeId=$makeId");
+                
+                $result = $stmt->execute();
+                $rowCount = $stmt->rowCount();
+                
+                error_log("Query execution result: " . ($result ? "success" : "failed"));
+                error_log("Rows affected: $rowCount");
+                
+                if ($result) {
+                    if ($rowCount > 0) {
+                        return json_encode(['status' => 'success', 'message' => 'Vehicle model updated successfully']);
+                    } else {
+                        return json_encode(['status' => 'error', 'message' => 'No matching record found']);
+                    }
+                } else {
+                    $error = $stmt->errorInfo();
+                    error_log("Database error: " . print_r($error, true));
+                    return json_encode(['status' => 'error', 'message' => 'Database error: ' . $error[2]]);
+                }
+            }
+            
+            // If the name is different, check if the new name already exists
+            $checkSql = "SELECT COUNT(*) FROM tbl_vehicle_model WHERE vehicle_model_name = :name AND vehicle_model_id != :id";
+            $checkStmt = $this->conn->prepare($checkSql);
+            $checkStmt->bindParam(':name', $modelData['name']);
+            $checkStmt->bindParam(':id', $modelData['id'], PDO::PARAM_INT);
+            $checkStmt->execute();
+            
+            if ($checkStmt->fetchColumn() > 0) {
+                return json_encode(['status' => 'error', 'message' => 'Vehicle model name already exists']);
+            }
+            
+            // If validation passes, proceed with the update
+            $sql = "UPDATE tbl_vehicle_model SET 
+                        vehicle_model_name = :modelName, 
+                        vehicle_category_id = :categoryId, 
+                        vehicle_model_vehicle_make_id = :makeId 
+                    WHERE 
+                        vehicle_model_id = :modelId";
+
             $stmt = $this->conn->prepare($sql);
             
             // Convert values to appropriate types
@@ -376,6 +444,7 @@ class User {
                 error_log("Database error: " . print_r($error, true));
                 return json_encode(['status' => 'error', 'message' => 'Database error: ' . $error[2]]);
             }
+                                     
         } catch (PDOException $e) {
             error_log("PDO Exception: " . $e->getMessage());
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);

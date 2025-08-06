@@ -20,9 +20,69 @@ class Department_Dean {
         include 'connection-pdo.php';
         $this->conn = $conn;
     }
+    
+    /**
+     * Fetch department approval data by reservation ID
+     * @param int $reservationId The ID of the reservation
+     * @return string JSON encoded response with department approval data
+     */
+    public function fetchDeansApproval($reservationId) {
+        try {
+            $sql = "
+                SELECT 
+                    da.department_approval_id,
+                    da.department_is_approved,
+                    da.department_approval_department_id,
+                    da.department_user_id,
+                    da.department_updated_at,
+                    da.department_request_reservation_id,
+                    d.departments_name,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) as user_name
+                FROM 
+                    tbl_department_approval da
+                LEFT JOIN 
+                    tbl_departments d ON da.department_approval_department_id = d.departments_id
+                LEFT JOIN 
+                    tbl_users u ON da.department_user_id = u.users_id
+                WHERE 
+                    da.department_request_reservation_id = :reservation_id
+                ORDER BY 
+                    da.department_updated_at DESC
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            $approvals = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $approvals[] = [
+                    'approval_id' => $row['department_approval_id'],
+                    'is_approved' => $row['department_is_approved'],
+                    'department_id' => $row['department_approval_department_id'],
+                    'department_name' => $row['departments_name'],
+                    'user_id' => $row['department_user_id'] ?: '',
+                    'user_name' => $row['user_name'] ?: '',
+                    'updated_at' => $row['department_updated_at'],
+                    'reservation_id' => $row['department_request_reservation_id']
+                ];
+            }
+
+            return json_encode([
+                'status' => 'success',
+                'data' => $approvals
+            ]);
+
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Error fetching department approvals: ' . $e->getMessage()
+            ]);
+        }
+    }
 
     public function fetchApprovalByDept(int $departmentId, int $userLevelId, int $currentUserId): string
-        {
+{
     if (!$departmentId || !$userLevelId) {
         return json_encode([
             'status'  => 'error',
@@ -51,6 +111,11 @@ class Department_Dean {
                     u_req.users_lname
                 )                                    AS requester_name,
                 dep.departments_name               AS department_name,
+                ul.user_level_name                  AS user_level_name,
+                da.department_approval_id,
+                da.department_is_approved,
+                da.department_user_id,
+                da.department_updated_at,
 
                 -- Venues
                 GROUP_CONCAT(DISTINCT
@@ -90,74 +155,44 @@ class Department_Dean {
                     )
                 ) AS passenger_data
 
-            FROM tbl_reservation r
+            FROM tbl_department_approval da
+            INNER JOIN tbl_reservation r 
+                ON da.department_request_reservation_id = r.reservation_id
             LEFT JOIN tbl_users u_req 
-              ON r.reservation_user_id = u_req.users_id
+                ON r.reservation_user_id = u_req.users_id
             LEFT JOIN tbl_departments dep 
-              ON u_req.users_department_id = dep.departments_id
+                ON u_req.users_department_id = dep.departments_id
             LEFT JOIN tbl_reservation_status rs 
-              ON r.reservation_id = rs.reservation_reservation_id
+                ON r.reservation_id = rs.reservation_reservation_id
             LEFT JOIN tbl_reservation_venue v 
-              ON r.reservation_id = v.reservation_reservation_id
+                ON r.reservation_id = v.reservation_reservation_id
             LEFT JOIN tbl_venue venue 
-              ON v.reservation_venue_venue_id = venue.ven_id
+                ON v.reservation_venue_venue_id = venue.ven_id
             LEFT JOIN tbl_reservation_vehicle ve 
-              ON r.reservation_id = ve.reservation_reservation_id
+                ON r.reservation_id = ve.reservation_reservation_id
             LEFT JOIN tbl_vehicle vm 
-              ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
+                ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
+            LEFT JOIN tbl_user_level ul 
+                ON u_req.users_user_level_id = ul.user_level_id
             LEFT JOIN tbl_vehicle_model vmm 
-              ON vm.vehicle_model_id = vmm.vehicle_model_id
+                ON vm.vehicle_model_id = vmm.vehicle_model_id
             LEFT JOIN tbl_reservation_equipment e 
-              ON r.reservation_id = e.reservation_reservation_id
+                ON r.reservation_id = e.reservation_reservation_id
             LEFT JOIN tbl_equipments equip 
-              ON e.reservation_equipment_equip_id = equip.equip_id
+                ON e.reservation_equipment_equip_id = equip.equip_id
             LEFT JOIN tbl_reservation_passenger p 
-              ON r.reservation_id = p.reservation_reservation_id
+                ON r.reservation_id = p.reservation_reservation_id
 
             WHERE
-                /* 1) If caller is level 6 (secretary), then:
-                      - r.reservation_user_id != caller
-                      - u_req.users_user_level_id != 6 (exclude all secretaries' requests)
-                   Otherwise (other levels), allow everything */
-                (
-                    :user_level_id = 6
-                  
-                      AND u_req.users_user_level_id != 6
-                  OR :user_level_id != 6
-                )
-                /* 2) Department-based filter (unchanged) */
-                AND (
-                    (:department_id = 29 AND u_req.users_user_level_id IN (16,17))
-                  OR (:department_id != 29
-                        AND u_req.users_department_id      = :department_id
-                        AND u_req.users_user_level_id NOT IN (16,17)
-                     )
-                )
-                /* 3) Only new reservations */
-                AND EXISTS (
-                    SELECT 1
-                    FROM tbl_reservation_status rs1
-                    WHERE
-                        rs1.reservation_reservation_id    = r.reservation_id
-                      AND rs1.reservation_status_status_id = 1
-                      AND rs1.reservation_active           IS NULL
-                )
-                /* 4) Exclude any that have progressed past status 1 */
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM tbl_reservation_status rs2
-                    WHERE
-                        rs2.reservation_reservation_id    = r.reservation_id
-                      AND rs2.reservation_status_status_id IN (2,3,4,5,6)
-                )
-            GROUP BY r.reservation_id
+                da.department_approval_department_id = :department_id
+                AND da.department_is_approved = 0
+                
+            GROUP BY r.reservation_id, da.department_approval_id
         ";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([
-            'department_id'     => $departmentId,
-            'user_level_id'     => $userLevelId,
-            'current_user_id'   => $currentUserId
+            'department_id' => $departmentId
         ]);
 
         $result = [];
@@ -261,6 +296,11 @@ class Department_Dean {
                 'active'                   => $row['active'],
                 'requester_name'           => $row['requester_name'],
                 'department_name'          => $row['department_name'],
+                'user_level_name'          => $row['user_level_name'],
+                'department_approval_id'   => $row['department_approval_id'],
+                'department_is_approved'   => $row['department_is_approved'],
+                'department_user_id'       => $row['department_user_id'],
+                'department_updated_at'    => $row['department_updated_at'],
                 'venues'                   => $venues,
                 'vehicles'                 => $vehicles,
                 'equipment'                => $equipment,

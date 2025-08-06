@@ -732,73 +732,91 @@ class User {
 
     
        
-    public function handleApproval($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
-        try {
-            $this->conn->beginTransaction();
-            $sql = "UPDATE tbl_reservation_status 
-                    SET reservation_active = 1
-                    WHERE reservation_reservation_id = :reservation_id 
-                    AND reservation_active IS NULL";
-            
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-            $stmt->execute();
-            
-            $newStatusId = $isAccepted ? 3 : 2; 
-            $sql = "INSERT INTO tbl_reservation_status 
-                    (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
-                    VALUES (:reservation_id, :status_id, 1, NOW(), :user_id)";
-            
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-            $stmt->bindParam(':status_id', $newStatusId, PDO::PARAM_INT);
-            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-            
-            // Set notification message based on approval status
-            $defaultMessage = $isAccepted ? 'New Request' : 'Request Declined';
-            $notificationMessage = !empty($notificationMessage) ? $notificationMessage : $defaultMessage;
-            
-            // Insert notification with proper notification_user_id
-            $sqlNotification = "INSERT INTO tbl_notification_reservation 
-                             (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
-                             VALUES (:message, :reservation_id, :notification_user_id, NOW())";
-            
-            $stmtNotification = $this->conn->prepare($sqlNotification);
-            $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
-            $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-            $notificationUserId = $notification_user_id ?? $userId;
-            $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
-            $stmtNotification->execute();
+public function handleApproval($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
+    try {
+        $this->conn->beginTransaction();
 
-              $defaultMessage = $isAccepted ? 'New Request' : 'Request Declined';
-
-            // Insert notification into notification_requests table
-            $sqlDepartmentNotification = "INSERT INTO notification_requests 
-                                       (notification_message, notification_department_id, notification_user_level_id, notification_create) 
-                                       VALUES (:message, 27, 1, NOW())";
-            
-            $stmtDepartmentNotification = $this->conn->prepare($sqlDepartmentNotification);
-            $stmtDepartmentNotification->bindParam(':message', $defaultMessage, PDO::PARAM_STR);
-            $stmtDepartmentNotification->execute();
-            
-            $this->conn->commit();
-            
-            // Send push notification to the requester after successful database operations
-            $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
-            
-            return json_encode([
-                'status' => 'success', 
-                'message' => 'Request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
-                'reservation_id' => $reservationId,
-                'new_status_id' => $newStatusId
-            ]);
-    
-        } catch (PDOException $e) {
-            $this->conn->rollBack();
-            return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+        // 1. First get the user's department_id
+        $userSql = "SELECT users_department_id FROM tbl_users WHERE users_id = :user_id";
+        $userStmt = $this->conn->prepare($userSql);
+        $userStmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+        $userStmt->execute();
+        $user = $userStmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$user || !isset($user['users_department_id'])) {
+            throw new Exception("User department not found");
         }
+
+        $departmentId = $user['users_department_id'];
+
+        // 2. Update only the specific department approval record
+        $sql = "UPDATE tbl_department_approval 
+                SET department_is_approved = :approval_status,
+                    department_user_id = :user_id,
+                    department_updated_at = NOW()
+                WHERE department_request_reservation_id = :reservation_id
+                AND department_approval_department_id = :department_id";
+        
+        $stmt = $this->conn->prepare($sql);
+        $approval_status = $isAccepted ? 1 : -1;
+        $stmt->bindParam(':approval_status', $approval_status, PDO::PARAM_INT);
+        $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $stmt->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        // Check if any rows were affected
+        if ($stmt->rowCount() === 0) {
+            throw new Exception("No matching department approval record found");
+        }
+
+        // Set notification message based on approval status
+        $defaultMessage = $isAccepted ? 'Request Approved by Department' : 'Request Declined by Department';
+        $notificationMessage = !empty($notificationMessage) ? $notificationMessage : $defaultMessage;
+        
+        // Insert notification with proper notification_user_id
+        $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                         (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                         VALUES (:message, :reservation_id, :notification_user_id, NOW())";
+        
+        $stmtNotification = $this->conn->prepare($sqlNotification);
+        $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
+        $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+        $notificationUserId = $notification_user_id ?? $userId;
+        $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
+        $stmtNotification->execute();
+
+        // Insert department notification
+        $sqlDepartmentNotification = "INSERT INTO notification_requests 
+                                   (notification_message, notification_department_id, notification_user_level_id, notification_create) 
+                                   VALUES (:message, :department_id, 1, NOW())";
+        
+        $stmtDepartmentNotification = $this->conn->prepare($sqlDepartmentNotification);
+        $stmtDepartmentNotification->bindParam(':message', $defaultMessage, PDO::PARAM_STR);
+        $stmtDepartmentNotification->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+        $stmtDepartmentNotification->execute();
+        
+        $this->conn->commit();
+        
+        // Send push notification
+        $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
+        
+        return json_encode([
+            'status' => 'success', 
+            'message' => 'Department request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
+            'reservation_id' => $reservationId,
+            'department_id' => $departmentId,
+            'approval_status' => $approval_status
+        ]);
+
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'status' => 'error', 
+            'message' => $e->getMessage()
+        ]);
     }
+}
     
     private function sendApprovalPushNotification($reservationId, $isAccepted, $requesterUserId) {
         try {
@@ -1511,12 +1529,12 @@ class User {
             // overlapping with the given date range.
             $driverQuery = "
                 SELECT DISTINCT
-                    u.users_id,
-                    CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name
+                    rd.reservation_driver_user_id as users_id,
+                    rd.driver_name as full_name
                 FROM tbl_reservation r
                 INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                INNER JOIN tbl_reservation_driver rd ON r.reservation_id = rd.reservation_reservation_id
-                INNER JOIN tbl_users u ON rd.reservation_driver_user_id = u.users_id
+                INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
+                INNER JOIN tbl_reservation_driver rd ON rv.reservation_vehicle_id = rd.reservation_vehicle_id
                 WHERE r.reservation_start_date <= :endDate
                 AND r.reservation_end_date >= :startDate
                 AND rs.reservation_status_status_id = 6
@@ -1606,7 +1624,7 @@ class User {
 
             $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
 
-            if ($equipType === 'consumable') {
+            if ($equipType === 'bulk') {
                 // Check available quantity (but don't deduct)
                 $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
                 $stmtQty->execute([':equip_id' => $equipId]);
@@ -1614,10 +1632,10 @@ class User {
                 $availableQty = $qtyData ? (int)$qtyData['quantity'] : 0;
 
                 if ($availableQty < $quantity) {
-                    throw new Exception("Not enough quantity for consumable equipment ID $equipId. Only $availableQty available.");
+                    throw new Exception("Not enough quantity for bulk equipment ID $equipId. Only $availableQty available.");
                 }
 
-                // Commented out quantity deduction for consumable equipment
+                // Commented out quantity deduction for bulk equipment
                 // $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
                 // $stmtUpdateQty->execute([
                 //     ':qty' => $quantity,
@@ -1627,17 +1645,17 @@ class User {
                 $results[] = [
                     'equip_id' => $equipId,
                     'reservation_equipment_id' => $reservationEquipmentId,
-                    'type' => 'consumable',
+                    'type' => 'bulk',
                     'quantity_used' => $quantity,
                     'can_release' => true
                 ];
             } else {
-                // Non-consumable logic
+                // Serialized logic
                 $sqlUnits = "
                     SELECT eu.unit_id, eu.serial_number 
                     FROM tbl_equipment_unit eu
                     WHERE eu.equip_id = :equip_id 
-                        AND eu.status_availability_id = 1
+                        AND eu.status_availability_id != 2 
                         AND eu.is_active = 1
                         AND eu.unit_id NOT IN (
                             SELECT tru.unit_id
@@ -1668,7 +1686,7 @@ class User {
                     $results[] = [
                         'equip_id' => $equipId,
                         'reservation_equipment_id' => $reservationEquipmentId,
-                        'type' => 'non-consumable',
+                        'type' => 'serialized',
                         'units_inserted' => 0,
                         'units' => [],
                         'can_release' => false,
@@ -1691,7 +1709,7 @@ class User {
                 $results[] = [
                     'equip_id' => $equipId,
                     'reservation_equipment_id' => $reservationEquipmentId,
-                    'type' => 'non-consumable',
+                    'type' => 'serialized',
                     'units_inserted' => $availableUnits,
                     'units_missing' => max(0, $quantity - $availableUnits),
                     'units' => $units,
