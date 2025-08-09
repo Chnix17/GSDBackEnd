@@ -192,7 +192,8 @@ class User {
                 ven_pic, 
                 ven_operating_hours,
                 is_active,
-                event_type
+                event_type,
+                area_type
                 FROM tbl_venue
                 WHERE status_availability_id != 2 AND is_active = 1
                 ORDER BY ven_id DESC
@@ -628,7 +629,7 @@ public function fetchEquipmentsWithStatus() {
                         ON r.reservation_id = rs.reservation_reservation_id
                     WHERE v.ven_id IN ($placeholders)
                       AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
                         OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
                       )
                       AND r.reservation_id NOT IN (
@@ -725,7 +726,8 @@ public function fetchEquipmentsWithStatus() {
                         ON r.reservation_id = rs.reservation_reservation_id
                     WHERE v.vehicle_id IN ($placeholders)
                     AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+                     
                         OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
                     )
                     AND r.reservation_id NOT IN (
@@ -793,9 +795,10 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
                     WHERE e.equip_id IN ($placeholders)
                       AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+            
                         OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                      )
+                    )
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
@@ -3678,26 +3681,23 @@ public function saveVenue($data) {
         if (!isset($data['user_admin_id'])) {
             return json_encode(['status' => 'error', 'message' => 'Admin ID is required']);
         }
-        if (!isset($data['name']) || !isset($data['occupancy']) || !isset($data['event_type'])) {
+        if (!isset($data['name']) || !isset($data['occupancy']) || !isset($data['event_type']) || !isset($data['area_type'])) {
             return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
         }
         if ($this->venueExists($data['name'])) {
             return json_encode(['status' => 'error', 'message' => 'This venue name is already in use.']);
         }
 
-        $sql = "INSERT INTO tbl_venue (
-            ven_name, ven_occupancy, ven_created_at, ven_updated_at, 
-            status_availability_id, is_active, user_admin_id, event_type
-        ) VALUES (
-            :name, :occupancy, NOW(), NOW(), 
-            1, 1, :admin_id, :event_type
-        )";
+        $sql = "INSERT INTO tbl_venue 
+                (ven_name, ven_occupancy, status_availability_id, user_admin_id, event_type, area_type) 
+                VALUES (:name, :occupancy, 1, :admin_id, :event_type, :area_type)";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->bindParam(':name', $data['name'], PDO::PARAM_STR);
         $stmt->bindParam(':occupancy', $data['occupancy'], PDO::PARAM_INT);
         $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
         $stmt->bindParam(':event_type', $data['event_type'], PDO::PARAM_STR);
+        $stmt->bindParam(':area_type', $data['area_type'], PDO::PARAM_STR);
 
         if ($stmt->execute()) {
             return json_encode(['status' => 'success', 'message' => 'Venue added successfully']);
@@ -3712,7 +3712,7 @@ public function saveVenue($data) {
 
 public function updateVenue($venueData) {
     try {
-        if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'], $venueData['event_type'])) {
+        if (!isset($venueData['venue_id'], $venueData['venue_name'], $venueData['max_occupancy'], $venueData['status_availability_id'], $venueData['event_type'], $venueData['area_type'])) {
             return json_encode(['status' => 'error', 'message' => 'Missing required fields']);
         }
 
@@ -3720,15 +3720,16 @@ public function updateVenue($venueData) {
                     ven_name = :venue_name, 
                     ven_occupancy = :max_occupancy,
                     status_availability_id = :status_availability_id,
-                    event_type = :event_type
+                    event_type = :event_type,
+                    area_type = :area_type
                 WHERE ven_id = :venue_id";
 
         $stmt = $this->conn->prepare($sql);
-
-        $stmt->bindParam(':venue_name', $venueData['venue_name']);
-        $stmt->bindParam(':max_occupancy', $venueData['max_occupancy']);
+        $stmt->bindParam(':venue_name', $venueData['venue_name'], PDO::PARAM_STR);
+        $stmt->bindParam(':max_occupancy', $venueData['max_occupancy'], PDO::PARAM_INT);
         $stmt->bindParam(':status_availability_id', $venueData['status_availability_id'], PDO::PARAM_INT);
         $stmt->bindParam(':event_type', $venueData['event_type'], PDO::PARAM_STR);
+        $stmt->bindParam(':area_type', $venueData['area_type'], PDO::PARAM_STR);
         $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
 
         return $stmt->execute()
@@ -4138,6 +4139,13 @@ public function venueExists($venueName) {
                             WHERE rs2.reservation_reservation_id = r.reservation_id 
                             AND rs2.reservation_status_status_id = 6
                         )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM tbl_reservation_status rs3
+                            WHERE rs3.reservation_reservation_id = r.reservation_id
+                            AND rs3.reservation_status_status_id = 2
+                            AND rs3.reservation_active = 1
+                        )
                     )
     
                 GROUP BY 
@@ -4244,6 +4252,28 @@ public function venueExists($venueName) {
 
     public function fetchRequestById($reservationId) {
         try {
+            // First, get all status history for this reservation
+            $statusHistorySql = "
+                SELECT 
+                    rs.reservation_status_id,
+                    rs.reservation_status_status_id AS status_id,
+                    sm.status_master_name AS status_name,
+                    rs.reservation_active,
+                    rs.reservation_updated_at,
+                    rs.reservation_users_id,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS updated_by_name
+                FROM tbl_reservation_status rs
+                JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
+                LEFT JOIN tbl_users u ON rs.reservation_users_id = u.users_id
+                WHERE rs.reservation_reservation_id = :reservation_id
+                ORDER BY rs.reservation_updated_at DESC
+            ";
+            
+            $statusStmt = $this->conn->prepare($statusHistorySql);
+            $statusStmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $statusStmt->execute();
+            $statusHistory = $statusStmt->fetchAll(PDO::FETCH_ASSOC);
+
             $sql = "
                 SELECT 
                     r.reservation_id, 
@@ -4369,12 +4399,14 @@ public function venueExists($venueName) {
                     'reservation_end_date' => $row['reservation_end_date'],
                     'reservation_participants' => $row['reservation_participants'],
                     'additional_note' => $row['additional_note'],
-                    'status_name' => $row['status_name'],
-                    'active' => $row['active'],
+                    'status_name' => $row['status_name'],  // Keep for backward compatibility
+                    'status_id' => $row['status_id'],      // Keep for backward compatibility
+                    'active' => $row['active'],            // Keep for backward compatibility
                     'reservation_user_id' => $row['reservation_user_id'],
                     'requester_name' => $row['requester_name'],
                     'department_name' => $row['department_name'],
-                    'user_level_name' => $row['user_level_name']
+                    'user_level_name' => $row['user_level_name'],
+                    'status_history' => $statusHistory     // Add full status history
                 ];
 
                 // VENUES
@@ -4544,7 +4576,7 @@ public function venueExists($venueName) {
                     JOIN tbl_reservation_status rs
                         ON r.reservation_id = rs.reservation_reservation_id
                     WHERE (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
+                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
                         OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
                     )
                     AND r.reservation_id NOT IN (
@@ -6125,7 +6157,8 @@ public function fetchNoAssignedReservation() {
             v.is_active, 
             v.user_admin_id,
             sa.status_availability_name,
-            v.event_type
+            v.event_type,
+            v.area_type
         FROM tbl_venue v
         INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
         WHERE v.ven_id = :id";

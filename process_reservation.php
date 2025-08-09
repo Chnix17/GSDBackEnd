@@ -1147,39 +1147,53 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
     public function handleRequest($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
         try {
             $this->conn->beginTransaction();
-
+    
             if ($isAccepted) {
-                $sqlDeactivate = "
-                    UPDATE tbl_reservation_status 
-                    SET reservation_active = -1 
-                    WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
-                
-                $stmtDeactivate = $this->conn->prepare($sqlDeactivate);
-                $reservation_id = $reservationId; // Store in variable
-                $stmtDeactivate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtDeactivate->execute();
-
-                // Then insert: Add new completed status (6)
-                $sqlInsert = "
-                    INSERT INTO tbl_reservation_status 
-                    (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
-                    VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
-                
-                $stmtInsert = $this->conn->prepare($sqlInsert);
-                $reservation_id = $reservationId; // Store in variable
-                $user_id = $userId; // Store in variable
-                $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
-                $stmtInsert->execute();
+                // For user ID 99, handle status ID 8
+                if ($userId == 99) {
+                    $sqlUpdate = "
+                        UPDATE tbl_reservation_status 
+                        SET reservation_active = 1 
+                        WHERE reservation_reservation_id = :reservation_id 
+                        AND reservation_status_status_id = 8";
+                    
+                    $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                    $reservation_id = $reservationId;
+                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->execute();
+                    
+                    // Insert status 6
+                    $sqlInsert = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
+                    
+                    $stmtInsert = $this->conn->prepare($sqlInsert);
+                    $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert->execute();
+                } else {
+                    // For other users, handle status ID 1 normally
+                    $sqlUpdate = "
+                        UPDATE tbl_reservation_status 
+                        SET reservation_active = 1 
+                        WHERE reservation_reservation_id = :reservation_id 
+                        AND reservation_status_status_id = 1";
+                    
+                    $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                    $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtUpdate->execute();
+                }
             } else {
-                $sqlDeactivate = "
+                $sqlUpdate = "
                     UPDATE tbl_reservation_status 
                     SET reservation_active = -1 
                     WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
-                $stmtDeactivate = $this->conn->prepare($sqlDeactivate);
+                $stmtUpdate = $this->conn->prepare($sqlUpdate);
                 $reservation_id = $reservationId; // Store in variable
-                $stmtDeactivate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtDeactivate->execute();
+                $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtUpdate->execute();
+                
                 $sqlInsert = "
                     INSERT INTO tbl_reservation_status 
                     (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
@@ -1192,7 +1206,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
                 $stmtInsert->execute();
             }
-
+    
             // Insert notification with proper notification_user_id
             if (!empty($notificationMessage)) {
                 $sqlNotification = "INSERT INTO tbl_notification_reservation 
@@ -1208,7 +1222,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 $stmtNotification->bindParam(':notification_user_id', $notification_user, PDO::PARAM_INT);
                 $stmtNotification->execute();
             }
-
+    
             $this->conn->commit();
             
             // Send push notification to the requester after successful database operations
@@ -1223,13 +1237,13 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 'type' => 'reservation_approval'
             ];
             $this->sendPushNotificationToUser($notificationUserId, $title, $body, $data);
-
+    
             return json_encode([
                 'status' => 'success', 
                 'message' => 'Request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
                 'reservation_id' => $reservationId
             ]);
-
+    
         } catch (PDOException $e) {
             $this->conn->rollBack();
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);

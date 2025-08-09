@@ -569,7 +569,64 @@ class FacultyStaff {
             ]);
         }
     }
+    
+    public function fetchDeansApproval($reservationId) {
+        try {
+            $sql = "
+                SELECT 
+                    da.department_approval_id,
+                    da.department_is_approved,
+                    da.department_approval_department_id,
+                    da.department_user_id,
+                    da.department_updated_at,
+                    da.department_request_reservation_id,
+                    d.departments_name,
+                    CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) as user_name
+                FROM 
+                    tbl_department_approval da
+                LEFT JOIN 
+                    tbl_departments d ON da.department_approval_department_id = d.departments_id
+                LEFT JOIN 
+                    tbl_users u ON da.department_user_id = u.users_id
+                WHERE 
+                    da.department_request_reservation_id = :reservation_id
+                ORDER BY 
+                    da.department_updated_at DESC
+            ";
+    
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmt->execute();
+    
+            $approvals = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $approvals[] = [
+                    'approval_id' => $row['department_approval_id'],
+                    'is_approved' => $row['department_is_approved'],
+                    'department_id' => $row['department_approval_department_id'],
+                    'department_name' => $row['departments_name'],
+                    'user_id' => $row['department_user_id'] ?: '',
+                    'user_name' => $row['user_name'] ?: '',
+                    'updated_at' => $row['department_updated_at'],
+                    'reservation_id' => $row['department_request_reservation_id']
+                ];
+            }
+    
+            return json_encode([
+                'status' => 'success',
+                'data' => $approvals
+            ]);
+    
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Error fetching department approvals: ' . $e->getMessage()
+            ]);
+        }
+    }
 }
+
+
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
@@ -583,6 +640,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $facultyStaff = new FacultyStaff();
 
     switch ($operation) {
+        case 'fetchDeansApproval':
+            if (!$reservationId) {
+                echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
+                break;
+            }
+            echo $facultyStaff->fetchDeansApproval($reservationId);
+            break;
         case 'fetchMyReservation':
             if (!$userId) {
                 echo json_encode(['status' => 'error', 'message' => 'User ID is required']);

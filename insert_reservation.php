@@ -566,7 +566,7 @@ class Reservation {
             $errors = [];
 
             foreach ($passengers as $passenger) {
-                $stmt->bindParam(':passenger_name', $passenger);
+                $stmt->bindParam(':passsenger_name', $passenger);
                 $stmt->bindParam(':reservation_id', $reservationId);
 
                 if (!$stmt->execute()) {
@@ -658,8 +658,6 @@ class Reservation {
             $userLevelId = $userLevel['users_user_level_id'];
     
             // Initialize status SQL based on user level
-            $statusSql = "";
-    
             if ($userLevelId == 3 || $userLevelId == 6 || $userLevelId == 16 || $userLevelId == 17) {
                 // Determine event type from all venues
                 $reservationActive = null;
@@ -709,48 +707,199 @@ class Reservation {
                     }
                 }
     
-                // If it's a Big Event, insert department approvals for Academic departments
-                if ($hasBigEvent) {
-                    // Get all Academic departments
-                    $academicDeptSql = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
-                    $academicDeptStmt = $this->conn->prepare($academicDeptSql);
+                // Check if department approvals are needed based on user level and venue types
+                if ((in_array($userLevelId, [3, 6, 16, 17])) && !empty($data['venues']) && is_array($data['venues'])) {
+                    // Log the start of venue check
+                    error_log("Checking venues for department approvals - Reservation ID: " . $reservationId);
                     
-                    if (!$academicDeptStmt->execute()) {
-                        $this->conn->rollBack();
-                        return ['status' => 'error', 'message' => 'Failed to fetch academic departments'];
-                    }
+                    // Get event_type and area_type for all venues in this reservation
+                    $venueIds = implode(",", array_map('intval', $data['venues']));
+                    $venueSql = "SELECT ven_id, event_type, area_type, ven_name FROM tbl_venue WHERE ven_id IN ($venueIds)";
+                    $venueStmt = $this->conn->query($venueSql);
                     
-                    $academicDepartments = $academicDeptStmt->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    // Insert department approval records for each academic department
-                    $deptApprovalSql = "INSERT INTO tbl_department_approval 
-                                       (department_is_approved, department_approval_department_id, 
-                                        department_user_id, department_updated_at, department_request_reservation_id) 
-                                       VALUES (0, :dept_id, NULL, NULL, :reservation_id)";
-                    $deptApprovalStmt = $this->conn->prepare($deptApprovalSql);
-                    
-                    foreach ($academicDepartments as $dept) {
-                        $deptApprovalStmt->bindValue(':dept_id', $dept['departments_id'], PDO::PARAM_INT);
-                        $deptApprovalStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    if ($venueStmt) {
+                        $venues = $venueStmt->fetchAll(PDO::FETCH_ASSOC);
+                        $hasBigEvent = false;
+                        $hasOpenArea = false;
+                        $hasCloseArea = false;
                         
-                        if (!$deptApprovalStmt->execute()) {
-                            $this->conn->rollBack();
-                            return ['status' => 'error', 'message' => 'Failed to create department approval record'];
+                        // Log all venues being checked
+                        error_log("Venues to check (ID - Name - Event Type - Area Type): " . 
+                                json_encode(array_map(function($v) { 
+                                    return [
+                                        'id' => $v['ven_id'],
+                                        'name' => $v['ven_name'] ?? 'N/A',
+                                        'event_type' => $v['event_type'] ?? 'not set',
+                                        'area_type' => $v['area_type'] ?? 'not set'
+                                    ]; 
+                                }, $venues)));
+                        
+                        // Check venue types
+                        foreach ($venues as $venue) {
+                            $venueId = $venue['ven_id'];
+                            $eventType = $venue['event_type'] ?? 'not set';
+                            $areaType = $venue['area_type'] ?? 'not set';
+                            
+                            error_log(sprintf("Checking venue - ID: %d, Name: %s, Event Type: %s, Area Type: %s", 
+                                $venueId, 
+                                $venue['ven_name'] ?? 'N/A',
+                                $eventType,
+                                $areaType
+                            ));
+                            
+                            if ($eventType === 'Big Event') {
+                                $hasBigEvent = true;
+                                if ($areaType === 'Open Area') {
+                                    $hasOpenArea = true;
+                                    error_log(sprintf("FOUND Big Event with Open Area - Venue ID: %d, Name: %s", 
+                                        $venueId, $venue['ven_name'] ?? 'N/A'));
+                                } elseif ($areaType === 'Close Area') {
+                                    $hasCloseArea = true;
+                                    error_log(sprintf("FOUND Big Event with Close Area - Venue ID: %d, Name: %s", 
+                                        $venueId, $venue['ven_name'] ?? 'N/A'));
+                                }
+                            } elseif ($eventType === 'Small Event' && $areaType === 'Close Area') {
+                                $hasCloseArea = true;
+                                error_log(sprintf("FOUND Small Event with Close Area - Venue ID: %d, Name: %s", 
+                                    $venueId, $venue['ven_name'] ?? 'N/A'));
+                            }
+                        }
+                        
+                        // Insert department approval based on conditions
+                        if (($hasBigEvent && $hasOpenArea) || // Big Event AND Open Area
+                            ($hasBigEvent && $hasCloseArea) || // Big Event AND Close Area
+                            $hasCloseArea) { // Small Event AND Close Area (handled by the same flag)
+                            
+                            // Initialize departments array
+                            $departmentsToApprove = [];
+                            $userDeptId = isset($userLevel['users_department_id']) ? (int)$userLevel['users_department_id'] : 0;
+                            
+                            // For user levels 3 and 6
+                            if (in_array($userLevelId, [3, 6])) {
+                                // For Big Event in Open Area - include all academic departments
+                                if ($hasBigEvent && $hasOpenArea) {
+                                    // Get all academic departments
+                                    $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                    $deptStmt = $this->conn->query($deptQuery);
+                                    
+                                    if ($deptStmt) {
+                                        $departmentsToApprove = $deptStmt->fetchAll(PDO::FETCH_COLUMN);
+                                        error_log(sprintf("Adding all academic departments for user level %d (Big Event in Open Area)", $userLevelId));
+                                    }
+                                }
+                                // For Big Event in Close Area or Small Event in Close Area - include only their department
+                                elseif (($hasBigEvent && $hasCloseArea) || $hasCloseArea) {
+                                    if ($userDeptId > 0) {
+                                        $departmentsToApprove = [$userDeptId];
+                                        error_log(sprintf("Adding user's department %d for user level %d (%s in Close Area)", 
+                                            $userDeptId, $userLevelId, $hasBigEvent ? 'Big Event' : 'Small Event'));
+                                    } else {
+                                        error_log(sprintf("Cannot add department approval - invalid department ID for user level %d", $userLevelId));
+                                    }
+                                }
+                            }
+                            // For user levels 16 and 17 with Big Event in Open Area - include all academic departments + department 29
+                            else if (in_array($userLevelId, [16, 17]) && $hasBigEvent && $hasOpenArea) {
+                                // Get all academic departments
+                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                $deptStmt = $this->conn->query($deptQuery);
+                                
+                                if ($deptStmt) {
+                                    $departmentsToApprove = $deptStmt->fetchAll(PDO::FETCH_COLUMN);
+                                }
+                                
+                                // Add department 29 if not already in the list
+                                if (!in_array(29, $departmentsToApprove)) {
+                                    $departmentsToApprove[] = 29;
+                                }
+                                
+                                // If no academic departments found, just use department 29
+                                if (empty($departmentsToApprove)) {
+                                    $departmentsToApprove = [29];
+                                }
+                                
+                                // For user levels 5, 6, and 18, exclude their own department from approvals
+                                if (in_array($userLevelId, [5, 6, 18]) && isset($userLevel['users_department_id'])) {
+                                    $userDeptId = (int)$userLevel['users_department_id'];
+                                    $departmentsToApprove = array_filter($departmentsToApprove, function($deptId) use ($userDeptId) {
+                                        return (int)$deptId !== $userDeptId;
+                                    });
+                                    error_log(sprintf("Excluded user's department ID %d from approvals for user level %d", 
+                                        $userDeptId, $userLevelId));
+                                }
+                            } 
+                            // For Big Event in Close Area and user level 16 or 17 - only department 29
+                            elseif (($hasBigEvent && $hasCloseArea) && in_array($userLevelId, [16, 17])) {
+                                $departmentsToApprove = [29];
+                                
+                                // For user levels 5, 6, and 18, exclude their own department if it's 29
+                                if (in_array($userLevelId, [5, 6, 18]) && isset($userLevel['users_department_id'])) {
+                                    $userDeptId = (int)$userLevel['users_department_id'];
+                                    if ($userDeptId === 29) {
+                                        $departmentsToApprove = [];
+                                        error_log(sprintf("Excluded user's department ID %d from approvals for user level %d", 
+                                            $userDeptId, $userLevelId));
+                                    }
+                                }
+                            } 
+                            // For Small Event in Close Area - use existing logic (empty array means no department approvals needed)
+                            else if ($hasCloseArea) {
+                                $departmentsToApprove = [];
+                            }
+                            
+                            foreach ($departmentsToApprove as $deptId) {
+                                // Prepare the department approval insert statement
+                                $deptApprovalSql = "INSERT INTO tbl_department_approval 
+                                                  (department_is_approved, department_approval_department_id, 
+                                                  department_user_id, department_updated_at, department_request_reservation_id) 
+                                                  VALUES (0, :dept_id, NULL, NULL, :reservation_id)";
+                                $deptApprovalStmt = $this->conn->prepare($deptApprovalSql);
+                                
+                                $deptApprovalStmt->bindValue(':dept_id', $deptId, PDO::PARAM_INT);
+                                $deptApprovalStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                                
+                                if (!$deptApprovalStmt->execute()) {
+                                    $error = $deptApprovalStmt->errorInfo();
+                                    error_log(sprintf("Failed to create department approval - Department ID: %d, Error: %s", 
+                                        $deptId,
+                                        json_encode($error)
+                                    ));
+                                    $this->conn->rollBack();
+                                    return ['status' => 'error', 'message' => 'Failed to create department approval record'];
+                                } else {
+                                    error_log(sprintf("Successfully created department approval - Department ID: %d, Reservation ID: %d", 
+                                        $deptId,
+                                        $reservationId
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
     
-                $statusSql = "INSERT INTO tbl_reservation_status 
+                // Status SQL 1 and 2 remain the same
+                $statusSql1 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 1, :reservation_active, null, NOW())";
-                $statusStmt = $this->conn->prepare($statusSql);
-                $statusStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $statusStmt->bindValue(':reservation_active', $reservationActive, $reservationActive === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
-                
-                if (!$statusStmt->execute()) {
+                              VALUES (:reservation_id, 1, 0, 114, NOW())";
+    
+                $statusSql2 = "INSERT INTO tbl_reservation_status 
+                              (reservation_reservation_id, reservation_status_status_id, 
+                               reservation_active, reservation_users_id, reservation_updated_at) 
+                              VALUES (:reservation_id, 8, 0, 99, NOW())";
+    
+                $statusStmt1 = $this->conn->prepare($statusSql1);
+                $statusStmt1->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                if (!$statusStmt1->execute()) {
                     $this->conn->rollBack();
-                    return ['status' => 'error', 'message' => 'Failed to create reservation status'];
+                    return ['status' => 'error', 'message' => 'Failed to create first reservation status'];
+                }
+    
+                $statusStmt2 = $this->conn->prepare($statusSql2);
+                $statusStmt2->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                if (!$statusStmt2->execute()) {
+                    $this->conn->rollBack();
+                    return ['status' => 'error', 'message' => 'Failed to create second reservation status'];
                 }
     
                 // Insert notification for waiting for approval (keeping existing notification)
@@ -865,16 +1014,173 @@ class Reservation {
                 error_log("Push notifications sent after reservation creation: $successCount successful, $errorCount failed");
     
             } elseif ($userLevelId == 5 || $userLevelId == 18) {
+                // Skip department approvals for user level 18 with department ID 28
+                if ($userLevelId == 18 && isset($userLevel['users_department_id']) && (int)$userLevel['users_department_id'] == 28) {
+                    error_log("Skipping department approvals for user level 18 with department ID 28");
+                } 
+                // Only process department approvals if there are venues in the reservation and not skipped
+                elseif (!empty($data['venues']) && is_array($data['venues'])) {
+                    // Log the start of venue check
+                    error_log("Checking venues for department approvals (Levels 5/18) - Reservation ID: " . $reservationId);
+                    
+                    // Get event_type and area_type for all venues in this reservation
+                    $venueIds = implode(",", array_map('intval', $data['venues']));
+                    $venueSql = "SELECT ven_id, event_type, area_type, ven_name FROM tbl_venue WHERE ven_id IN ($venueIds)";
+                    $venueStmt = $this->conn->query($venueSql);
+                    
+                    if ($venueStmt) {
+                        $venues = $venueStmt->fetchAll(PDO::FETCH_ASSOC);
+                        $hasBigEvent = false;
+                        $hasOpenArea = false;
+                        $hasCloseArea = false;
+                        
+                        // Log all venues being checked
+                        error_log("Venues to check (ID - Name - Event Type - Area Type): " . 
+                                json_encode(array_map(function($v) { 
+                                    return [
+                                        'id' => $v['ven_id'],
+                                        'name' => $v['ven_name'] ?? 'N/A',
+                                        'event_type' => $v['event_type'] ?? 'not set',
+                                        'area_type' => $v['area_type'] ?? 'not set'
+                                    ]; 
+                                }, $venues)));
+                        
+                        // Check venue types
+                        foreach ($venues as $venue) {
+                            $venueId = $venue['ven_id'];
+                            $eventType = $venue['event_type'] ?? 'not set';
+                            $areaType = $venue['area_type'] ?? 'not set';
+                            
+                            error_log(sprintf("Checking venue (L5/18) - ID: %d, Name: %s, Event Type: %s, Area Type: %s", 
+                                $venueId, 
+                                $venue['ven_name'] ?? 'N/A',
+                                $eventType,
+                                $areaType
+                            ));
+                            
+                            if ($eventType === 'Big Event') {
+                                $hasBigEvent = true;
+                                if ($areaType === 'Open Area') {
+                                    $hasOpenArea = true;
+                                    error_log(sprintf("FOUND Big Event with Open Area (L5/18) - Venue ID: %d, Name: %s", 
+                                        $venueId, $venue['ven_name'] ?? 'N/A'));
+                                } elseif ($areaType === 'Close Area') {
+                                    $hasCloseArea = true;
+                                    error_log(sprintf("FOUND Big Event with Close Area (L5/18) - Venue ID: %d, Name: %s", 
+                                        $venueId, $venue['ven_name'] ?? 'N/A'));
+                                }
+                            } elseif ($eventType === 'Small Event' && $areaType === 'Close Area') {
+                                $hasCloseArea = true;
+                                error_log(sprintf("FOUND Small Event with Close Area (L5/18) - Venue ID: %d, Name: %s", 
+                                    $venueId, $venue['ven_name'] ?? 'N/A'));
+                            }
+                        }
+                        
+                        // Insert department approval based on conditions
+                        if (($hasBigEvent && $hasOpenArea) || // Big Event AND Open Area
+                            ($hasBigEvent && $hasCloseArea) || // Big Event AND Close Area
+                            $hasCloseArea) { // Small Event AND Close Area (handled by the same flag)
+                            
+                            // Get all academic departments except user's own department
+                            $departmentsToApprove = [];
+                            $userDeptId = isset($userLevel['users_department_id']) ? (int)$userLevel['users_department_id'] : 0;
+                            
+                            // For Big Event in Open Area - include all academic departments
+                            // For user levels 5 and 18, exclude department 29 as they are department heads/deans
+                            if ($hasBigEvent && $hasOpenArea) {
+                                // Get all academic departments
+                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                $deptStmt = $this->conn->query($deptQuery);
+                                
+                                if ($deptStmt) {
+                                    $departmentsToApprove = $deptStmt->fetchAll(PDO::FETCH_COLUMN);
+                                }
+                                
+                                // For user levels 5 and 18, never include department 29
+                                // Also, if user is level 18 with department 28, no approvals needed
+                                if ($userLevelId == 18 && isset($userLevel['users_department_id']) && (int)$userLevel['users_department_id'] == 28) {
+                                    $departmentsToApprove = [];
+                                    error_log("No department approvals needed for user level 18 with department ID 28");
+                                }
+                                else if (!in_array($userLevelId, [5, 18])) {
+                                    // Add department 29 if not already in the list and not the user's department
+                                    if (!in_array(29, $departmentsToApprove) && 29 !== $userDeptId) {
+                                        $departmentsToApprove[] = 29;
+                                    }
+                                    
+                                    // If no academic departments found and 29 is not the user's department, use 29
+                                    if (empty($departmentsToApprove) && 29 !== $userDeptId) {
+                                        $departmentsToApprove = [29];
+                                    }
+                                } else {
+                                    error_log("Skipping department 29 for user level $userLevelId (department head/dean)");
+                                }
+                            } 
+                            // For Big Event in Close Area - only department 29, except for user levels 5 and 18
+                            elseif ($hasBigEvent && $hasCloseArea) {
+                                if (in_array($userLevelId, [5, 18])) {
+                                    $departmentsToApprove = [];
+                                    error_log("Skipping department 29 for user level $userLevelId (department head/dean)");
+                                } elseif (29 !== $userDeptId) {
+                                    $departmentsToApprove = [29];
+                                } else {
+                                    $departmentsToApprove = [];
+                                    error_log("Skipping department 29 approval as it's the user's own department");
+                                }
+                            }
+                            // For Small Event in Close Area - no department approvals needed
+                            
+                            // Exclude user's own department
+                            $departmentsToApprove = array_filter($departmentsToApprove, function($deptId) use ($userDeptId) {
+                                return (int)$deptId !== $userDeptId;
+                            });
+                            
+                            // Insert department approvals if any
+                            if (!empty($departmentsToApprove)) {
+                                error_log("Inserting department approvals for reservation ID: " . $reservationId . 
+                                        ", Departments: " . implode(', ', $departmentsToApprove));
+                                
+                                foreach ($departmentsToApprove as $deptId) {
+                                    $deptApprovalSql = "INSERT INTO tbl_department_approval 
+                                                      (department_is_approved, department_approval_department_id, 
+                                                      department_user_id, department_updated_at, department_request_reservation_id) 
+                                                      VALUES (0, :dept_id, NULL, NULL, :reservation_id)";
+                                    $deptApprovalStmt = $this->conn->prepare($deptApprovalSql);
+                                    $deptApprovalStmt->bindValue(':dept_id', $deptId, PDO::PARAM_INT);
+                                    $deptApprovalStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                                    
+                                    if (!$deptApprovalStmt->execute()) {
+                                        $error = $deptApprovalStmt->errorInfo();
+                                        error_log(sprintf("Failed to create department approval - Department ID: %d, Error: %s", 
+                                            $deptId, json_encode($error)));
+                                        $this->conn->rollBack();
+                                        return ['status' => 'error', 'message' => 'Failed to create department approval record'];
+                                    } else {
+                                        error_log(sprintf("Successfully created department approval - Department ID: %d, Reservation ID: %d", 
+                                            $deptId, $reservationId));
+                                    }
+                                }
+                            } else {
+                                error_log("No department approvals needed for this reservation");
+                            }
+                        } else {
+                            error_log("No department approvals needed based on venue types");
+                        }
+                    } else {
+                        error_log("Failed to fetch venue information for reservation ID: " . $reservationId);
+                    }
+                }
+                
                 // Status SQL 1 and 2 remain the same
                 $statusSql1 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 1, 1, null, NOW())";
-    
+                              VALUES (:reservation_id, 1, 0, 114, NOW())";
+
                 $statusSql2 = "INSERT INTO tbl_reservation_status 
                               (reservation_reservation_id, reservation_status_status_id, 
                                reservation_active, reservation_users_id, reservation_updated_at) 
-                              VALUES (:reservation_id, 3, 1, null, NOW())";
+                              VALUES (:reservation_id, 8, 0, 99, NOW())";
     
                 $statusStmt1 = $this->conn->prepare($statusSql1);
                 $statusStmt1->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
@@ -1008,29 +1314,6 @@ class Reservation {
                     return ['status' => 'error', 'message' => 'Failed to create reservation status'];
                 }
             }
-            
-            // Insert statuses for users 114 and 99
-            $userIds = [114, 99];
-            $statusIds = [1, 8];
-            
-            foreach ($userIds as $userId) {
-                foreach ($statusIds as $statusId) {
-                    $statusSql = "INSERT INTO tbl_reservation_status 
-                                (reservation_reservation_id, reservation_status_status_id, 
-                                 reservation_active, reservation_users_id, reservation_updated_at) 
-                                VALUES (:reservation_id, :status_id, 1, :user_id, NOW())";
-                    
-                    $statusStmt = $this->conn->prepare($statusSql);
-                    $statusStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
-                    $statusStmt->bindValue(':status_id', $statusId, PDO::PARAM_INT);
-                    $statusStmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
-                    
-                    if (!$statusStmt->execute()) {
-                        $this->conn->rollBack();
-                        return ['status' => 'error', 'message' => 'Failed to create additional status for user ' . $userId];
-                    }
-                }
-            }
     
             $this->conn->commit();
             return ['status' => 'success', 'reservation_id' => $reservationId];
@@ -1042,7 +1325,6 @@ class Reservation {
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
     }
-    
     
 
     public function commit() {
