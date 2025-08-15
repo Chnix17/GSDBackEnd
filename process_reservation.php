@@ -412,6 +412,9 @@ class User {
     // Update notification read status
     public function updateReadApprovalNotification($notificationIds, $userId) {
         try {
+            if (!is_array($notificationIds)) {
+                $notificationIds = [$notificationIds];
+            }
             $this->conn->beginTransaction();
             $successCount = 0;
             $errors = [];
@@ -451,6 +454,19 @@ class User {
 
             if (count($errors) === 0) {
                 $this->conn->commit();
+
+                // Audit log (non-blocking)
+                try {
+                    $desc = 'Marked approval notifications as read (count: ' . (int)$successCount . ')';
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $audit->execute([
+                        ':description' => $desc,
+                        ':action' => 'READ  NOTIFICATION',
+                        ':created_by' => $userId
+                    ]);
+                } catch (Throwable $te) { /* ignore audit errors */ }
+
                 return json_encode([
                     'status' => 'success',
                     'message' => 'All notifications marked as read successfully',
@@ -793,11 +809,64 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
         
         $stmtDepartmentNotification = $this->conn->prepare($sqlDepartmentNotification);
         $stmtDepartmentNotification->bindParam(':message', $defaultMessage, PDO::PARAM_STR);
-        $stmtDepartmentNotification->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+        $deptNotifyId = 27; // Always notify department 27
+        $stmtDepartmentNotification->bindParam(':department_id', $deptNotifyId, PDO::PARAM_INT);
         $stmtDepartmentNotification->execute();
         
         $this->conn->commit();
         
+        // Audit log: who approved/declined and which reservation
+        try {
+            // Fetch approver name
+            $approverName = 'User ID ' . (string)$userId;
+            try {
+                $unameStmt = $this->conn->prepare("SELECT CONCAT_WS(' ', users_fname, users_mname, users_lname) AS full_name FROM tbl_users WHERE users_id = :uid");
+                $unameStmt->bindParam(':uid', $userId, PDO::PARAM_INT);
+                $unameStmt->execute();
+                $uname = $unameStmt->fetch(PDO::FETCH_ASSOC);
+                if ($uname && !empty(trim((string)$uname['full_name']))) {
+                    $approverName = trim((string)$uname['full_name']);
+                }
+            } catch (Throwable $te) {
+                error_log("Audit approver lookup failed (handleApproval): " . $te->getMessage());
+            }
+
+            // Fetch reservation title
+            $resTitle = 'Reservation';
+            try {
+                $resStmt = $this->conn->prepare("SELECT reservation_title FROM tbl_reservation WHERE reservation_id = :rid");
+                $resStmt->bindParam(':rid', $reservationId, PDO::PARAM_INT);
+                $resStmt->execute();
+                $res = $resStmt->fetch(PDO::FETCH_ASSOC);
+                if ($res && isset($res['reservation_title']) && trim((string)$res['reservation_title']) !== '') {
+                    $resTitle = (string)$res['reservation_title'];
+                }
+            } catch (Throwable $te) {
+                error_log("Audit reservation lookup failed (handleApproval): " . $te->getMessage());
+            }
+
+            $statusText = $isAccepted ? 'approved' : 'declined';
+            $desc = "Reservation '" . $resTitle . "' " . $statusText . " by " . $approverName;
+            $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+            $audit = $this->conn->prepare($auditSql);
+            $action = $isAccepted ? 'APPROVE' : 'DECLINE';
+            $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+            $audit->bindParam(':action', $action, PDO::PARAM_STR);
+            $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+            if (!$audit->execute()) {
+                error_log("Audit log insert failed (handleApproval): " . print_r($audit->errorInfo(), true));
+            } else {
+                try {
+                    $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                    error_log("audit_log latest (handleApproval): " . json_encode($latest));
+                } catch (Throwable $te) {
+                    error_log("Failed to read latest audit_log (handleApproval): " . $te->getMessage());
+                }
+            }
+        } catch (Throwable $te) {
+            error_log("Audit logging error (handleApproval): " . $te->getMessage());
+        }
+
         // Send push notification
         $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
         
@@ -1185,26 +1254,53 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     $stmtUpdate->execute();
                 }
             } else {
-                $sqlUpdate = "
-                    UPDATE tbl_reservation_status 
-                    SET reservation_active = -1 
-                    WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
-                $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                $reservation_id = $reservationId; // Store in variable
-                $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtUpdate->execute();
-                
-                $sqlInsert = "
-                    INSERT INTO tbl_reservation_status 
-                    (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
-                    VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
-                
-                $stmtInsert = $this->conn->prepare($sqlInsert);
-                $reservation_id = $reservationId; // Store in variable
-                $user_id = $userId; // Store in variable
-                $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
-                $stmtInsert->execute();
+                if ($userId == 99) {
+                    $sqlUpdate = "
+                        UPDATE tbl_reservation_status 
+                        SET reservation_active = -1 
+                        WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 8";
+                    $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                    $reservation_id = $reservationId; // Store in variable
+                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->execute();
+
+                    // Insert declined status (2) for user 99
+                    $sqlInsert = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
+                    
+                    $stmtInsert = $this->conn->prepare($sqlInsert);
+                    $reservation_id = $reservationId; // Store in variable
+                    $user_id = $userId; // Store in variable
+                    $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+                    $stmtInsert->execute();
+                } else {
+                    $sqlUpdate = "
+                        UPDATE tbl_reservation_status 
+                        SET reservation_active = -1 
+                        WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
+                    $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                    $reservation_id = $reservationId; // Store in variable
+                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->execute();
+                    
+                    // If acting user is 114 and not accepted, do NOT insert a new status row; only update active to -1
+                    if ($userId != 114) {
+                        $sqlInsert = "
+                            INSERT INTO tbl_reservation_status 
+                            (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                            VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
+                        
+                        $stmtInsert = $this->conn->prepare($sqlInsert);
+                        $reservation_id = $reservationId; // Store in variable
+                        $user_id = $userId; // Store in variable
+                        $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                        $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+                        $stmtInsert->execute();
+                    }
+                }
             }
     
             // Insert notification with proper notification_user_id
@@ -1225,6 +1321,58 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
     
             $this->conn->commit();
             
+            // Audit log: who approved/declined and which reservation
+            try {
+                // Fetch approver name
+                $approverName = 'User ID ' . (string)$userId;
+                try {
+                    $unameStmt = $this->conn->prepare("SELECT CONCAT_WS(' ', users_fname, users_mname, users_lname) AS full_name FROM tbl_users WHERE users_id = :uid");
+                    $unameStmt->bindParam(':uid', $userId, PDO::PARAM_INT);
+                    $unameStmt->execute();
+                    $uname = $unameStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($uname && !empty(trim((string)$uname['full_name']))) {
+                        $approverName = trim((string)$uname['full_name']);
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit approver lookup failed (handleRequest): " . $te->getMessage());
+                }
+
+                // Fetch reservation title
+                $resTitle = 'Reservation';
+                try {
+                    $resStmt = $this->conn->prepare("SELECT reservation_title FROM tbl_reservation WHERE reservation_id = :rid");
+                    $resStmt->bindParam(':rid', $reservationId, PDO::PARAM_INT);
+                    $resStmt->execute();
+                    $res = $resStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($res && isset($res['reservation_title']) && trim((string)$res['reservation_title']) !== '') {
+                        $resTitle = (string)$res['reservation_title'];
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit reservation lookup failed (handleRequest): " . $te->getMessage());
+                }
+
+                $statusText = $isAccepted ? 'approved' : 'declined';
+                $desc = "Reservation '" . $resTitle . "' " . $statusText . " by " . $approverName;
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $action = $isAccepted ? 'APPROVE' : 'DECLINE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                if (!$audit->execute()) {
+                    error_log("Audit log insert failed (handleRequest): " . print_r($audit->errorInfo(), true));
+                } else {
+                    try {
+                        $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (handleRequest): " . json_encode($latest));
+                    } catch (Throwable $te) {
+                        error_log("Failed to read latest audit_log (handleRequest): " . $te->getMessage());
+                    }
+                }
+            } catch (Throwable $te) {
+                error_log("Audit logging error (handleRequest): " . $te->getMessage());
+            }
+
             // Send push notification to the requester after successful database operations
             $notificationUserId = $notification_user_id ?? $userId;
             // Compose notification content
@@ -1301,6 +1449,27 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
 
             $this->conn->commit();
             
+            // Non-blocking audit logging for reservation cancellation
+            try {
+                // Get canceller full name (First + Middle initial + Last)
+                $sqlCanceller = "SELECT CONCAT(\n                                    users_fname,\n                                    CASE WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.') ELSE '' END,\n                                    ' ', users_lname\n                                 ) AS full_name\n                               FROM tbl_users WHERE users_id = :uid";
+                $stmtCanceller = $this->conn->prepare($sqlCanceller);
+                $stmtCanceller->bindParam(':uid', $userId, PDO::PARAM_INT);
+                $stmtCanceller->execute();
+                $canceller = $stmtCanceller->fetch(PDO::FETCH_ASSOC);
+                $cancellerName = $canceller['full_name'] ?? ('User #' . (int)$userId);
+
+                $reservationTitle = $info['reservation_title'] ?? 'Reservation';
+                $description = "Reservation (" . $reservationTitle . ") was cancelled by: " . $cancellerName;
+                $action = 'UPDATE STATUS';
+
+                $stmtAudit = $this->conn->prepare("INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)");
+                $stmtAudit->bindParam(':description', $description, PDO::PARAM_STR);
+                $stmtAudit->bindParam(':action', $action, PDO::PARAM_STR);
+                $stmtAudit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                $stmtAudit->execute();
+            } catch (Exception $e) { /* ignore audit logging errors */ }
+
             // Send push notification to the requester after successful cancellation
             $this->sendApprovalPushNotification($reservationId, false, $userId);
 
@@ -1569,37 +1738,37 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
         }
     }
     
-    public function updateTripTicket($reservationDriverId) {
-        try {
-            $sql = "UPDATE tbl_reservation_driver 
-                    SET is_accepted_trip = 1,
-                        updated_at = NOW()
-                    WHERE reservation_driver_id = :reservation_driver_id
-                    AND is_accepted_trip = 0";
+    // public function updateTripTicket($reservationDriverId) {
+    //     try {
+    //         $sql = "UPDATE tbl_reservation_driver 
+    //                 SET is_accepted_trip = 1,
+    //                     updated_at = NOW()
+    //                 WHERE reservation_driver_id = :reservation_driver_id
+    //                 AND is_accepted_trip = 0";
             
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':reservation_driver_id', $reservationDriverId, PDO::PARAM_INT);
-            $stmt->execute();
+    //         $stmt = $this->conn->prepare($sql);
+    //         $stmt->bindParam(':reservation_driver_id', $reservationDriverId, PDO::PARAM_INT);
+    //         $stmt->execute();
 
-            if ($stmt->rowCount() > 0) {
-                return json_encode([
-                    'status' => 'success',
-                    'message' => 'Trip ticket updated successfully'
-                ]);
-            } else {
-                return json_encode([
-                    'status' => 'error',
-                    'message' => 'No changes made. Trip ticket may already be accepted or not found.'
-                ]);
-            }
+    //         if ($stmt->rowCount() > 0) {
+    //             return json_encode([
+    //                 'status' => 'success',
+    //                 'message' => 'Trip ticket updated successfully'
+    //             ]);
+    //         } else {
+    //             return json_encode([
+    //                 'status' => 'error',
+    //                 'message' => 'No changes made. Trip ticket may already be accepted or not found.'
+    //             ]);
+    //         }
 
-        } catch (PDOException $e) {
-            return json_encode([
-                'status' => 'error',
-                'message' => $e->getMessage()
-            ]);
-        }
-    }
+    //     } catch (PDOException $e) {
+    //         return json_encode([
+    //             'status' => 'error',
+    //             'message' => $e->getMessage()
+    //         ]);
+    //     }
+    // }
     
    public function insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate) {
     try {
@@ -1839,6 +2008,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->handleRequest($reservationId, $isAccepted, $userId, $notificationMessage, $notificationUserId);
             break;
 
+        case "updateReadApprovalNotification":
+            $notificationIds = $data['notificationIds'] ?? ($data['notification_ids'] ?? null);
+            if ($notificationIds === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Notification IDs are required']);
+                break;
+            }
+            echo $user->updateReadApprovalNotification($notificationIds, $userId);
+            break;
+
         case "doubleCheckAvailability":
             $startDateTime = $data['start_datetime'] ?? null;
             $endDateTime = $data['end_datetime'] ?? null;
@@ -1857,15 +2035,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->updateTripTicket($reservationDriverId);
             break;
 
-            // case "fetchApprovalNotification":
-            //     $departmentId = $data['department_id'] ?? null;
-            //     $userLevelId = $data['user_level_id'] ?? null;
-            //     if ($departmentId === null || $userLevelId === null) {
-            //         echo json_encode(['status' => 'error', 'message' => 'Department ID and User Level ID are required']);
-            //         break;
-            //     }
-            //     echo $user->fetchApprovalNotification($departmentId, $userLevelId);
-            //     break;
+            case "fetchApprovalNotification":
+                $departmentId = $data['department_id'] ?? null;
+                $userLevelId = $data['user_level_id'] ?? null;
+                if ($departmentId === null || $userLevelId === null) {
+                    echo json_encode(['status' => 'error', 'message' => 'Department ID and User Level ID are required']);
+                    break;
+                }
+                echo $user->fetchApprovalNotification($departmentId, $userLevelId);
+                break;
             
         case "insertUnits":
             $equipIds = $data['equip_ids'] ?? [];

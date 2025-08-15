@@ -46,7 +46,15 @@ class User {
                     rv.active AS venue_active,
                     v.ven_name AS venue_name,
                     cvc.checklist_name AS checklist_venue_name,
-                    tsa.status_availability_name AS venue_availability_status_name
+                    tsa.status_availability_name AS venue_availability_status_name,
+                    rc_venue.admin_id AS assigned_by_id,
+                    TRIM(CONCAT_WS(' ',
+                        NULLIF(t.abbreviation, ''),
+                        ua.users_fname,
+                        NULLIF(ua.users_mname, ''),
+                        ua.users_lname,
+                        NULLIF(ua.users_suffix, '')
+                    )) AS assigned_by_full_name
                 FROM tbl_reservation_checklist_venue rc_venue
                 INNER JOIN tbl_reservation_venue rv
                     ON rc_venue.reservation_venue_id = rv.reservation_venue_id
@@ -61,6 +69,11 @@ class User {
                 -- JOIN to get venue availability status name
                 LEFT JOIN tbl_status_availability tsa
                     ON v.status_availability_id = tsa.status_availability_id
+                -- JOIN to get assigned admin full name (with title and suffix)
+                LEFT JOIN tbl_users ua
+                    ON rc_venue.admin_id = ua.users_id
+                LEFT JOIN titles t
+                    ON ua.title_id = t.id
                 WHERE rc_venue.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
                   AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
@@ -83,7 +96,15 @@ class User {
                     vm.vehicle_license,
                     vm.vehicle_model_id,
                     cvcv.checklist_name AS checklist_vehicle_name,
-                    tsa.status_availability_name AS vehicle_availability_status_name
+                    tsa.status_availability_name AS vehicle_availability_status_name,
+                    rc_vehicle.admin_id AS assigned_by_id,
+                    TRIM(CONCAT_WS(' ',
+                        NULLIF(t.abbreviation, ''),
+                        ua.users_fname,
+                        NULLIF(ua.users_mname, ''),
+                        ua.users_lname,
+                        NULLIF(ua.users_suffix, '')
+                    )) AS assigned_by_full_name
                 FROM tbl_reservation_checklist_vehicle rc_vehicle
                 INNER JOIN tbl_reservation_vehicle rv
                     ON rc_vehicle.reservation_vehicle_id = rv.reservation_vehicle_id
@@ -98,6 +119,11 @@ class User {
                 -- JOIN to get vehicle availability status name
                 LEFT JOIN tbl_status_availability tsa
                     ON vm.status_availability_id = tsa.status_availability_id
+                -- JOIN to get assigned admin full name (with title and suffix)
+                LEFT JOIN tbl_users ua
+                    ON rc_vehicle.admin_id = ua.users_id
+                LEFT JOIN titles t
+                    ON ua.title_id = t.id
                 WHERE rc_vehicle.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
                   AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
@@ -120,7 +146,15 @@ class User {
                     e.equip_name,
                     cvce.checklist_name AS checklist_equipment_name,
                     eq.quantity_id,
-                    tsa.status_availability_name AS equipment_availability_status_name
+                    tsa.status_availability_name AS equipment_availability_status_name,
+                    rc_equipment.admin_id AS assigned_by_id,
+                    TRIM(CONCAT_WS(' ',
+                        NULLIF(t.abbreviation, ''),
+                        ua.users_fname,
+                        NULLIF(ua.users_mname, ''),
+                        ua.users_lname,
+                        NULLIF(ua.users_suffix, '')
+                    )) AS assigned_by_full_name
                 FROM tbl_reservation_checklist_equipment rc_equipment
                 INNER JOIN tbl_reservation_equipment re
                     ON rc_equipment.reservation_equipment_id = re.reservation_equipment_id
@@ -137,6 +171,11 @@ class User {
                     ON re.reservation_equipment_equip_id = eq.equip_id
                 LEFT JOIN tbl_status_availability tsa
                     ON eq.status_availability_id = tsa.status_availability_id
+                -- JOIN to get assigned admin full name (with title and suffix)
+                LEFT JOIN tbl_users ua
+                    ON rc_equipment.admin_id = ua.users_id
+                LEFT JOIN titles t
+                    ON ua.title_id = t.id
                 WHERE rc_equipment.personnel_id = :personnel_id
                   AND rs.reservation_status_status_id = 6
                   AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
@@ -181,7 +220,9 @@ class User {
                                     'checklist_venue_id'             => $row['checklist_venue_id'],
                                     'reservation_checklist_venue_id' => $row['reservation_checklist_venue_id'],
                                     'checklist_name'                 => $row['checklist_venue_name'],
-                                    'isChecked'                      => (int)$row['venue_isChecked']
+                                    'isChecked'                      => (int)$row['venue_isChecked'],
+                                    'assigned_by_id'                 => $row['assigned_by_id'] ?? null,
+                                    'assigned_by'                    => $row['assigned_by_full_name'] ?? null
                                 ];
                             }
                             $found = true;
@@ -199,7 +240,9 @@ class User {
                                 'checklist_venue_id'             => $row['checklist_venue_id'],
                                 'reservation_checklist_venue_id' => $row['reservation_checklist_venue_id'],
                                 'checklist_name'                 => $row['checklist_venue_name'],
-                                'isChecked'                      => (int)$row['venue_isChecked']
+                                'isChecked'                      => (int)$row['venue_isChecked'],
+                                'assigned_by_id'                 => $row['assigned_by_id'] ?? null,
+                                'assigned_by'                    => $row['assigned_by_full_name'] ?? null
                             ]]
                         ];
                     }
@@ -221,7 +264,9 @@ class User {
                                     'checklist_vehicle_id'             => $row['checklist_vehicle_id'],
                                     'reservation_checklist_vehicle_id' => $row['reservation_checklist_vehicle_id'],
                                     'checklist_name'                   => $row['checklist_vehicle_name'],
-                                    'isChecked'                        => (int)$row['vehicle_isChecked']
+                                    'isChecked'                        => (int)$row['vehicle_isChecked'],
+                                    'assigned_by_id'                   => $row['assigned_by_id'] ?? null,
+                                    'assigned_by'                      => $row['assigned_by_full_name'] ?? null
                                 ];
                             }
                             $found = true;
@@ -240,7 +285,9 @@ class User {
                                 'checklist_vehicle_id'             => $row['checklist_vehicle_id'],
                                 'reservation_checklist_vehicle_id' => $row['reservation_checklist_vehicle_id'],
                                 'checklist_name'                   => $row['checklist_vehicle_name'],
-                                'isChecked'                        => (int)$row['vehicle_isChecked']
+                                'isChecked'                        => (int)$row['vehicle_isChecked'],
+                                'assigned_by_id'                   => $row['assigned_by_id'] ?? null,
+                                'assigned_by'                      => $row['assigned_by_full_name'] ?? null
                             ]]
                         ];
                     }
@@ -262,7 +309,9 @@ class User {
                                     'checklist_equipment_id'             => $row['checklist_equipment_id'],
                                     'reservation_checklist_equipment_id' => $row['reservation_checklist_equipment_id'],
                                     'checklist_name'                     => $row['checklist_equipment_name'],
-                                    'isChecked'                          => (int)$row['equipment_isChecked']
+                                    'isChecked'                          => (int)$row['equipment_isChecked'],
+                                    'assigned_by_id'                     => $row['assigned_by_id'] ?? null,
+                                    'assigned_by'                        => $row['assigned_by_full_name'] ?? null
                                 ];
                             }
                             $found = true;
@@ -282,7 +331,9 @@ class User {
                                 'checklist_equipment_id'             => $row['checklist_equipment_id'],
                                 'reservation_checklist_equipment_id' => $row['reservation_checklist_equipment_id'],
                                 'checklist_name'                     => $row['checklist_equipment_name'],
-                                'isChecked'                          => (int)$row['equipment_isChecked']
+                                'isChecked'                          => (int)$row['equipment_isChecked'],
+                                'assigned_by_id'                     => $row['assigned_by_id'] ?? null,
+                                'assigned_by'                        => $row['assigned_by_full_name'] ?? null
                             ]]
                         ];
                     }
@@ -510,6 +561,7 @@ foreach ($reservations as $rid => &$res) {
         $type = strtolower($data['type']);
         $id = (int)$data['id'];
         $isActive = (int)$data['isActive'];
+        $user_personnel_id = isset($data['user_personnel_id']) ? (int)$data['user_personnel_id'] : null;
         
         // Determine which table to update based on type
         switch ($type) {
@@ -542,6 +594,68 @@ foreach ($reservations as $rid => &$res) {
             'isActive' => $isActive,
             'id' => $id
         ]);
+
+        // Insert audit log if we have personnel context
+        if (!empty($user_personnel_id)) {
+            // 1) Fetch personnel full name (First + Middle Initial + Last)
+            $personnelFullName = null;
+            try {
+                $personSql = "SELECT CONCAT(
+                                    u.users_fname,
+                                    CASE 
+                                        WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')
+                                        ELSE ''
+                                    END,
+                                    ' ',
+                                    u.users_lname
+                                ) AS full_name
+                             FROM tbl_users u WHERE u.users_id = :id";
+                $personStmt = $this->conn->prepare($personSql);
+                $personStmt->execute([':id' => $user_personnel_id]);
+                $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+                $personnelFullName = $row && !empty($row['full_name']) ? $row['full_name'] : null;
+            } catch (PDOException $e) { /* ignore */ }
+
+            // 2) Fetch checklist name based on type and reservation_checklist_* id
+            $checklistName = null;
+            try {
+                if ($type === 'venue') {
+                    $q = $this->conn->prepare("SELECT cvc.checklist_name AS name
+                                               FROM tbl_reservation_checklist_venue rc
+                                               JOIN tbl_checklist_venue_master cvc ON rc.checklist_venue_id = cvc.checklist_venue_id
+                                               WHERE rc.reservation_checklist_venue_id = :id");
+                } elseif ($type === 'vehicle') {
+                    $q = $this->conn->prepare("SELECT cvm.checklist_name AS name
+                                               FROM tbl_reservation_checklist_vehicle rc
+                                               JOIN tbl_checklist_vehicle_master cvm ON rc.checklist_vehicle_id = cvm.checklist_vehicle_id
+                                               WHERE rc.reservation_checklist_vehicle_id = :id");
+                } else { // equipment
+                    $q = $this->conn->prepare("SELECT cem.checklist_name AS name
+                                               FROM tbl_reservation_checklist_equipment rc
+                                               JOIN tbl_checklist_equipment_master cem ON rc.checklist_equipment_id = cem.checklist_equipment_id
+                                               WHERE rc.reservation_checklist_equipment_id = :id");
+                }
+                $q->execute([':id' => $id]);
+                $r = $q->fetch(PDO::FETCH_ASSOC);
+                $checklistName = $r && !empty($r['name']) ? $r['name'] : null;
+            } catch (PDOException $e) { /* ignore */ }
+
+            // 3) Compose and insert audit log
+            $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+            $itemForLog = $checklistName ?? ('Checklist Item #' . $id);
+            $verb = $isActive ? 'checked' : 'unchecked';
+            // Example: "Virjillio checked (Item Name)"
+            $desc = "$nameForLog $verb ($itemForLog)";
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'CHECK',
+                    ':created_by' => $user_personnel_id
+                ]);
+            } catch (PDOException $e) { /* ignore logging errors */ }
+        }
 
         return json_encode([
             'status' => 'success',
@@ -963,7 +1077,7 @@ public function updateResourceStatusAndCondition($type, $resourceId, $recordId) 
     
 }
 
-public function updateReservationStatus($reservation_id) {
+public function updateReservationStatus($reservation_id, $user_personnel_id = null) {
     if (!$reservation_id) {
         return json_encode([
             'status' => 'error',
@@ -1004,6 +1118,54 @@ public function updateReservationStatus($reservation_id) {
             'timestamp' => $timestamp
         ]);
 
+        // Audit logging for reservation status update (optional if user_personnel_id provided)
+        if (!empty($user_personnel_id)) {
+            // Fetch personnel full name (First + Middle Initial + Last)
+            $personnelFullName = null;
+            try {
+                $personSql = "SELECT CONCAT(
+                                    u.users_fname,
+                                    CASE 
+                                        WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')
+                                        ELSE ''
+                                    END,
+                                    ' ',
+                                    u.users_lname
+                                ) AS full_name
+                             FROM tbl_users u WHERE u.users_id = :id";
+                $personStmt = $this->conn->prepare($personSql);
+                $personStmt->execute([':id' => $user_personnel_id]);
+                $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+                $personnelFullName = $row && !empty($row['full_name']) ? $row['full_name'] : null;
+            } catch (PDOException $e) { /* ignore */ }
+
+            $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+            // Fetch reservation title for clearer audit description
+            $reservationTitle = null;
+            try {
+                $resSql = "SELECT reservation_title FROM tbl_reservation WHERE reservation_id = :id";
+                $resStmt = $this->conn->prepare($resSql);
+                $resStmt->execute([':id' => $reservation_id]);
+                $resRow = $resStmt->fetch(PDO::FETCH_ASSOC);
+                $reservationTitle = $resRow && !empty($resRow['reservation_title']) ? $resRow['reservation_title'] : null;
+            } catch (PDOException $e) { /* ignore */ }
+
+            if ($reservationTitle) {
+                $desc = "Reservation ({$reservationTitle}) has set to completed by: {$nameForLog}";
+            } else {
+                $desc = "Reservation has set to completed by: {$nameForLog}";
+            }
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'UPDATE STATUS',
+                    ':created_by' => $user_personnel_id
+                ]);
+            } catch (PDOException $e) { /* ignore logging errors */ }
+        }
+
         return json_encode([
             'status' => 'success',
             'message' => 'Reservation status updated: deactivated status_id 6, added new status_id 4',
@@ -1019,9 +1181,42 @@ public function updateReservationStatus($reservation_id) {
     }
 }
 
-public function updateRelease($type, $reservation_id, $resource_id, $quantity = null) {
+public function updateRelease($type, $reservation_id, $resource_id, $quantity = null, $user_personnel_id = null) {
     try {
         $status_availability_id = 5;
+        // Require personnel context for audit logging
+        if (empty($user_personnel_id)) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'User Personnel ID is required for audit logging.'
+            ]);
+        }
+
+        // Prepare personnel full name (First + Middle Initial + Last)
+        $personnelFullName = null;
+        try {
+            $personSql = "SELECT CONCAT(
+                                u.users_fname,
+                                CASE 
+                                    WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')
+                                    ELSE ''
+                                END,
+                                ' ',
+                                u.users_lname
+                            ) AS full_name
+                         FROM tbl_users u WHERE u.users_id = :id";
+            $personStmt = $this->conn->prepare($personSql);
+            $personStmt->execute([':id' => $user_personnel_id]);
+            $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+            $personnelFullName = $row && !empty($row['full_name']) ? $row['full_name'] : null;
+        } catch (PDOException $e) {
+            // Fallback handled later
+            $personnelFullName = null;
+        }
+
+        // Prepare audit statement once
+        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+        $auditStmt = $this->conn->prepare($auditSql);
 
         switch ($type) {
             case 'venue':
@@ -1048,6 +1243,19 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                 $sqlUpdateActive = "UPDATE tbl_reservation_venue SET active = 1 WHERE reservation_venue_id = :reservation_id";
                 $stmtActive = $this->conn->prepare($sqlUpdateActive);
                 $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                // Audit: Venue name
+                $venueName = null;
+                try {
+                    $q = $this->conn->prepare("SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id");
+                    $q->execute([':venue_id' => $venue_id]);
+                    $r = $q->fetch(PDO::FETCH_ASSOC);
+                    $venueName = $r && !empty($r['ven_name']) ? $r['ven_name'] : null;
+                } catch (PDOException $e) { /* ignore */ }
+                $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                $resForLog = $venueName ?? ('Venue #' . (int)$venue_id);
+                $desc = "Venue {$resForLog} released by: {$nameForLog}";
+                try { $auditStmt->execute([':description'=>$desc, ':action'=>'RELEASE', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
                 break;
 
             case 'vehicle':
@@ -1060,6 +1268,22 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                 ]);
                 $stmtActive = $this->conn->prepare($sqlUpdateActive);
                 $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                // Audit: Vehicle model and license
+                $vehicleDisplay = null;
+                try {
+                    $q = $this->conn->prepare("SELECT CONCAT(vm.vehicle_model_name, ' (', v.vehicle_license, ')') AS display
+                                                FROM tbl_vehicle v 
+                                                JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                                                WHERE v.vehicle_id = :vid");
+                    $q->execute([':vid' => $resource_id]);
+                    $r = $q->fetch(PDO::FETCH_ASSOC);
+                    $vehicleDisplay = $r && !empty($r['display']) ? $r['display'] : null;
+                } catch (PDOException $e) { /* ignore */ }
+                $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                $resForLog = $vehicleDisplay ?? ('Vehicle #' . (int)$resource_id);
+                $desc = "Vehicle {$resForLog} released by: {$nameForLog}";
+                try { $auditStmt->execute([':description'=>$desc, ':action'=>'RELEASE', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
                 break;
 
             case 'equipment':
@@ -1072,6 +1296,19 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                 ]);
                 $stmtActive = $this->conn->prepare($sqlUpdateActive);
                 $stmtActive->execute(['reservation_id' => $reservation_id]);
+
+                // Audit: Equipment unit serial number
+                $serial = null;
+                try {
+                    $q = $this->conn->prepare("SELECT serial_number FROM tbl_equipment_unit WHERE unit_id = :uid");
+                    $q->execute([':uid' => $resource_id]);
+                    $r = $q->fetch(PDO::FETCH_ASSOC);
+                    $serial = $r && !empty($r['serial_number']) ? $r['serial_number'] : null;
+                } catch (PDOException $e) { /* ignore */ }
+                $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                $resForLog = $serial ? ('Unit ' . $serial) : ('Equipment Unit #' . (int)$resource_id);
+                $desc = "Equipment Unit {$resForLog} released by: {$nameForLog}";
+                try { $auditStmt->execute([':description'=>$desc, ':action'=>'RELEASE', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
                 break;
 
             case 'equipment_bulk':
@@ -1121,6 +1358,22 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                         'message' => 'Failed to update equipment quantity. No matching quantity_id found.'
                     ]);
                 }
+
+                // Audit: Equipment (bulk) name
+                $equipName = null;
+                try {
+                    $q = $this->conn->prepare("SELECT e.equip_name 
+                                                FROM tbl_equipment_quantity q 
+                                                JOIN tbl_equipments e ON q.equip_id = e.equip_id
+                                                WHERE q.quantity_id = :qid");
+                    $q->execute([':qid' => $resource_id]);
+                    $r = $q->fetch(PDO::FETCH_ASSOC);
+                    $equipName = $r && !empty($r['equip_name']) ? $r['equip_name'] : null;
+                } catch (PDOException $e) { /* ignore */ }
+                $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                $resForLog = $equipName ?? ('Equipment #' . (int)$resource_id);
+                $desc = "Equipment {$resForLog} released by: {$nameForLog}";
+                try { $auditStmt->execute([':description'=>$desc, ':action'=>'RELEASE', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
                 break;
 
 
@@ -1159,37 +1412,106 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
             ]);
         }
 
-        // If remarks is not provided or empty, set to null
+        // Normalize remarks
         $remarksValue = (!isset($remarks) || $remarks === '' || strtolower($remarks) === 'null') ? null : $remarks;
 
-        // If remarks is provided, set condition_id to 7
-        $useRemarksCondition = ($remarksValue !== null);
+        // Determine if a valid condition was provided
+        $hasCondition = isset($condition) && $condition !== '' && strtolower((string)$condition) !== 'null';
 
-        // Map condition to status and condition_id (if not using remarks)
-        if ($useRemarksCondition) {
-            $condition_id = 7;
-            $status_availability_id = 1; // You may adjust this if needed for remarks
-        } else {
-            switch (strtolower($condition)) {
-                case 'good':
-                    $status_availability_id = 1;
-                    $condition_id = 2;
-                    break;
-                case 'damage':
-                    $status_availability_id = 8;
-                    $condition_id = 4;
-                    break;
-                case 'missing':
-                    $status_availability_id = 7;
-                    $condition_id = 3;
-                    break;
-                default:
-                    return json_encode([
-                        'status' => 'error',
-                        'message' => 'Invalid condition provided.'
-                    ]);
+        // Map provided condition (numeric or string) to status and condition_id.
+        if ($hasCondition) {
+            if (is_numeric($condition)) {
+                switch (intval($condition)) {
+                    case 2: // good
+                        $status_availability_id = 1;
+                        $condition_id = 2;
+                        $conditionText = 'Good';
+                        break;
+                    case 4: // damage
+                        $status_availability_id = 8;
+                        $condition_id = 4;
+                        $conditionText = 'Damage';
+                        break;
+                    case 3: // missing
+                        $status_availability_id = 7;
+                        $condition_id = 3;
+                        $conditionText = 'Missing';
+                        break;
+                    case 7: // for inspection
+                        $status_availability_id = 6;
+                        $condition_id = 7;
+                        $conditionText = 'For Inspection';
+                        break;
+                    default:
+                        return json_encode([
+                            'status' => 'error',
+                            'message' => 'Invalid numeric condition provided.'
+                        ]);
+                }
+            } else {
+                switch (strtolower($condition)) {
+                    case 'good':
+                        $status_availability_id = 1;
+                        $condition_id = 2;
+                        $conditionText = 'Good';
+                        break;
+                    case 'damage':
+                        $status_availability_id = 8;
+                        $condition_id = 4;
+                        $conditionText = 'Damage';
+                        break;
+                    case 'missing':
+                        $status_availability_id = 7;
+                        $condition_id = 3;
+                        $conditionText = 'Missing';
+                        break;
+                    case 'for inspection':
+                        $status_availability_id = 6;
+                        $condition_id = 7;
+                        $conditionText = 'For Inspection';
+                        break;
+                    default:
+                        return json_encode([
+                            'status' => 'error',
+                            'message' => 'Invalid condition provided.'
+                        ]);
+                }
             }
+        } else if ($remarksValue !== null) {
+            // No condition provided but remarks exist -> default to For Inspection (7)
+            $condition_id = 7;
+            $status_availability_id = 6;
+            $conditionText = 'For Inspection';
+        } else {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Either a valid condition or remarks must be provided.'
+            ]);
         }
+
+        // Prepare audit inserter and fetch personnel full name for logging
+        $auditStmt = null;
+        $personnelFullName = null;
+        try {
+            $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+            $auditStmt = $this->conn->prepare($auditSql);
+        } catch (PDOException $e) { /* ignore */ }
+        try {
+            $personSql = "SELECT CONCAT(
+                                u.users_fname,
+                                CASE 
+                                    WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')
+                                    ELSE ''
+                                END,
+                                ' ',
+                                u.users_lname
+                            ) AS full_name
+                         FROM tbl_users u WHERE u.users_id = :id";
+            $personStmt = $this->conn->prepare($personSql);
+            $personStmt->execute([':id' => $user_personnel_id]);
+            $prow = $personStmt->fetch(PDO::FETCH_ASSOC);
+            $personnelFullName = $prow && !empty($prow['full_name']) ? $prow['full_name'] : null;
+        } catch (PDOException $e) { /* ignore */ }
 
         switch ($type) {
             case 'venue':
@@ -1217,6 +1539,21 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                     'user_personnel_id' => $user_personnel_id,
                     'remarks' => $remarksValue
                 ]);
+                // Audit: Venue return
+                if ($auditStmt) {
+                    $venueName = null;
+                    try {
+                        $q = $this->conn->prepare("SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id");
+                        $q->execute([':venue_id' => $venue_id]);
+                        $r = $q->fetch(PDO::FETCH_ASSOC);
+                        $venueName = $r && !empty($r['ven_name']) ? $r['ven_name'] : null;
+                    } catch (PDOException $e) { /* ignore */ }
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    $resForLog = $venueName ?? ('Venue #' . (int)$venue_id);
+                    $desc = "Venue {$resForLog} returned by: {$nameForLog} - condition: {$conditionText}";
+                    if ($remarksValue !== null && $remarksValue !== '') { $desc .= " - remarks: {$remarksValue}"; }
+                    try { $auditStmt->execute([':description'=>$desc, ':action'=>'RETURN', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
+                }
                 break;
             case 'vehicle':
                 $stmtStatus = $this->conn->prepare("UPDATE tbl_vehicle SET status_availability_id = :status_availability_id WHERE vehicle_id = :resource_id");
@@ -1233,6 +1570,24 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                     'user_personnel_id' => $user_personnel_id,
                     'remarks' => $remarksValue
                 ]);
+                // Audit: Vehicle return
+                if ($auditStmt) {
+                    $vehicleDisplay = null;
+                    try {
+                        $q = $this->conn->prepare("SELECT CONCAT(vm.vehicle_model_name, ' (', v.vehicle_license, ')') AS display
+                                                    FROM tbl_vehicle v 
+                                                    JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                                                    WHERE v.vehicle_id = :vid");
+                        $q->execute([':vid' => $resource_id]);
+                        $r = $q->fetch(PDO::FETCH_ASSOC);
+                        $vehicleDisplay = $r && !empty($r['display']) ? $r['display'] : null;
+                    } catch (PDOException $e) { /* ignore */ }
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    $resForLog = $vehicleDisplay ?? ('Vehicle #' . (int)$resource_id);
+                    $desc = "Vehicle {$resForLog} returned by: {$nameForLog} - condition: {$conditionText}";
+                    if ($remarksValue !== null && $remarksValue !== '') { $desc .= " - remarks: {$remarksValue}"; }
+                    try { $auditStmt->execute([':description'=>$desc, ':action'=>'RETURN', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
+                }
                 break;
             case 'equipment':
                 $stmtStatus = $this->conn->prepare("UPDATE tbl_equipment_unit SET status_availability_id = :status_availability_id WHERE unit_id = :resource_id");
@@ -1252,6 +1607,21 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                 // Also deactivate bulk equipment reservation if exists
                 $stmtDeactivateConsumable = $this->conn->prepare("UPDATE tbl_reservation_equipment SET active = -1 WHERE reservation_equipment_id = :reservation_id");
                 $stmtDeactivateConsumable->execute(['reservation_id' => $reservation_id]);
+                // Audit: Equipment unit return
+                if ($auditStmt) {
+                    $serial = null;
+                    try {
+                        $q = $this->conn->prepare("SELECT serial_number FROM tbl_equipment_unit WHERE unit_id = :uid");
+                        $q->execute([':uid' => $resource_id]);
+                        $r = $q->fetch(PDO::FETCH_ASSOC);
+                        $serial = $r && !empty($r['serial_number']) ? $r['serial_number'] : null;
+                    } catch (PDOException $e) { /* ignore */ }
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    $resForLog = $serial ? ('Unit ' . $serial) : ('Equipment Unit #' . (int)$resource_id);
+                    $desc = "Equipment Unit {$resForLog} returned by: {$nameForLog} - condition: {$conditionText}";
+                    if ($remarksValue !== null && $remarksValue !== '') { $desc .= " - remarks: {$remarksValue}"; }
+                    try { $auditStmt->execute([':description'=>$desc, ':action'=>'RETURN', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
+                }
                 break;
             case 'equipment_bulk':
                 $stmtFetchEquip = $this->conn->prepare("SELECT reservation_equipment_equip_id FROM tbl_reservation_equipment WHERE reservation_equipment_id = :rid");
@@ -1265,12 +1635,15 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                 }
                 $equip_id = $equipRow['reservation_equipment_equip_id'];
                 if ($good_quantity > 0) {
-                    $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET on_hand_quantity = on_hand_quantity + :g, last_updated = NOW(), status_availability_id = :stat WHERE equip_id = :eid");
+                    // Increase on-hand quantity only; do not change status here
+                    $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET on_hand_quantity = on_hand_quantity + :g, last_updated = NOW() WHERE equip_id = :eid");
                     $stmtUpdateQty->execute([
                         'g'    => $good_quantity,
-                        'stat' => $status_availability_id,
                         'eid'  => $equip_id
                     ]);
+                    // If after update the on_hand_quantity is 0, set status to 9 (Unavailable)
+                    $stmtSetUnavailable = $this->conn->prepare("UPDATE tbl_equipment_quantity SET status_availability_id = 9 WHERE equip_id = :eid AND COALESCE(on_hand_quantity, 0) = 0");
+                    $stmtSetUnavailable->execute(['eid' => $equip_id]);
                 }
                 if ($bad_quantity > 0 || $remarksValue !== null) {
                     $stmtInsertBad = $this->conn->prepare("INSERT INTO tbl_reservation_condition_equipment (reservation_equipment_id, condition_id, qty_bad, user_personnel_id, is_active, remarks) VALUES (:rid, :cid, :b, :uid, 1, :remarks)");
@@ -1284,6 +1657,24 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                 }
                 $stmtDeactivate = $this->conn->prepare("UPDATE tbl_reservation_equipment SET active = -1 WHERE reservation_equipment_id = :rid");
                 $stmtDeactivate->execute(['rid' => $reservation_id]);
+                // Audit: Equipment bulk return
+                if ($auditStmt) {
+                    $equipName = null;
+                    try {
+                        $q = $this->conn->prepare("SELECT e.equip_name 
+                                                    FROM tbl_equipments e 
+                                                    WHERE e.equip_id = :eid");
+                        $q->execute([':eid' => $equip_id]);
+                        $r = $q->fetch(PDO::FETCH_ASSOC);
+                        $equipName = $r && !empty($r['equip_name']) ? $r['equip_name'] : null;
+                    } catch (PDOException $e) { /* ignore */ }
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    $resForLog = $equipName ?? ('Equipment #' . (int)$equip_id);
+                    $qtyInfo = ' (good: ' . (int)$good_quantity . ', bad: ' . (int)$bad_quantity . ')';
+                    $desc = "Equipment {$resForLog} returned by: {$nameForLog} - condition: {$conditionText}{$qtyInfo}";
+                    if ($remarksValue !== null && $remarksValue !== '') { $desc .= " - remarks: {$remarksValue}"; }
+                    try { $auditStmt->execute([':description'=>$desc, ':action'=>'RETURN', ':created_by'=>$user_personnel_id]); } catch (PDOException $e) { /* ignore */ }
+                }
                 break;
             default:
                 return json_encode([
@@ -1409,6 +1800,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
         case 'updateReservationStatus':
             $reservation_id = $jsonInput['reservation_id'] ?? null;
+            $user_personnel_id = $jsonInput['user_personnel_id'] ?? null;
             if (!$reservation_id) {
                 die(json_encode([
                     'status' => 'error',
@@ -1416,22 +1808,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'timestamp' => date('Y-m-d H:i:s')
                 ]));
             }
-            echo $user->updateReservationStatus($reservation_id);
+            // user_personnel_id is optional here; when provided, we will audit log the status change
+            echo $user->updateReservationStatus($reservation_id, $user_personnel_id);
             break;
         case "updateRelease":
             $type = $jsonInput['type'] ?? null;
             $reservation_id = $jsonInput['reservation_id'] ?? null;
             $resource_id = $jsonInput['resource_id'] ?? null;
             $quantity = $jsonInput['quantity'] ?? null;
+            $user_personnel_id = $jsonInput['user_personnel_id'] ?? null;
 
-            if (!$type || !$reservation_id || !$resource_id) {
+            if (!$type || !$reservation_id || !$resource_id || !$user_personnel_id) {
                 die(json_encode([
                     'status' => 'error',
-                    'message' => 'Type, Reservation ID, and Resource ID are required',
+                    'message' => 'Type, Reservation ID, Resource ID, and User Personnel ID are required',
                     'timestamp' => date('Y-m-d H:i:s')
                 ]));
             }
-            echo $user->updateRelease($type, $reservation_id, $resource_id, $quantity);
+            echo $user->updateRelease($type, $reservation_id, $resource_id, $quantity, $user_personnel_id);
             break;
         case "updateReturn":
             $type = $jsonInput['type'] ?? null;

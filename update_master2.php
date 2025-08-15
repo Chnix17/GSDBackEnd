@@ -567,7 +567,7 @@ class User {
 
         // Check if verification token exists, matches user_id, and has not expired
         $stmt = $this->conn->prepare("
-            SELECT v.*, u.users_email, u.users_fname 
+            SELECT v.*, u.users_email, u.users_fname, u.users_mname, u.users_lname 
             FROM tbl_email_verification v
             INNER JOIN tbl_users u ON v.user_id = u.users_id
             WHERE v.user_id = :user_id 
@@ -600,6 +600,23 @@ class User {
                 $insertStmt->execute([$user_id, $expires_at, $expires_at]);
 
                 $this->conn->commit();
+
+                // Audit log (non-blocking): User enabled 2FA
+                try {
+                    $mInitial = (!empty($result['users_mname'])) ? (' ' . strtoupper(substr($result['users_mname'], 0, 1)) . '.') : '';
+                    $fullName = trim(($result['users_fname'] ?? '') . $mInitial . ' ' . ($result['users_lname'] ?? ''));
+                    if ($fullName === '') {
+                        $fullName = $result['users_email'] ?? ('User #' . $user_id);
+                    }
+                    $desc = 'User: ' . $fullName . ' has enabled 2FA (expires: ' . $expires_at . ')';
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $audit->execute([
+                        ':description' => $desc,
+                        ':action' => 'ENABLE 2FA',
+                        ':created_by' => $user_id
+                    ]);
+                } catch (Throwable $te) { /* ignore audit errors */ }
 
                 return [
                     "status" => "success",

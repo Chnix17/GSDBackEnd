@@ -534,7 +534,7 @@ class FacultyStaff {
         }
     }
 
-    public function updateReadNotification($notificationIds) {
+    public function updateReadNotification($notificationIds, $actingUserId = null) {
         try {
             if (!is_array($notificationIds)) {
                 $notificationIds = [$notificationIds]; // Convert single ID to array for consistency
@@ -551,10 +551,37 @@ class FacultyStaff {
             $stmt->execute($notificationIds);
 
             if ($stmt->rowCount() > 0) {
+                $updatedCount = $stmt->rowCount();
+
+                // Audit log (non-blocking)
+                try {
+                    // Try to determine the acting user from the targeted notifications
+                    $uid = null;
+                    $checkQuery = "SELECT DISTINCT notification_user_id FROM tbl_notification_reservation WHERE notification_reservation_id IN ($placeholders)";
+                    $checkStmt = $this->conn->prepare($checkQuery);
+                    $checkStmt->execute($notificationIds);
+                    $uids = $checkStmt->fetchAll(PDO::FETCH_COLUMN, 0);
+                    if (is_array($uids) && count($uids) === 1) {
+                        $uid = (int)$uids[0];
+                    }
+
+                    // Prefer the acting user id when available; fallback to the notification owner
+                    $createdBy = $actingUserId !== null ? (int)$actingUserId : $uid;
+
+                    $desc = 'Marked notifications as read (count: ' . (int)$updatedCount . ')';
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $audit->execute([
+                        ':description' => $desc,
+                        ':action' => 'READ NOTIFICATION',
+                        ':created_by' => $createdBy
+                    ]);
+                } catch (Throwable $te) { /* ignore audit errors */ }
+
                 return json_encode([
                     'status' => 'success',
                     'message' => 'Notifications marked as read',
-                    'updated_count' => $stmt->rowCount()
+                    'updated_count' => $updatedCount
                 ]);
             } else {
                 return json_encode([
@@ -694,7 +721,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Notification IDs are required']);
                 break;
             }
-            echo $facultyStaff->updateReadNotification($notificationIds);
+            echo $facultyStaff->updateReadNotification($notificationIds, $userId);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

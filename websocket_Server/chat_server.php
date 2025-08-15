@@ -43,6 +43,41 @@ class Chat implements MessageComponentInterface {
         if ($stmt->execute()) {
             echo "Message saved to database\n";
 
+            // Non-blocking audit logging for chat message insertion
+            try {
+                // Build sender and receiver full names (First + Middle initial + Last)
+                $fullNameSql = "SELECT CONCAT(\n                                    users_fname,\n                                    CASE WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.') ELSE '' END,\n                                    ' ', users_lname\n                                 ) AS full_name\n                               FROM tbl_users WHERE users_id = ?";
+
+                $sender_name = null; $receiver_name = null;
+                if ($ns = $this->db->prepare($fullNameSql)) {
+                    $ns->bind_param("i", $sender_id);
+                    $ns->execute();
+                    $ns->bind_result($sender_name);
+                    $ns->fetch();
+                    $ns->close();
+                }
+                if ($nr = $this->db->prepare($fullNameSql)) {
+                    $nr->bind_param("i", $receiver_id);
+                    $nr->execute();
+                    $nr->bind_result($receiver_name);
+                    $nr->fetch();
+                    $nr->close();
+                }
+
+                $sender_name = $sender_name ?: ('User #' . (int)$sender_id);
+                $receiver_name = $receiver_name ?: ('User #' . (int)$receiver_id);
+
+                $snippet = substr((string)$message, 0, 200);
+                $desc = "User {$sender_name} sent a message to {$receiver_name}: '" . $this->db->real_escape_string($snippet) . "'";
+
+                if ($al = $this->db->prepare("INSERT INTO audit_log (description, action, created_at, created_by) VALUES (?, ?, NOW(), ?)")) {
+                    $action = 'SEND MESSAGE';
+                    $al->bind_param("ssi", $desc, $action, $sender_id);
+                    $al->execute();
+                    $al->close();
+                }
+            } catch (\Throwable $e) { /* ignore audit logging errors */ }
+
             // Send push notification to receiver
             $pushUrl = 'http://localhost/coc/gsd/send-push-notification.php';
             echo "--- Building Push URL ---\n";

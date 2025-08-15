@@ -193,6 +193,23 @@ class Login {
                         
                     ];
 
+                    // Audit the successful login
+                    try {
+                        date_default_timezone_set('Asia/Manila');
+                        $fullName = trim(($user['users_fname'] ?? '') . ' ' . (empty($user['users_mname']) ? '' : ($user['users_mname'] . ' ')) . ($user['users_lname'] ?? ''));
+                        $desc = 'User Logged in';
+                        $action = 'LOGIN';
+                        $created_by = (int)$user['users_id'];
+                        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                        $auditStmt = $this->conn->prepare($auditSql);
+                        $auditStmt->bindParam(':description', $desc, PDO::PARAM_STR);
+                        $auditStmt->bindParam(':action', $action, PDO::PARAM_STR);
+                        $auditStmt->bindParam(':created_by', $created_by, PDO::PARAM_INT);
+                        $auditStmt->execute();
+                    } catch (PDOException $e) {
+                        // Intentionally ignore audit failures to not block login
+                    }
+
                     return json_encode([ 
                         'status' => 'success',
                         'data' => [
@@ -307,6 +324,32 @@ class Login {
             ]);
         }
     }
+
+    public function logout($users_id) {
+        try {
+            date_default_timezone_set('Asia/Manila');
+            $desc = 'User Logged out';
+            $action = 'LOGOUT';
+            $created_by = (int)$users_id;
+
+            $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+            $auditStmt = $this->conn->prepare($auditSql);
+            $auditStmt->bindParam(':description', $desc, PDO::PARAM_STR);
+            $auditStmt->bindParam(':action', $action, PDO::PARAM_STR);
+            $auditStmt->bindParam(':created_by', $created_by, PDO::PARAM_INT);
+            $auditStmt->execute();
+
+            return json_encode([
+                'status' => 'success',
+                'message' => 'Logout recorded successfully.'
+            ]);
+        } catch (PDOException $e) {
+            return json_encode([
+                'status' => 'error',
+                'message' => 'Database error while recording logout.'
+            ]);
+        }
+    }
 }
 
 // Handle the request
@@ -335,6 +378,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "login":
             echo $login->login($json);
             break;      
+        case "logout":
+            $users_id = $input['json']['users_id'] ?? '';
+            if (empty($users_id)) {
+                echo json_encode(['status' => 'error', 'message' => 'users_id is required']);
+                break;
+            }
+            echo $login->logout($users_id);
+            break;
         case "fetchFailedLoginExpired":
             $username = $input['json']['username'] ?? '';
             if (empty($username)) {

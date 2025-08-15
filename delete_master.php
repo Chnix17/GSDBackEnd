@@ -156,8 +156,10 @@ class User {
         }
     }
 
-    public function archiveResource($resourceType, $resourceId, $is_serialize = false) {
+    public function archiveResource($resourceType, $resourceId, $is_serialize = false, $userId = null) {
     try {
+        // Debug: log context
+        error_log("archiveResource userId=" . var_export($userId, true) . ", type=" . var_export($resourceType, true));
         if (empty($resourceType) || empty($resourceId)) {
             return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
         }
@@ -195,6 +197,33 @@ class User {
         if ($stmt->execute($resourceId)) {
             $count = $stmt->rowCount();
             if ($count > 0) {
+                // Non-blocking audit log insert without IDs
+                try {
+                    $typeLabel = ucfirst((string)$resourceType);
+                    $desc = "Archived " . $typeLabel . " resource(s): " . $count;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $action = 'ARCHIVE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    if (!$audit->execute()) {
+                        error_log("Audit log insert failed (archiveResource): " . print_r($audit->errorInfo(), true));
+                    } else {
+                        try {
+                            $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (archiveResource): " . json_encode($latest));
+                        } catch (Throwable $te) {
+                            error_log("Failed to read latest audit_log (archiveResource): " . $te->getMessage());
+                        }
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit logging error (archiveResource): " . $te->getMessage());
+                }
                 return json_encode([
                     'status' => 'success', 
                     'message' => $count . ' resource(s) archived successfully.'
@@ -215,8 +244,10 @@ class User {
 }
 
 
-    public function unarchiveResource($resourceType, $resourceId) {
+    public function unarchiveResource($resourceType, $resourceId, $is_serialize = false, $userId = null) {
     try {
+        // Debug: log context
+        error_log("unarchiveResource userId=" . var_export($userId, true) . ", type=" . var_export($resourceType, true));
         if (empty($resourceType) || empty($resourceId)) {
             return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
         }
@@ -253,6 +284,33 @@ class User {
         if ($stmt->execute($resourceId)) {
             $count = $stmt->rowCount();
             if ($count > 0) {
+                // Non-blocking audit log insert without IDs
+                try {
+                    $typeLabel = ucfirst((string)$resourceType);
+                    $desc = "Unarchived " . $typeLabel . " resource(s): " . $count;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $action = 'UNARCHIVE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    if (!$audit->execute()) {
+                        error_log("Audit log insert failed (unarchiveResource): " . print_r($audit->errorInfo(), true));
+                    } else {
+                        try {
+                            $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (unarchiveResource): " . json_encode($latest));
+                        } catch (Throwable $te) {
+                            error_log("Failed to read latest audit_log (unarchiveResource): " . $te->getMessage());
+                        }
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit logging error (unarchiveResource): " . $te->getMessage());
+                }
                 return json_encode([
                     'status' => 'success', 
                     'message' => $count . ' resource(s) unarchived successfully.'
@@ -271,11 +329,11 @@ class User {
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
     }
 }
-
-
-
-
-    
+ 
+ 
+ 
+ 
+  
 
 public function fetchAllVehicles() {
     $sql = "SELECT  
@@ -464,24 +522,6 @@ public function deleteCondition($conditionId) {
             return json_encode(['status' => 'error', 'message' => 'Error: ' . $e->getMessage()]);
         }
     }
-
-    public function deleteVenue($venueId) {
-        try {
-            $sql = "DELETE FROM tbl_venue WHERE ven_id = :venueId";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':venueId', $venueId);
-            $stmt->execute();
-
-            if ($stmt->rowCount() > 0) {
-                return json_encode(['status' => 'success', 'message' => 'Venue deleted successfully.']);
-            } else {
-                return json_encode(['status' => 'error', 'message' => 'No venue found with the given ID.']);
-            }
-        } catch(PDOException $e) {
-            return json_encode(['status' => 'error', 'message' => 'Could not delete venue: ' . $e->getMessage()]);
-        }
-    }
-
     public function deleteEquipment($equipmentId) {
         try {
             $sql = "DELETE FROM tbl_equipments WHERE equip_id = :equipmentId";
@@ -585,7 +625,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             case 'archiveResource':
                 if (isset($data['resourceType']) && isset($data['resourceId'])) {
                     $is_serialize = isset($data['is_serialize']) ? $data['is_serialize'] : false;
-                    echo $user->archiveResource($data['resourceType'], $data['resourceId'], $is_serialize);
+                    $userId = $data['userid'] ?? ($_POST['userid'] ?? null);
+                    error_log("route archiveResource userId=" . var_export($userId, true));
+                    echo $user->archiveResource($data['resourceType'], $data['resourceId'], $is_serialize, $userId);
                 } else {
                     echo json_encode(array('status' => 'error', 'message' => 'Missing required parameters.'));
                 }
@@ -593,7 +635,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             case 'unarchiveResource':
                 if (isset($data['resourceType']) && isset($data['resourceId'])) {
                     $is_serialize = isset($data['is_serialize']) ? $data['is_serialize'] : false;
-                    echo $user->unarchiveResource($data['resourceType'], $data['resourceId'], $is_serialize);
+                    $userId = $data['userid'] ?? ($_POST['userid'] ?? null);
+                    error_log("route unarchiveResource userId=" . var_export($userId, true));
+                    echo $user->unarchiveResource($data['resourceType'], $data['resourceId'], $is_serialize, $userId);
                 } else {
                     echo json_encode(array('status' => 'error', 'message' => 'Missing required parameters.'));
                 }

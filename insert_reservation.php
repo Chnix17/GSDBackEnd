@@ -53,7 +53,7 @@ class Reservation {
     }
 
     public function hasConflictRequest($resourceType, $resourceId, $startDate, $endDate, $requestedQuantity = 0) {
-        if (!in_array($resourceType, ['venue', 'vehicle', 'driver', 'equipment'])) {
+        if (!in_array($resourceType, ['venue', 'vehicle', 'equipment'])) {
             error_log("Invalid resource type: " . $resourceType);
             return ['status' => false, 'count' => 0];
         }
@@ -63,145 +63,109 @@ class Reservation {
     
             switch ($resourceType) {
                 case 'venue':
-                    $sql = "SELECT COUNT(*) as conflict_count
-                           FROM tbl_reservation r
-                           INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                           INNER JOIN tbl_reservation_form_venue rv ON r.reservation_form_venue_id = rv.reservation_form_venue_id
-                           INNER JOIN tbl_reservation_venue v ON rv.reservation_form_venue_id = v.reservation_venue_form_venue_id
-                           WHERE v.reservation_venue_venue_id = :resource_id
-                           AND rs.reservation_status_status_id = 1
-                           AND rs.reservation_active IN (0, 1)
-                           AND (
-                               :start_date <= rv.reservation_form_end_date
-                               AND :end_date >= rv.reservation_form_start_date
-                           )";
+                    $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
+                            FROM tbl_reservation r
+                            INNER JOIN tbl_reservation_status rs
+                              ON r.reservation_id = rs.reservation_reservation_id
+                            INNER JOIN tbl_reservation_venue v
+                              ON r.reservation_id = v.reservation_reservation_id
+                            WHERE v.reservation_venue_venue_id = :resource_id
+                              AND rs.reservation_status_status_id = 1
+                              AND r.reservation_id NOT IN (
+                                SELECT DISTINCT reservation_reservation_id 
+                                FROM tbl_reservation_status 
+                                WHERE reservation_status_status_id IN (2,5)
+                              )
+                              AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)";
                     break;
-    
+
                 case 'vehicle':
-                    $sql = "SELECT COUNT(*) as conflict_count
-                           FROM tbl_reservation r
-                           INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                           INNER JOIN tbl_reservation_form_vehicle rv ON r.reservation_form_vehicle_id = rv.reservation_form_vehicle_id
-                           INNER JOIN tbl_reservation_vehicle v ON rv.reservation_form_vehicle_id = v.reservation_vehicle_reservation_form_vehicle_id
-                           WHERE v.reservation_vehicle_vehicle_id = :resource_id
-                           AND rs.reservation_status_status_id = 1
-                           AND rs.reservation_active IN (0, 1)
-                           AND (
-                               :start_date <= rv.reservation_form_end_date
-                               AND :end_date >= rv.reservation_form_start_date
-                           )";
+                    $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
+                            FROM tbl_reservation r
+                            INNER JOIN tbl_reservation_status rs
+                              ON r.reservation_id = rs.reservation_reservation_id
+                            INNER JOIN tbl_reservation_vehicle v
+                              ON r.reservation_id = v.reservation_reservation_id
+                            WHERE v.reservation_vehicle_vehicle_id = :resource_id
+                              AND rs.reservation_status_status_id = 1
+                              AND r.reservation_id NOT IN (
+                                SELECT DISTINCT reservation_reservation_id 
+                                FROM tbl_reservation_status 
+                                WHERE reservation_status_status_id IN (2,5)
+                              )
+                              AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)";
                     break;
-    
-                case 'driver':
-                    $sql = "SELECT COUNT(*) as conflict_count
-                           FROM tbl_reservation r
-                           INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                           INNER JOIN tbl_reservation_form_vehicle rv ON r.reservation_form_vehicle_id = rv.reservation_form_vehicle_id
-                           INNER JOIN tbl_reservation_driver d ON rv.reservation_form_vehicle_id = d.reservation_driver_reservation_form_vehicle_id
-                           WHERE d.driver_id = :resource_id
-                           AND rs.reservation_status_status_id = 1
-                           AND rs.reservation_active IN (0, 1)
-                           AND (
-                               :start_date <= rv.reservation_form_end_date
-                               AND :end_date >= rv.reservation_form_start_date
-                           )";
-                    break;
-    
+                    // driver conflict check removed
+
                 case 'equipment':
-                    $sql = "SELECT 
-                                eq.equip_name,
-                                eq.equip_quantity AS total_quantity,
-                                
-                                -- Reserved Quantity (Confirmed - Status 6)
-                                COALESCE(SUM(CASE WHEN rs.reservation_status_status_id = :reserved_status THEN e.reservation_equipment_quantity END), 0) AS reserved_quantity,
-                
-                                -- Pending Quantity (Pending - Status 1)
-                                COALESCE(SUM(CASE WHEN rs.reservation_status_status_id = :pending_status THEN e.reservation_equipment_quantity END), 0) AS pending_quantity,
-                
-                                -- Remaining Quantity Calculation
-                                (eq.equip_quantity - 
-                                    COALESCE(SUM(CASE WHEN rs.reservation_status_status_id = :reserved_status THEN e.reservation_equipment_quantity END), 0) - 
-                                    COALESCE(SUM(CASE WHEN rs.reservation_status_status_id = :pending_status THEN e.reservation_equipment_quantity END), 0)
-                                ) AS remaining_quantity
-                
-                            FROM tbl_equipments eq
-                
-                            -- LEFT JOIN to ensure equipment shows even if not reserved
-                            LEFT JOIN tbl_reservation_equipment e 
-                                ON eq.equip_id = e.reservation_equipment_equip_id
-                
-                            LEFT JOIN tbl_reservation_form_venue rv 
-                                ON e.reservation_equipment_form_venue_id = rv.reservation_form_venue_id
-                
-                            LEFT JOIN tbl_reservation r 
-                                ON rv.reservation_form_venue_id = r.reservation_form_venue_id
-                
-                            LEFT JOIN tbl_reservation_status rs 
-                                ON r.reservation_id = rs.reservation_reservation_id 
-                
-                            -- Filtering for equipment ID and date range
-                            WHERE eq.equip_id = :resource_id
-                            AND (
-                                :start_date <= rv.reservation_form_end_date
-                                AND :end_date >= rv.reservation_form_start_date
-                            )
-                
-                            GROUP BY eq.equip_id, eq.equip_name, eq.equip_quantity";
-                
-                    // For equipment case, bind parameters differently
-                    if ($resourceType === 'equipment') {
-                        $reservedStatus = 6;
-                        $pendingStatus = 1;
-                        $stmt = $this->conn->prepare($sql);
-                        $stmt->bindValue(':resource_id', $resourceId);
-                        $stmt->bindValue(':start_date', $startDate);
-                        $stmt->bindValue(':end_date', $endDate);
-                        $stmt->bindValue(':reserved_status', $reservedStatus, PDO::PARAM_INT);
-                        $stmt->bindValue(':pending_status', $pendingStatus, PDO::PARAM_INT);
-                        
-                    } else {
-                        $stmt = $this->conn->prepare($sql);
-                        $stmt->bindParam(':resource_id', $resourceId);
-                        $stmt->bindParam(':start_date', $startDate);
-                        $stmt->bindParam(':end_date', $endDate);
-                    }
-                    
+                    // Compute capacity based on inventory model (bulk or serial)
+                    //  - Bulk: use tbl_equipment_quantity.on_hand_quantity (fallback to quantity if null)
+                    //  - Serial: count of active units in tbl_equipment_unit whose status is not 2 (only 2 is considered unavailable)
+                    // Then subtract overlapping reserved quantities from tbl_reservation_equipment.
+                    $sql = "SELECT t.equip_id,
+                                   t.equip_name,
+                                   t.total_capacity,
+                                   COALESCE(ur.used_quantity, 0) AS used_quantity,
+                                   (t.total_capacity - COALESCE(ur.used_quantity, 0)) AS remaining_quantity
+                            FROM (
+                              SELECT eq.equip_id,
+                                     eq.equip_name,
+                                     CASE 
+                                       WHEN LOWER(eq.equip_type) = 'bulk' THEN (
+                                         SELECT COALESCE(SUM(COALESCE(q.on_hand_quantity, q.quantity)), 0)
+                                         FROM tbl_equipment_quantity q
+                                         WHERE q.equip_id = eq.equip_id
+                                           AND (q.status_availability_id IS NULL OR q.status_availability_id <> 2)
+                                       )
+                                       ELSE (
+                                         SELECT COALESCE(SUM(CASE WHEN u.is_active = 1 AND (u.status_availability_id IS NULL OR u.status_availability_id <> 2) THEN 1 ELSE 0 END), 0)
+                                         FROM tbl_equipment_unit u
+                                         WHERE u.equip_id = eq.equip_id
+                                       )
+                                     END AS total_capacity
+                              FROM tbl_equipments eq
+                              WHERE eq.equip_id = :resource_id
+                            ) t
+                            LEFT JOIN (
+                              SELECT e.reservation_equipment_equip_id AS equip_id,
+                                     COALESCE(SUM(e.reservation_equipment_quantity), 0) AS used_quantity
+                              FROM tbl_reservation_equipment e
+                              INNER JOIN tbl_reservation r ON e.reservation_reservation_id = r.reservation_id
+                              INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                              WHERE e.reservation_equipment_equip_id = :resource_id
+                                AND rs.reservation_status_status_id = 1
+                                AND r.reservation_id NOT IN (
+                                  SELECT DISTINCT reservation_reservation_id 
+                                  FROM tbl_reservation_status 
+                                  WHERE reservation_status_status_id IN (2,5)
+                                )
+                                AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)
+                            ) ur ON ur.equip_id = t.equip_id";
+
+                    $stmt = $this->conn->prepare($sql);
+                    $stmt->bindValue(':resource_id', $resourceId, PDO::PARAM_INT);
+                    $stmt->bindValue(':start_date', $startDate);
+                    $stmt->bindValue(':end_date', $endDate);
                     $stmt->execute();
                     $result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    // If no result found, equipment is fully available
+
                     if (!$result) {
                         return ['status' => true, 'count' => 0];
                     }
-                    
-                    // Get the requested quantity from the parameters
-                    $remainingQuantity = intval($result['remaining_quantity']);
-                    if ($requestedQuantity <= $remainingQuantity) {
-                        return ['status' => true, 'count' => 0];
-                    } else {
-                        return ['status' => false, 'message' => 'Insufficient quantity for Equipment ID ' . $resourceId . '. Requested: ' . $requestedQuantity . ', Available: ' . $remainingQuantity];
-                    }
-                    break;
+                    $remainingQuantity = (int)$result['remaining_quantity'];
+                    error_log('Equipment check equip_id=' . (int)$resourceId . ' remaining=' . $remainingQuantity . ' requested=' . (int)$requestedQuantity . ' total_capacity=' . (int)$result['total_capacity']);
+                    return ['status' => true, 'count' => ($requestedQuantity > $remainingQuantity ? 1 : 0)];
             }
-    
+
+            // Generic path for venue/vehicle
             $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':resource_id', $resourceId);
+            $stmt->bindParam(':resource_id', $resourceId, PDO::PARAM_INT);
             $stmt->bindParam(':start_date', $startDate);
             $stmt->bindParam(':end_date', $endDate);
-            
-            if ($resourceType === 'equipment') {
-                $stmt->bindParam(':requested_quantity', $requestedQuantity);
-            }
-            
             $stmt->execute();
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($resourceType === 'equipment') {
-                $hasConflict = ($result !== false);
-                return ['status' => true, 'count' => $hasConflict ? 1 : 0];
-            }
-            
-            $conflictCount = (int)$result['conflict_count'];
+
+            $conflictCount = (int)($result['conflict_count'] ?? 0);
             return ['status' => true, 'count' => $conflictCount];
     
         } catch (PDOException $e) {
@@ -216,31 +180,28 @@ class Reservation {
                     (reservation_equipment_equip_id, reservation_reservation_id, reservation_equipment_quantity) 
                     VALUES (:equipment_id, :reservation_id, :quantity)";
             $stmt = $this->conn->prepare($sql);
-            
+            $errors = [];
+
             foreach ($equipments as $equip) {
                 $stmt->bindParam(':equipment_id', $equip['equipment_id']);
                 $stmt->bindParam(':reservation_id', $reservationId);
                 $stmt->bindParam(':quantity', $equip['quantity']);
-    
+
                 if (!$stmt->execute()) {
-                    if ($this->conn->inTransaction()) {
-                        $this->conn->rollBack();
-                    }
-                    return ['status' => 'error', 'message' => 'Failed to insert equipment: ' . $equip['equipment_id']];
+                    $errors[] = 'Failed to insert equipment: ' . $equip['equipment_id'];
                 }
             }
-    
-            if ($this->conn->inTransaction()) {
-                $this->conn->commit();
+
+            if (!empty($errors)) {
+                return ['status' => 'error', 'message' => implode('; ', $errors)];
             }
+
             return ['status' => 'success', 'message' => 'All equipment inserted successfully.'];
         } catch (PDOException $e) {
-            if ($this->conn->inTransaction()) {
-                $this->conn->rollBack();
-            }
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
     }
+    
     public function insertVehicles($reservationId, $vehicleIds) {
         try {
             $sql = "INSERT INTO tbl_reservation_vehicle 
@@ -351,180 +312,10 @@ class Reservation {
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
     }
-    public function insertVehicleForm($data) {
-        
-        try {
-            // Check for vehicle conflicts
-            $vehicles = $data['vehicles'] ?? [];
-
-            foreach ($vehicles as $vehicleId) {
-                $conflict = $this->hasConflictRequest('vehicle', $vehicleId, $data['start_date'], $data['end_date']);
-                if (!$conflict['status'] || $conflict['count'] > 0) {
-                    $this->conn->rollBack();
-                    return ['status' => 'error', 'message' => 'There must be Active Process base on your selected vehicle or driver'];
-                }
-            }
-            
-
-            // Check for driver conflict if driver is specified
-            if (isset($data['driver_id'])) {
-                $driverConflict = $this->hasConflictRequest('driver', $data['driver_id'], $data['start_date'], $data['end_date']);
-                if (!$driverConflict['status'] || $driverConflict['count'] > 0) {
-                    return ['status' => 'error', 'message' => 'Driver is already reserved for this time period.'];
-                }
-            }
-
-            // Proceed with the reservation
-            $userType = $data['user_type'] ?? 'user';
-            $userId = $data['user_id'];
-            
-            $sql = "INSERT INTO tbl_reservation_form_vehicle 
-                    (reservation_form_purpose, reservation_form_name, 
-                    reservation_form_destination, reservation_form_start_date, 
-                    reservation_form_end_date, " . 
-                    ($userType === 'user' ? "reservation_form_user_id" : "reservation_form_dean_id") . 
-                    ") VALUES (:purpose, :name, :destination, :start_date, 
-                    :end_date, :user_id)";
-            
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':purpose', $data['purpose']);
-            $stmt->bindParam(':name', $data['name']);
-            $stmt->bindParam(':destination', $data['destination']);
-            $stmt->bindParam(':start_date', $data['start_date']);
-            $stmt->bindParam(':end_date', $data['end_date']);
-            $stmt->bindParam(':user_id', $userId);
-            
-            if (!$stmt->execute()) {
-                $this->conn->rollBack();
-                return ['status' => 'error', 'message' => 'Failed to create vehicle form.'];
-            }
-
-            $formId = $this->conn->lastInsertId();
-            $this->conn->commit();
-            return ['status' => 'success', 'form_id' => $formId];
-        } catch (PDOException $e) {
-            $this->conn->rollBack();
-            return ['status' => 'error', 'message' => $e->getMessage()];
-        }
-    }
-    public function insertVenueForm($data, $venueId) {
-        try {
-            $conflict = $this->hasConflictRequest('venue', $venueId, $data['start_date'], $data['end_date']);
-            if (!$conflict['status'] || $conflict['count'] > 0) {
-                return ['status' => 'error', 'message' => 'There must be Active Process base on your selected venue'];
-            }
+    // deprecated: insertVehicleForm removed (legacy form tables no longer used)
+    // deprecated: insertVenueForm removed (legacy form tables no longer used)
     
-            // Check equipment availability and conflicts
-            if (!empty($data['equipment'])) {
-                foreach ($data['equipment'] as $equip) {
-                    $availableQuantity = $this->getAvailableEquipmentQuantity($equip['equipment_id'], $data['start_date'], $data['end_date']);
-                    
-                    if ($equip['quantity'] > $availableQuantity) {
-                        return ['status' => 'error', 'message' => 'There must be Active Process based on your selected equipment'];
-                    }
-                }
-            }
-            
-            // Proceed with the reservation
-            $userType = $data['user_type'] ?? 'user';
-            $userId = $data['user_id'];
-            
-            $sql = "INSERT INTO tbl_reservation_form_venue 
-                    (reservation_form_name, reservation_form_event_title, 
-                    reservation_form_description, reservation_participants, 
-                    reservation_form_start_date, reservation_form_end_date, " . 
-                    ($userType === 'user' ? "reservation_form_user_id" : "reservation_form_dean_id") . 
-                    ") VALUES (:name, :event_title, :description, :participants, 
-                    :start_date, :end_date, :user_id)";
-            
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindParam(':name', $data['name']);
-            $stmt->bindParam(':event_title', $data['event_title']);
-            $stmt->bindParam(':description', $data['description']);
-            $stmt->bindParam(':participants', $data['participants']);
-            $stmt->bindParam(':start_date', $data['start_date']);
-            $stmt->bindParam(':end_date', $data['end_date']);
-            $stmt->bindParam(':user_id', $userId);
-            
-            if (!$stmt->execute()) {
-                return ['status' => 'error', 'message' => 'Failed to create venue form.'];
-            }
-    
-            $formId = $this->conn->lastInsertId();
-            return ['status' => 'success', 'form_id' => $formId];
-        } catch (PDOException $e) {
-            return ['status' => 'error', 'message' => $e->getMessage()];
-        }
-    }
-    
-    private function getAvailableEquipmentQuantity($equipmentId, $startDate, $endDate) {
-        try {
-            $sql = "SELECT 
-                        eq.equip_name,
-                        eq.equip_quantity AS total_quantity,
-                        
-                        (SELECT COALESCE(SUM(e.reservation_equipment_quantity), 0)
-                         FROM tbl_reservation_equipment e
-                         LEFT JOIN tbl_reservation_form_venue rv ON e.reservation_equipment_form_venue_id = rv.reservation_form_venue_id
-                         LEFT JOIN tbl_reservation r ON rv.reservation_form_venue_id = r.reservation_form_venue_id
-                         LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                         WHERE e.reservation_equipment_equip_id = eq.equip_id
-                         AND rs.reservation_status_status_id = 6
-                         AND (:start_date <= rv.reservation_form_end_date
-                         AND :end_date >= rv.reservation_form_start_date)
-                        ) AS reserved_quantity,
-                        
-                        (SELECT COALESCE(SUM(e.reservation_equipment_quantity), 0)
-                         FROM tbl_reservation_equipment e
-                         LEFT JOIN tbl_reservation_form_venue rv ON e.reservation_equipment_form_venue_id = rv.reservation_form_venue_id
-                         LEFT JOIN tbl_reservation r ON rv.reservation_form_venue_id = r.reservation_form_venue_id
-                         LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                         WHERE e.reservation_equipment_equip_id = eq.equip_id
-                         AND rs.reservation_status_status_id = 1
-                         AND (:start_date <= rv.reservation_form_end_date
-                         AND :end_date >= rv.reservation_form_start_date)
-                        ) AS pending_quantity,
-                        
-                        (eq.equip_quantity - 
-                            (SELECT COALESCE(SUM(e.reservation_equipment_quantity), 0)
-                             FROM tbl_reservation_equipment e
-                             LEFT JOIN tbl_reservation_form_venue rv ON e.reservation_equipment_form_venue_id = rv.reservation_form_venue_id
-                             LEFT JOIN tbl_reservation r ON rv.reservation_form_venue_id = r.reservation_form_venue_id
-                             LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                             WHERE e.reservation_equipment_equip_id = eq.equip_id
-                             AND rs.reservation_status_status_id = 6
-                             AND (:start_date <= rv.reservation_form_end_date
-                             AND :end_date >= rv.reservation_form_start_date)
-                            ) 
-                            - 
-                            (SELECT COALESCE(SUM(e.reservation_equipment_quantity), 0)
-                             FROM tbl_reservation_equipment e
-                             LEFT JOIN tbl_reservation_form_venue rv ON e.reservation_equipment_form_venue_id = rv.reservation_form_venue_id
-                             LEFT JOIN tbl_reservation r ON rv.reservation_form_venue_id = r.reservation_form_venue_id
-                             LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                             WHERE e.reservation_equipment_equip_id = eq.equip_id
-                             AND rs.reservation_status_status_id = 1
-                             AND (:start_date <= rv.reservation_form_end_date
-                             AND :end_date >= rv.reservation_form_start_date)
-                            )
-                        ) AS remaining_quantity
-                    FROM tbl_equipments eq
-                    WHERE eq.equip_id = :equipment_id";
-    
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bindValue(':equipment_id', $equipmentId);
-            $stmt->bindValue(':start_date', $startDate);
-            $stmt->bindValue(':end_date', $endDate);
-            $stmt->execute();
-    
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-            return $result ? (int)$result['remaining_quantity'] : 0;
-        } catch (PDOException $e) {
-            error_log("Error fetching available equipment quantity: " . $e->getMessage());
-            return 0;
-        }
-    }
+    // deprecated: getAvailableEquipmentQuantity removed (uses legacy form tables)
     
     
 
@@ -533,6 +324,63 @@ class Reservation {
         try {
             return $this->conn->inTransaction();
         } catch (PDOException $e) {
+            return false;
+        }
+    }
+
+    // Named lock helpers to prevent race conditions on resource reservation
+    private function acquireLock($key, $timeout = 1.0) {
+        try {
+            $stmt = $this->conn->prepare("SELECT GET_LOCK(:k, :t) AS got");
+            $stmt->execute([':k' => $key, ':t' => $timeout]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return isset($row['got']) && (int)$row['got'] === 1;
+        } catch (PDOException $e) {
+            error_log('acquireLock error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function releaseLock($key) {
+        try {
+            $stmt = $this->conn->prepare("SELECT RELEASE_LOCK(:key)");
+            $stmt->bindParam(':key', $key);
+            $stmt->execute();
+        } catch (PDOException $e) {
+            error_log('Failed to release lock: ' . $e->getMessage());
+        }
+    }
+
+    // Determine if the user's role should bypass conflict checks
+    private function shouldBypassConflict($userId) {
+        try {
+            $sql = "SELECT 
+                        COALESCE(d.departments_name, '') AS dept_name,
+                        COALESCE(ul.user_level_name, '') AS level_name
+                    FROM tbl_users u
+                    LEFT JOIN tbl_departments d ON d.departments_id = u.users_department_id
+                    LEFT JOIN tbl_user_level ul ON ul.user_level_id = u.users_user_level_id
+                    WHERE u.users_id = :user_id
+                    LIMIT 1";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+            if (!$stmt->execute()) {
+                return false;
+            }
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return false;
+            }
+            $dept = strtolower(trim($row['dept_name'] ?? ''));
+            $level = strtolower(trim($row['level_name'] ?? ''));
+            $bypass = ($dept === 'coo' && $level === 'department head') ||
+                      ($dept === 'gsd' && $level === 'secretary');
+            if ($bypass) {
+                error_log(sprintf('Bypassing conflict checks for user_id=%d (dept=%s, level=%s)', (int)$userId, $row['dept_name'], $row['level_name']));
+            }
+            return $bypass;
+        } catch (PDOException $e) {
+            error_log('shouldBypassConflict error: ' . $e->getMessage());
             return false;
         }
     }
@@ -566,11 +414,17 @@ class Reservation {
             $errors = [];
 
             foreach ($passengers as $passenger) {
-                $stmt->bindParam(':passsenger_name', $passenger);
+                // Normalize passenger value to string name
+                if (is_array($passenger)) {
+                    $name = isset($passenger['name']) ? (string)$passenger['name'] : '';
+                } else {
+                    $name = (string)$passenger;
+                }
+                $stmt->bindParam(':passenger_name', $name);
                 $stmt->bindParam(':reservation_id', $reservationId);
 
                 if (!$stmt->execute()) {
-                    $errors[] = 'Failed to insert passenger: ' . $passenger;
+                    $errors[] = 'Failed to insert passenger: ' . $name;
                 }
             }
 
@@ -585,9 +439,137 @@ class Reservation {
     }
     
     public function createReservation($data, $type) {
+        // Normalize inputs to arrays expected by logic
+        if ($type === 'venue') {
+            if (!isset($data['venues']) && isset($data['venue'])) {
+                $data['venues'] = [(int)$data['venue']];
+            }
+        } elseif ($type === 'vehicle') {
+            if (!isset($data['vehicles']) && isset($data['vehicle'])) {
+                $data['vehicles'] = [(int)$data['vehicle']];
+            }
+        }
+
+        // Collect resource lock keys by type
+        $lockKeys = [];
+        $start = $data['start_date'] ?? null;
+        $end = $data['end_date'] ?? null;
+        if ($type === 'venue') {
+            if (!empty($data['venues']) && is_array($data['venues'])) {
+                foreach ($data['venues'] as $vid) {
+                    $lockKeys[] = 'lock:venue:' . (int)$vid;
+                }
+            }
+            if (!empty($data['equipment']) && is_array($data['equipment'])) {
+                foreach ($data['equipment'] as $eq) {
+                    $lockKeys[] = 'lock:equipment:' . (int)$eq['equipment_id'];
+                }
+            }
+        } elseif ($type === 'vehicle') {
+            if (!empty($data['vehicles']) && is_array($data['vehicles'])) {
+                foreach ($data['vehicles'] as $vehId) {
+                    $lockKeys[] = 'lock:vehicle:' . (int)$vehId;
+                }
+            }
+            if (!empty($data['equipment']) && is_array($data['equipment'])) {
+                foreach ($data['equipment'] as $eq) {
+                    $lockKeys[] = 'lock:equipment:' . (int)$eq['equipment_id'];
+                }
+            }
+        } elseif ($type === 'equipment') {
+            if (!empty($data['equipment']) && is_array($data['equipment'])) {
+                foreach ($data['equipment'] as $eq) {
+                    $lockKeys[] = 'lock:equipment:' . (int)$eq['equipment_id'];
+                }
+            }
+        }
+
+        // Acquire locks in deterministic order BEFORE transaction
+        sort($lockKeys);
+        $acquired = [];
         try {
+            foreach ($lockKeys as $k) {
+                if (!$this->acquireLock($k, 2.0)) { // allow more time for one request to win
+                    foreach ($acquired as $ak) { $this->releaseLock($ak); }
+                    return ['status' => 'error', 'message' => 'Resource is being reserved by another request. Please try again.'];
+                }
+                $acquired[] = $k;
+            }
+            if (!empty($acquired)) {
+                error_log('Acquired locks: ' . implode(',', $acquired));
+            }
+
+            // Start transaction after locks are acquired
             $this->conn->beginTransaction();
-        
+
+            // Final conflict checks while holding locks
+            $bypassConflict = $this->shouldBypassConflict($data['user_id'] ?? 0);
+            if (!$bypassConflict) {
+                if ($type === 'venue') {
+                    if (!empty($data['venues'])) {
+                        foreach ($data['venues'] as $vid) {
+                            $conf = $this->hasConflictRequest('venue', (int)$vid, $start, $end);
+                            error_log('Venue conflict check for venue ' . (int)$vid . ' status=' . ($conf['status'] ? 'ok' : 'err') . ' count=' . ($conf['count'] ?? 'n/a'));
+                            if ($conf['status'] === false) {
+                                throw new Exception('Failed to check venue availability.');
+                            }
+                            if ($conf['count'] > 0) {
+                                throw new Exception('Selected venue has conflicting reservation.');
+                            }
+                        }
+                    }
+                    if (!empty($data['equipment'])) {
+                        foreach ($data['equipment'] as $eq) {
+                            $conf = $this->hasConflictRequest('equipment', (int)$eq['equipment_id'], $start, $end, (int)$eq['quantity']);
+                            if ($conf['status'] === false) {
+                                throw new Exception('Failed to check equipment availability.');
+                            }
+                            if ($conf['count'] > 0) {
+                                throw new Exception('Selected equipment has conflicting reservation or insufficient quantity.');
+                            }
+                        }
+                    }
+                } elseif ($type === 'vehicle') {
+                    if (!empty($data['vehicles'])) {
+                        foreach ($data['vehicles'] as $vehId) {
+                            $conf = $this->hasConflictRequest('vehicle', (int)$vehId, $start, $end);
+                            error_log('Vehicle conflict check for vehicle ' . (int)$vehId . ' status=' . ($conf['status'] ? 'ok' : 'err') . ' count=' . ($conf['count'] ?? 'n/a'));
+                            if ($conf['status'] === false) {
+                                throw new Exception('Failed to check vehicle availability.');
+                            }
+                            if ($conf['count'] > 0) {
+                                throw new Exception('Selected vehicle has conflicting reservation.');
+                            }
+                        }
+                    }
+                    if (!empty($data['equipment'])) {
+                        foreach ($data['equipment'] as $eq) {
+                            $conf = $this->hasConflictRequest('equipment', (int)$eq['equipment_id'], $start, $end, (int)$eq['quantity']);
+                            if ($conf['status'] === false) {
+                                throw new Exception('Failed to check equipment availability.');
+                            }
+                            if ($conf['count'] > 0) {
+                                throw new Exception('Selected equipment has conflicting reservation or insufficient quantity.');
+                            }
+                        }
+                    }
+                } elseif ($type === 'equipment') {
+                    if (!empty($data['equipment'])) {
+                        foreach ($data['equipment'] as $eq) {
+                            $conf = $this->hasConflictRequest('equipment', (int)$eq['equipment_id'], $start, $end, (int)$eq['quantity']);
+                            if ($conf['status'] === false) {
+                                throw new Exception('Failed to check equipment availability.');
+                            }
+                            if ($conf['count'] > 0) {
+                                throw new Exception('Selected equipment has conflicting reservation or insufficient quantity.');
+                            }
+                        }
+                    }
+                }
+            } else {
+                error_log('Conflict checks skipped due to bypass policy');
+            }
+
             // Insert into tbl_reservation
             $sql = "INSERT INTO tbl_reservation 
                     (reservation_title, reservation_description, 
@@ -599,10 +581,9 @@ class Reservation {
                     NOW(), :additional_note)";
             
             $stmt = $this->conn->prepare($sql);
-    
-            // Determine additional_note value (null if not set)
+
             $additionalNote = isset($data['additional_note']) ? $data['additional_note'] : null;
-    
+
             switch($type) {
                 case 'venue':
                     $stmt->bindParam(':title', $data['title']);
@@ -613,7 +594,6 @@ class Reservation {
                     $stmt->bindParam(':user_id', $data['user_id']);
                     $stmt->bindValue(':additional_note', $additionalNote);
                     break;
-                
                 case 'vehicle':
                     $stmt->bindParam(':title', $data['destination']);
                     $stmt->bindParam(':description', $data['purpose']);
@@ -623,7 +603,6 @@ class Reservation {
                     $stmt->bindParam(':end_date', $data['end_date']);
                     $stmt->bindValue(':additional_note', $additionalNote);
                     break;
-                
                 case 'equipment':
                     $stmt->bindParam(':title', $data['title']);
                     $stmt->bindParam(':description', $data['description']);
@@ -634,13 +613,86 @@ class Reservation {
                     $stmt->bindValue(':additional_note', $additionalNote);
                     break;
             }
-    
+
             if (!$stmt->execute()) {
-                $this->conn->rollBack();
-                return ['status' => 'error', 'message' => 'Failed to create reservation record'];
+                throw new Exception('Failed to create reservation record');
             }
-    
+
             $reservationId = $this->conn->lastInsertId();
+
+            // Insert resource bindings inside the same transaction
+            if ($type === 'venue') {
+                if (!empty($data['venues'])) {
+                    $venueResult = $this->insertVenue($reservationId, $data['venues']);
+                    if ($venueResult['status'] !== 'success') {
+                        throw new Exception($venueResult['message']);
+                    }
+                }
+                if (!empty($data['equipment'])) {
+                    $equipmentResult = $this->insertEquipment($reservationId, $data['equipment']);
+                    if ($equipmentResult['status'] !== 'success') {
+                        throw new Exception($equipmentResult['message']);
+                    }
+                }
+            } elseif ($type === 'vehicle') {
+                if (!empty($data['vehicles'])) {
+                    $vehicleResult = $this->insertVehicles($reservationId, $data['vehicles']);
+                    if ($vehicleResult['status'] !== 'success') {
+                        throw new Exception($vehicleResult['message']);
+                    }
+                }
+                // Map vehicle_id to reservation_vehicle_id for this reservation
+                $vehicleIds = !empty($data['vehicles']) ? $data['vehicles'] : [];
+                $vehicleMap = [];
+                if (!empty($vehicleIds)) {
+                    $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+                    $sqlMap = "SELECT reservation_vehicle_id, reservation_vehicle_vehicle_id 
+                               FROM tbl_reservation_vehicle 
+                               WHERE reservation_reservation_id = ? 
+                                 AND reservation_vehicle_vehicle_id IN ($placeholders)";
+                    $stmtMap = $this->conn->prepare($sqlMap);
+                    $params = array_merge([$reservationId], $vehicleIds);
+                    $stmtMap->execute($params);
+                    while ($row = $stmtMap->fetch(PDO::FETCH_ASSOC)) {
+                        $vehicleMap[$row['reservation_vehicle_vehicle_id']] = $row['reservation_vehicle_id'];
+                    }
+                }
+                if (!empty($data['passengers'])) {
+                    $passengerResult = $this->insertPassengers($reservationId, $data['passengers']);
+                    if ($passengerResult['status'] !== 'success') {
+                        throw new Exception($passengerResult['message']);
+                    }
+                }
+                if (!empty($data['drivers'])) {
+                    // Attach reservation_vehicle_id to each driver where possible
+                    $drivers = $data['drivers'];
+                    if (is_array($drivers)) {
+                        foreach ($drivers as &$driver) {
+                            if (isset($driver['vehicle_id']) && isset($vehicleMap[$driver['vehicle_id']])) {
+                                $driver['reservation_vehicle_id'] = $vehicleMap[$driver['vehicle_id']];
+                            }
+                        }
+                        unset($driver);
+                    }
+                    $driverResult = $this->insertDriver($drivers);
+                    if ($driverResult['status'] !== 'success') {
+                        throw new Exception($driverResult['message']);
+                    }
+                }
+                if (!empty($data['equipment'])) {
+                    $equipmentResult = $this->insertEquipment($reservationId, $data['equipment']);
+                    if ($equipmentResult['status'] !== 'success') {
+                        throw new Exception($equipmentResult['message']);
+                    }
+                }
+            } elseif ($type === 'equipment') {
+                if (!empty($data['equipment'])) {
+                    $equipmentResult = $this->insertEquipment($reservationId, $data['equipment']);
+                    if ($equipmentResult['status'] !== 'success') {
+                        throw new Exception($equipmentResult['message']);
+                    }
+                }
+            }
     
             // Get the user level ID based on the reservation_user_id
             $userLevelSql = "SELECT u.users_user_level_id , u.users_department_id
@@ -656,6 +708,43 @@ class Reservation {
     
             $userLevel = $userLevelStmt->fetch(PDO::FETCH_ASSOC);
             $userLevelId = $userLevel['users_user_level_id'];
+            
+            // Determine if requester is GSD Secretary (used to skip department approvals)
+            $isGsdSecretary = false;
+            try {
+                $roleSql = "SELECT COALESCE(d.departments_name,'') AS dept_name, COALESCE(ul.user_level_name,'') AS level_name
+                            FROM tbl_users u
+                            LEFT JOIN tbl_departments d ON d.departments_id = u.users_department_id
+                            LEFT JOIN tbl_user_level ul ON ul.user_level_id = u.users_user_level_id
+                            WHERE u.users_id = :user_id
+                            LIMIT 1";
+                $roleStmt = $this->conn->prepare($roleSql);
+                $roleStmt->bindValue(':user_id', $data['user_id'], PDO::PARAM_INT);
+                if ($roleStmt->execute()) {
+                    $roleRow = $roleStmt->fetch(PDO::FETCH_ASSOC);
+                    $deptName = strtolower(trim($roleRow['dept_name'] ?? ''));
+                    $levelName = strtolower(trim($roleRow['level_name'] ?? ''));
+                    $isGsdSecretary = ($deptName === 'gsd' && $levelName === 'secretary');
+                    if ($isGsdSecretary) {
+                    // Insert notification for Admins (Dept 27, Level 1)
+                    try {
+                        $gsdSecNotifSql = "INSERT INTO notification_requests 
+                                          (notification_message, notification_department_id, notification_user_level_id, notification_create)
+                                          VALUES ('New Reservation Request', 27, 1, NOW())";
+                        $gsdSecNotifStmt = $this->conn->prepare($gsdSecNotifSql);
+                        if (!$gsdSecNotifStmt->execute()) {
+                            $err = $gsdSecNotifStmt->errorInfo();
+                            error_log('Failed to insert GSD Secretary admin notification: ' . json_encode($err));
+                        }
+                    } catch (Exception $e) {
+                        error_log('Exception inserting GSD Secretary admin notification: ' . $e->getMessage());
+                    }
+                        error_log('Detected GSD Secretary requester - department approvals will be skipped.');
+                    }
+                }
+            } catch (Exception $e) {
+                error_log('Failed to determine requester role for department approvals: ' . $e->getMessage());
+            }
     
             // Initialize status SQL based on user level
             if ($userLevelId == 3 || $userLevelId == 6 || $userLevelId == 16 || $userLevelId == 17) {
@@ -708,7 +797,7 @@ class Reservation {
                 }
     
                 // Check if department approvals are needed based on user level and venue types
-                if ((in_array($userLevelId, [3, 6, 16, 17])) && !empty($data['venues']) && is_array($data['venues'])) {
+                if ((in_array($userLevelId, [3, 6, 16, 17])) && !empty($data['venues']) && is_array($data['venues']) && !$isGsdSecretary) {
                     // Log the start of venue check
                     error_log("Checking venues for department approvals - Reservation ID: " . $reservationId);
                     
@@ -916,102 +1005,180 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification'];
                 }
-    
-                // Insert notifications in notification_requests for user levels 5 and 6
-                $requestNotifSql = "INSERT INTO notification_requests 
-                                  (notification_message, notification_department_id, 
-                                   notification_user_level_id, notification_create) 
-                                  VALUES ('New Reservation Request Pending', :dept_id, :user_level_id, NOW())";
-    
-                // Insert for user level 5
-                $requestNotifStmt = $this->conn->prepare($requestNotifSql);
-                $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
-                
-                if (!$requestNotifStmt->execute()) {
-                    $this->conn->rollBack();
-                    return ['status' => 'error', 'message' => 'Failed to create notification request for level 5'];
+                // Audit: Request submitted (exclude any fetch-only ops)
+                try {
+                    $desc = ($type === 'venue')
+                        ? 'Venue Request submitted'
+                        : (($type === 'vehicle')
+                            ? 'Vehicle Request submitted'
+                            : 'Equipment Request submitted');
+                    $action = 'Reservation Request';
+                    $created_by = (int)$data['user_id'];
+
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $auditStmt = $this->conn->prepare($auditSql);
+                    $auditStmt->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $auditStmt->bindParam(':action', $action, PDO::PARAM_STR);
+                    $auditStmt->bindParam(':created_by', $created_by, PDO::PARAM_INT);
+                    if (!$auditStmt->execute()) {
+                        $err = $auditStmt->errorInfo();
+                        error_log('Audit log insert failed (submission block): ' . json_encode($err));
+                    }
+                } catch (Exception $e) {
+                    // Do not fail the main flow if audit logging fails; just log the error
+                    error_log('Audit log insert failed: ' . $e->getMessage());
                 }
     
-                // Insert for user level 6
-                $requestNotifStmt = $this->conn->prepare($requestNotifSql);
-                $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                $requestNotifStmt->bindValue(':user_level_id', 6, PDO::PARAM_INT);
-                
-                if (!$requestNotifStmt->execute()) {
-                    $this->conn->rollBack();
-                    return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
+                // Insert notifications in notification_requests for user levels 5 and 6
+                if (!$isGsdSecretary) {
+                    $requestNotifSql = "INSERT INTO notification_requests 
+                                      (notification_message, notification_department_id, 
+                                       notification_user_level_id, notification_create) 
+                                      VALUES ('New Reservation Request', :dept_id, :user_level_id, NOW())";
+        
+                    // Insert for user level 5
+                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
+                    $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
+                    $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
+                    
+                    if (!$requestNotifStmt->execute()) {
+                        $this->conn->rollBack();
+                        return ['status' => 'error', 'message' => 'Failed to create notification request for level 5'];
+                    }
+        
+                    // Insert for user level 6
+                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
+                    $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
+                    $requestNotifStmt->bindValue(':user_level_id', 6, PDO::PARAM_INT);
+                    
+                    if (!$requestNotifStmt->execute()) {
+                        $this->conn->rollBack();
+                        return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
+                    }
                 }
     
                 // --- PUSH NOTIFICATION LOGIC (for user levels 3, 6, 16, 17) ---
-                // Find all users with active push subscriptions in the same department and user level 5 or 6
-                $sqlPushUsers = "SELECT u.users_id
-                                    FROM tbl_users u
-                                    INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
-                                    WHERE u.users_department_id = :dept_id
-                                    AND u.users_user_level_id IN (5, 6)
-                                    AND ps.is_active = 1";
-                $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
-                $stmtPushUsers->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                $stmtPushUsers->execute();
-                $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
-    
-                // Log the number of users found for push notifications
-                error_log("Found " . count($pushUsers) . " users with push subscriptions for department " . $userLevel['users_department_id'] . " and user levels 5,6");
-    
-                // Prepare push notification data
-                $pushTitle = 'New Reservation Request';
-                $pushBody = 'A new reservation request is pending approval.';
-                $pushData = [
-                    'reservation_id' => $reservationId,
-                    'type' => 'reservation_approval',
-                    'department_id' => $userLevel['users_department_id'],
-                ];
-                $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
-    
-                $successCount = 0;
-                $errorCount = 0;
-    
-                foreach ($pushUsers as $pushUser) {
-                    $pushPayload = [
-                        'operation' => 'send',
-                        'user_id' => $pushUser['users_id'],
-                        'title' => $pushTitle,
-                        'body' => $pushBody,
-                        'data' => $pushData
+                if ($isGsdSecretary) {
+                    // For GSD Secretary: push directly to Admins in department 27
+                    $sqlPushUsers = "SELECT u.users_id
+                                        FROM tbl_users u
+                                        INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                                        WHERE u.users_user_level_id = 1
+                                        AND u.users_department_id = 27
+                                        AND ps.is_active = 1";
+                    $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
+                    $stmtPushUsers->execute();
+                    $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
+
+                    error_log("GSD Secretary flow: Found " . count($pushUsers) . " admin users in department 27 for push notification.");
+
+                    $pushTitle = 'New Reservation Request';
+                    $pushBody = 'A new reservation request waiting for confirmation.';
+                    $pushData = [
+                        'reservation_id' => $reservationId,
+                        'type' => 'reservation_confirmation'
                     ];
-                    
-                    error_log("Sending push notification to user {$pushUser['users_id']}: " . json_encode($pushPayload));
-                    
-                    $ch = curl_init();
-                    curl_setopt($ch, CURLOPT_URL, $pushUrl);
-                    curl_setopt($ch, CURLOPT_POST, true);
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushPayload));
-                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                        'Content-Type: application/json',
-                        'Content-Length: ' . strlen(json_encode($pushPayload))
-                    ]);
-                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                    
-                    $response = curl_exec($ch);
-                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    $error = curl_error($ch);
-                    curl_close($ch);
-                    
-                    error_log("Push notification response for user {$pushUser['users_id']}: HTTP $httpCode, Response: $response");
-                    
-                    if ($error || $httpCode < 200 || $httpCode >= 300) {
-                        error_log("Push notification failed for user {$pushUser['users_id']}: " . ($error ?: "HTTP $httpCode"));
-                        $errorCount++;
-                    } else {
-                        error_log("Push notification sent successfully to user {$pushUser['users_id']}");
-                        $successCount++;
+                    $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+
+                    foreach ($pushUsers as $pushUser) {
+                        $pushPayload = [
+                            'operation' => 'send',
+                            'user_id' => $pushUser['users_id'],
+                            'title' => $pushTitle,
+                            'body' => $pushBody,
+                            'data' => $pushData
+                        ];
+                        
+                        $ch = curl_init();
+                        curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                        curl_setopt($ch, CURLOPT_POST, true);
+                        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushPayload));
+                        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+                        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                        
+                        $response = curl_exec($ch);
+                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $error = curl_error($ch);
+                        curl_close($ch);
+                        
+                        if ($error || $httpCode < 200 || $httpCode >= 300) {
+                            error_log("GSD Secretary admin push failed for user {$pushUser['users_id']}: " . ($error ?: "HTTP $httpCode"));
+                        } else {
+                            error_log("GSD Secretary admin push sent successfully to user {$pushUser['users_id']}");
+                        }
                     }
+                } else {
+                    // Default: push to department 5/6 approvers in user's department
+                    $sqlPushUsers = "SELECT u.users_id
+                                        FROM tbl_users u
+                                        INNER JOIN tbl_push_subscriptions ps ON u.users_id = ps.user_id
+                                        WHERE u.users_department_id = :dept_id
+                                        AND u.users_user_level_id IN (5, 6)
+                                        AND ps.is_active = 1";
+                    $stmtPushUsers = $this->conn->prepare($sqlPushUsers);
+                    $stmtPushUsers->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
+                    $stmtPushUsers->execute();
+                    $pushUsers = $stmtPushUsers->fetchAll(PDO::FETCH_ASSOC);
+
+                    // Log the number of users found for push notifications
+                    error_log("Found " . count($pushUsers) . " users with push subscriptions for department " . $userLevel['users_department_id'] . " and user levels 5,6");
+
+                    // Prepare push notification data
+                    $pushTitle = 'New Reservation Request';
+                    $pushBody = 'A new reservation request is pending approval.';
+                    $pushData = [
+                        'reservation_id' => $reservationId,
+                        'type' => 'reservation_approval',
+                        'department_id' => $userLevel['users_department_id'],
+                    ];
+                    $pushUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+
+                    $successCount = 0;
+                    $errorCount = 0;
+
+                    foreach ($pushUsers as $pushUser) {
+                        $pushPayload = [
+                            'operation' => 'send',
+                            'user_id' => $pushUser['users_id'],
+                            'title' => $pushTitle,
+                            'body' => $pushBody,
+                            'data' => $pushData
+                        ];
+                        
+                        error_log("Sending push notification to user {$pushUser['users_id']}: " . json_encode($pushPayload));
+                        
+                        $ch = curl_init();
+                        curl_setopt($ch, CURLOPT_URL, $pushUrl);
+                        curl_setopt($ch, CURLOPT_POST, true);
+                        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($pushPayload));
+                        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                            'Content-Type: application/json',
+                            'Content-Length: ' . strlen(json_encode($pushPayload))
+                        ]);
+                        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                        
+                        $response = curl_exec($ch);
+                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        $error = curl_error($ch);
+                        curl_close($ch);
+                        
+                        error_log("Push notification response for user {$pushUser['users_id']}: HTTP $httpCode, Response: $response");
+                        
+                        if ($error || $httpCode < 200 || $httpCode >= 300) {
+                            error_log("Push notification failed for user {$pushUser['users_id']}: " . ($error ?: "HTTP $httpCode"));
+                            $errorCount++;
+                        } else {
+                            error_log("Push notification sent successfully to user {$pushUser['users_id']}");
+                            $successCount++;
+                        }
+                    }
+                    
+                    error_log("Push notifications sent after reservation creation: $successCount successful, $errorCount failed");
                 }
-                
-                error_log("Push notifications sent after reservation creation: $successCount successful, $errorCount failed");
     
             } elseif ($userLevelId == 5 || $userLevelId == 18) {
                 // Skip department approvals for user level 18 with department ID 28
@@ -1019,7 +1186,7 @@ class Reservation {
                     error_log("Skipping department approvals for user level 18 with department ID 28");
                 } 
                 // Only process department approvals if there are venues in the reservation and not skipped
-                elseif (!empty($data['venues']) && is_array($data['venues'])) {
+                elseif (!empty($data['venues']) && is_array($data['venues']) && !$isGsdSecretary) {
                     // Log the start of venue check
                     error_log("Checking venues for department approvals (Levels 5/18) - Reservation ID: " . $reservationId);
                     
@@ -1210,27 +1377,53 @@ class Reservation {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create notification'];
                 }
-    
-                // Insert notification in notification_requests based on user level
-                $requestNotifSql = "INSERT INTO notification_requests 
-                                  (notification_message, notification_department_id, 
-                                   notification_user_level_id, notification_create) 
-                                  VALUES ('New Reservation Request Pending', :dept_id, :user_level_id, NOW())";
-    
-                $requestNotifStmt = $this->conn->prepare($requestNotifSql);
                 
-                // If user level is 18, use department 27 and user level 1, else use department from user and level 5
-                if ($userLevelId == 18) {
-                    $requestNotifStmt->bindValue(':dept_id', 27, PDO::PARAM_INT);
-                    $requestNotifStmt->bindValue(':user_level_id', 1, PDO::PARAM_INT);
-                } else {
-                    $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                    $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
+                // Audit: Request submitted (user level 5/18 branch)
+                try {
+                    $desc = ($type === 'venue')
+                        ? 'Venue Request submitted'
+                        : (($type === 'vehicle')
+                            ? 'Vehicle Request submitted'
+                            : 'Equipment Request submitted');
+                    $action = 'Reservation Request';
+                    $created_by = (int)$data['user_id'];
+
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $auditStmt = $this->conn->prepare($auditSql);
+                    $auditStmt->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $auditStmt->bindParam(':action', $action, PDO::PARAM_STR);
+                    $auditStmt->bindParam(':created_by', $created_by, PDO::PARAM_INT);
+                    if (!$auditStmt->execute()) {
+                        $err = $auditStmt->errorInfo();
+                        error_log('Audit log insert failed (level 5/18 block): ' . json_encode($err));
+                    }
+                } catch (Exception $e) {
+                    // Do not fail the main flow if audit logging fails; just log the error
+                    error_log('Audit log insert failed: ' . $e->getMessage());
                 }
                 
-                if (!$requestNotifStmt->execute()) {
-                    $this->conn->rollBack();
-                    return ['status' => 'error', 'message' => 'Failed to create notification request'];
+                // Insert notification in notification_requests based on user level
+                if (!$isGsdSecretary) {
+                    $requestNotifSql = "INSERT INTO notification_requests 
+                                      (notification_message, notification_department_id, 
+                                      notification_user_level_id, notification_create) 
+                                      VALUES ('New Reservation Request', :dept_id, :user_level_id, NOW())";
+        
+                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
+                
+                    // If user level is 18, use department 27 and user level 1, else use department from user and level 5
+                    if ($userLevelId == 18) {
+                        $requestNotifStmt->bindValue(':dept_id', 27, PDO::PARAM_INT);
+                        $requestNotifStmt->bindValue(':user_level_id', 1, PDO::PARAM_INT);
+                    } else {
+                        $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
+                        $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
+                    }
+                    
+                    if (!$requestNotifStmt->execute()) {
+                        $this->conn->rollBack();
+                        return ['status' => 'error', 'message' => 'Failed to create notification request'];
+                    }
                 }
     
                 // --- PUSH NOTIFICATION TO ADMIN LOGIC (for user levels 5, 18) ---
@@ -1239,6 +1432,30 @@ class Reservation {
     
                 if ($userLevelId == 18) {
                     $pushDeptId = 27; // Specific department for VPAA requests
+                }
+
+                // If the requester is Secretary from GSD, directly push to Admin in department 27
+                try {
+                    $roleSql = "SELECT COALESCE(d.departments_name,'') AS dept_name, COALESCE(ul.user_level_name,'') AS level_name
+                                FROM tbl_users u
+                                LEFT JOIN tbl_departments d ON d.departments_id = u.users_department_id
+                                LEFT JOIN tbl_user_level ul ON ul.user_level_id = u.users_user_level_id
+                                WHERE u.users_id = :user_id
+                                LIMIT 1";
+                    $roleStmt = $this->conn->prepare($roleSql);
+                    $roleStmt->bindValue(':user_id', $data['user_id'], PDO::PARAM_INT);
+                    if ($roleStmt->execute()) {
+                        $roleRow = $roleStmt->fetch(PDO::FETCH_ASSOC);
+                        $deptName = strtolower(trim($roleRow['dept_name'] ?? ''));
+                        $levelName = strtolower(trim($roleRow['level_name'] ?? ''));
+                        if ($deptName === 'gsd' && $levelName === 'secretary') {
+                            // Ensure push goes to Admins in Department 27
+                            $pushDeptId = 27;
+                            error_log('Direct admin push to department 27 enabled (GSD Secretary requester).');
+                        }
+                    }
+                } catch (Exception $e) {
+                    error_log('Failed to evaluate GSD Secretary direct push: ' . $e->getMessage());
                 }
     
                 $sqlPushUsers = "SELECT u.users_id
@@ -1317,12 +1534,17 @@ class Reservation {
     
             $this->conn->commit();
             return ['status' => 'success', 'reservation_id' => $reservationId];
-    
-        } catch (PDOException $e) {
+
+        } catch (Exception $e) {
             if ($this->conn->inTransaction()) {
                 $this->conn->rollBack();
             }
             return ['status' => 'error', 'message' => $e->getMessage()];
+        } finally {
+            // Always release locks
+            if (!empty($acquired)) {
+                foreach ($acquired as $ak) { $this->releaseLock($ak); }
+            }
         }
     }
     
@@ -1387,23 +1609,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
                 $input['form_data']['type'] = 'venue';
                 $reservationResult = $reservation->createReservation($input['form_data'], 'venue');
-                
-                if ($reservationResult['status'] !== 'success') {
-                    throw new Exception($reservationResult['message']);
-                }
-
-                // Insert venues
-                $venueResult = $reservation->insertVenue($reservationResult['reservation_id'], $input['form_data']['venues']);
-                if ($venueResult['status'] !== 'success') {
-                    throw new Exception($venueResult['message']);
-                }
-
-                // Insert equipment
-                $equipmentResult = $reservation->insertEquipment($reservationResult['reservation_id'], $input['form_data']['equipment']);
-                if ($equipmentResult['status'] !== 'success') {
-                    throw new Exception($equipmentResult['message']);
-                }
-        
                 echo json_encode($reservationResult);
                 
             } catch (Exception $e) {
@@ -1447,63 +1652,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
                 $input['form_data']['type'] = 'vehicle';
                 $reservationResult = $reservation->createReservation($input['form_data'], 'vehicle');
-                
-                if ($reservationResult['status'] !== 'success') {
-                    throw new Exception($reservationResult['message']);
-                }
-
-                // Insert vehicles
-                $vehicleResult = $reservation->insertVehicles($reservationResult['reservation_id'], $input['form_data']['vehicles']);
-                if ($vehicleResult['status'] !== 'success') {
-                    throw new Exception($vehicleResult['message']);
-                }
-
-                // Map vehicle_id to reservation_vehicle_id for this reservation
-                $vehicleIds = $input['form_data']['vehicles'];
-                $reservationId = $reservationResult['reservation_id'];
-                $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
-                $sql = "SELECT reservation_vehicle_id, reservation_vehicle_vehicle_id FROM tbl_reservation_vehicle WHERE reservation_reservation_id = ? AND reservation_vehicle_vehicle_id IN ($placeholders)";
-                $stmt = $reservation->conn->prepare($sql);
-                $params = array_merge([$reservationId], $vehicleIds);
-                $stmt->execute($params);
-                $vehicleMap = [];
-                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                    $vehicleMap[$row['reservation_vehicle_vehicle_id']] = $row['reservation_vehicle_id'];
-                }
-
-                // Insert passengers
-                $passengerResult = $reservation->insertPassengers($reservationResult['reservation_id'], $input['form_data']['passengers']);
-                if ($passengerResult['status'] !== 'success') {
-                    throw new Exception($passengerResult['message']);
-                }
-
-                // Get the drivers array from input, each with vehicle_id
-                $drivers = isset($input['form_data']['drivers']) ? $input['form_data']['drivers'] : null;
-                // Map vehicle_id to reservation_vehicle_id for each driver
-                if (is_array($drivers)) {
-                    foreach ($drivers as &$driver) {
-                        if (isset($driver['vehicle_id']) && isset($vehicleMap[$driver['vehicle_id']])) {
-                            $driver['reservation_vehicle_id'] = $vehicleMap[$driver['vehicle_id']];
-                        } else {
-                            $driver['reservation_vehicle_id'] = null;
-                        }
-                    }
-                    unset($driver);
-                }
-                // Insert driver records with reservation_vehicle_id
-                $driverResult = $reservation->insertDriver($drivers);
-                if ($driverResult['status'] !== 'success') {
-                    throw new Exception($driverResult['message']);
-                }
-
-                // Insert equipment if specified
-                if (isset($input['form_data']['equipment']) && !empty($input['form_data']['equipment'])) {
-                    $equipmentResult = $reservation->insertEquipment($reservationResult['reservation_id'], $input['form_data']['equipment']);
-                    if ($equipmentResult['status'] !== 'success') {
-                        throw new Exception($equipmentResult['message']);
-                    }
-                }
-        
                 echo json_encode($reservationResult);
                 
             } catch (Exception $e) {
@@ -1536,17 +1684,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $input['form_data']['type'] = 'equipment';
                 $reservationResult = $reservation->createReservation($input['form_data'], 'equipment');
-                
-                if ($reservationResult['status'] !== 'success') {
-                    throw new Exception($reservationResult['message']);
-                }
-
-                // Insert equipment
-                $equipmentResult = $reservation->insertEquipment($reservationResult['reservation_id'], $input['form_data']['equipment']);
-                if ($equipmentResult['status'] !== 'success') {
-                    throw new Exception($equipmentResult['message']);
-                }
-
                 echo json_encode($reservationResult);
                 
             } catch (Exception $e) {

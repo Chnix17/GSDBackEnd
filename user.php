@@ -195,7 +195,7 @@ class User {
                 event_type,
                 area_type
                 FROM tbl_venue
-                WHERE status_availability_id != 2 AND is_active = 1
+                WHERE is_active = 1
                 ORDER BY ven_id DESC
                 ";
         return $this->executeQuery($sql);
@@ -1207,6 +1207,26 @@ public function fetchEquipmentsWithStatus() {
             ]);
 
             if ($success) {
+                // Non-blocking audit logging for password update
+                try {
+                    // Fetch user's full name: First + Middle initial + Last
+                    $sqlName = "SELECT CONCAT(\n                                    users_fname,\n                                    CASE WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.') ELSE '' END,\n                                    ' ', users_lname\n                                 ) AS full_name\n                               FROM tbl_users WHERE users_id = :uid";
+                    $stmtName = $this->conn->prepare($sqlName);
+                    $stmtName->bindParam(':uid', $userId, PDO::PARAM_INT);
+                    $stmtName->execute();
+                    $rowName = $stmtName->fetch(PDO::FETCH_ASSOC);
+                    $fullName = $rowName['full_name'] ?? ('User #' . (int)$userId);
+
+                    $description = 'Password updated by: ' . $fullName;
+                    $action = 'UPDATE PASSWORD';
+
+                    $stmtAudit = $this->conn->prepare("INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)");
+                    $stmtAudit->bindParam(':description', $description, PDO::PARAM_STR);
+                    $stmtAudit->bindParam(':action', $action, PDO::PARAM_STR);
+                    $stmtAudit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                    $stmtAudit->execute();
+                } catch (Exception $e) { /* ignore audit logging errors */ }
+
                 return json_encode([
                     'status' => 'success',
                     'message' => 'Password updated successfully'
@@ -1311,6 +1331,15 @@ public function fetchEquipmentsWithStatus() {
                 'users_user_level_id' // Allow updating user level
             ];
 
+            // Fetch pre-update snapshot for comparison (to list only actual changes)
+            $beforeUser = null;
+            if (!empty($userData['users_id'])) {
+                $beforeSql = "SELECT " . implode(', ', $allowedFields) . " FROM tbl_users WHERE users_id = :userId LIMIT 1";
+                $beforeStmt = $this->conn->prepare($beforeSql);
+                $beforeStmt->execute([':userId' => $userData['users_id']]);
+                $beforeUser = $beforeStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            }
+
             // Build update query dynamically based on provided data
             $updateFields = [];
             $params = [];
@@ -1347,6 +1376,78 @@ public function fetchEquipmentsWithStatus() {
                 $selectStmt = $this->conn->prepare($selectSql);
                 $selectStmt->execute(['userId' => $userData['users_id']]);
                 $updatedUser = $selectStmt->fetch(PDO::FETCH_ASSOC);
+
+                // Non-blocking audit logging for profile update (list only changed fields)
+                try {
+                    // Determine actor (personnel) id: prefer explicit user_personnel_id, fallback to updated user id
+                    $actorId = isset($userData['user_personnel_id']) && $userData['user_personnel_id'] !== ''
+                        ? (int)$userData['user_personnel_id']
+                        : (int)$userData['users_id'];
+
+                    // Subject name (updated user)
+                    $mi = (!empty($updatedUser['users_mname'])) ? (' ' . substr($updatedUser['users_mname'], 0, 1) . '.') : '';
+                    $subjectName = trim(($updatedUser['users_fname'] ?? '') . $mi . ' ' . ($updatedUser['users_lname'] ?? ''));
+                    if ($subjectName === '') { $subjectName = 'User #' . (int)$updatedUser['users_id']; }
+
+                    // Actor name
+                    if ($actorId === (int)$updatedUser['users_id']) {
+                        $actorName = $subjectName;
+                    } else {
+                        $sqlActor = "SELECT CONCAT(\n                                        users_fname,\n                                        CASE WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.') ELSE '' END,\n                                        ' ', users_lname\n                                     ) AS full_name\n                                   FROM tbl_users WHERE users_id = :uid";
+                        $stmtActor = $this->conn->prepare($sqlActor);
+                        $stmtActor->bindParam(':uid', $actorId, PDO::PARAM_INT);
+                        $stmtActor->execute();
+                        $rowActor = $stmtActor->fetch(PDO::FETCH_ASSOC);
+                        $actorName = $rowActor['full_name'] ?? ('User #' . $actorId);
+                    }
+
+                    // Build list of changed fields (friendly names)
+                    $fieldMap = [
+                        'users_fname' => 'First Name',
+                        'users_mname' => 'Middle Name',
+                        'users_lname' => 'Last Name',
+                        'users_email' => 'Email',
+                        'users_school_id' => 'School ID',
+                        'users_contact_number' => 'Contact Number',
+                        'users_department_id' => 'Department',
+                        'users_pic' => 'Profile Picture',
+                        'users_suffix' => 'Suffix',
+                        'title_id' => 'Title',
+                        'users_user_level_id' => 'User Level',
+                    ];
+                    $candidateKeys = array_filter(array_keys($params), function($k){ return $k !== 'userId'; });
+                    $changedKeys = [];
+                    foreach ($candidateKeys as $k) {
+                        $newVal = isset($params[$k]) ? (string)$params[$k] : '';
+                        $oldVal = isset($beforeUser[$k]) ? (string)$beforeUser[$k] : '';
+                        if (trim($newVal) !== trim($oldVal)) {
+                            $changedKeys[] = $k;
+                        }
+                    }
+                    // Build detailed change list with old -> new values
+                    $changes = [];
+                    foreach ($changedKeys as $k) {
+                        $label = $fieldMap[$k] ?? $k;
+                        $oldVal = isset($beforeUser[$k]) ? (string)$beforeUser[$k] : '';
+                        $newVal = isset($params[$k]) ? (string)$params[$k] : '';
+                        if ($k === 'users_pic') {
+                            $changes[] = $label . ': [changed]';
+                        } else {
+                            $changes[] = $label . ": '" . $oldVal . "' -> '" . $newVal . "'";
+                        }
+                    }
+                    $changesList = implode(', ', $changes);
+
+                    $description = 'Profile updated for: ' . $subjectName;
+                    if ($changesList !== '') { $description .= ' (Changes: ' . $changesList . ')'; }
+                    $action = 'UPDATE PROFILE';
+
+                    $stmtAudit = $this->conn->prepare("INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)");
+                    $stmtAudit->bindParam(':description', $description, PDO::PARAM_STR);
+                    $stmtAudit->bindParam(':action', $action, PDO::PARAM_STR);
+                    $stmtAudit->bindParam(':created_by', $actorId, PDO::PARAM_INT);
+                    $stmtAudit->execute();
+                } catch (Exception $e) { /* ignore audit logging errors */ }
 
                 return json_encode([
                     'status' => 'success',
@@ -1779,6 +1880,7 @@ public function getBulkUsage($equipId) {
 
 public function fetchAllAssignedReleases() {
     try {
+        error_log('[fetchAllAssignedReleases] start');
         $reservations = [];
 
         // 1) Venue checklist items
@@ -1788,6 +1890,7 @@ public function fetchAllAssignedReleases() {
                 rc_venue.reservation_checklist_venue_id,
                 rc_venue.isChecked AS venue_isChecked,
                 rc_venue.personnel_id AS venue_personnel_id,
+                rc_venue.admin_id AS venue_admin_id,
                 rv.reservation_reservation_id,
                 rv.reservation_venue_id,
                 rv.reservation_venue_venue_id,
@@ -1813,7 +1916,12 @@ public function fetchAllAssignedReleases() {
             ORDER BY rv.reservation_reservation_id DESC
         ";
         $stmtVenue = $this->conn->query($sqlVenue);
+        if ($stmtVenue === false) {
+            $ei = $this->conn->errorInfo();
+            throw new PDOException('Venue query failed: ' . ($ei[2] ?? 'unknown error'));
+        }
         $venueData = $stmtVenue->fetchAll(PDO::FETCH_ASSOC);
+        error_log('[fetchAllAssignedReleases] venue rows=' . count($venueData));
 
         // 2) Vehicle checklist items
         $sqlVehicle = "
@@ -1822,6 +1930,7 @@ public function fetchAllAssignedReleases() {
                 rc_vehicle.reservation_checklist_vehicle_id,
                 rc_vehicle.isChecked AS vehicle_isChecked,
                 rc_vehicle.personnel_id AS vehicle_personnel_id,
+                rc_vehicle.admin_id AS vehicle_admin_id,
                 rv.reservation_reservation_id,
                 rv.reservation_vehicle_id,
                 rv.reservation_vehicle_vehicle_id,
@@ -1848,7 +1957,12 @@ public function fetchAllAssignedReleases() {
             ORDER BY rv.reservation_reservation_id DESC
         ";
         $stmtVehicle = $this->conn->query($sqlVehicle);
+        if ($stmtVehicle === false) {
+            $ei = $this->conn->errorInfo();
+            throw new PDOException('Vehicle query failed: ' . ($ei[2] ?? 'unknown error'));
+        }
         $vehicleData = $stmtVehicle->fetchAll(PDO::FETCH_ASSOC);
+        error_log('[fetchAllAssignedReleases] vehicle rows=' . count($vehicleData));
 
         // 3) Equipment checklist items
         $sqlEquipment = "
@@ -1857,6 +1971,7 @@ public function fetchAllAssignedReleases() {
                 rc_equipment.reservation_checklist_equipment_id,
                 rc_equipment.isChecked AS equipment_isChecked,
                 rc_equipment.personnel_id AS equipment_personnel_id,
+                rc_equipment.admin_id AS equipment_admin_id,
                 re.reservation_reservation_id,
                 re.reservation_equipment_id,
                 re.reservation_equipment_equip_id,
@@ -1886,43 +2001,54 @@ public function fetchAllAssignedReleases() {
             ORDER BY re.reservation_reservation_id DESC
         ";
         $stmtEquipment = $this->conn->query($sqlEquipment);
-        $equipmentData = $stmtEquipment->fetchAll(PDO::FETCH_ASSOC);
-
-        // Get all personnel IDs from all checklist items
-        $personnelIds = [];
-        foreach (array_merge($venueData, $vehicleData, $equipmentData) as $row) {
-            if (!empty($row['venue_personnel_id'])) {
-                $personnelIds[] = $row['venue_personnel_id'];
-            }
-            if (!empty($row['vehicle_personnel_id'])) {
-                $personnelIds[] = $row['vehicle_personnel_id'];
-            }
-            if (!empty($row['equipment_personnel_id'])) {
-                $personnelIds[] = $row['equipment_personnel_id'];
-            }
+        if ($stmtEquipment === false) {
+            $ei = $this->conn->errorInfo();
+            throw new PDOException('Equipment query failed: ' . ($ei[2] ?? 'unknown error'));
         }
-        
-        // Remove duplicates and empty values
-        $personnelIds = array_unique(array_filter($personnelIds));
-        
-        // Fetch personnel names in a single query
-        $personnelNames = [];
-        if (!empty($personnelIds)) {
-            $placeholders = implode(',', array_fill(0, count($personnelIds), '?'));
-            $sqlPersonnel = "
+        $equipmentData = $stmtEquipment->fetchAll(PDO::FETCH_ASSOC);
+        error_log('[fetchAllAssignedReleases] equipment rows=' . count($equipmentData));
+
+        // Collect all relevant user IDs (personnel and admins) from checklist items
+        $userIds = [];
+        foreach (array_merge($venueData, $vehicleData, $equipmentData) as $row) {
+            if (!empty($row['venue_personnel_id'])) { $userIds[] = $row['venue_personnel_id']; }
+            if (!empty($row['vehicle_personnel_id'])) { $userIds[] = $row['vehicle_personnel_id']; }
+            if (!empty($row['equipment_personnel_id'])) { $userIds[] = $row['equipment_personnel_id']; }
+            if (!empty($row['venue_admin_id'])) { $userIds[] = $row['venue_admin_id']; }
+            if (!empty($row['vehicle_admin_id'])) { $userIds[] = $row['vehicle_admin_id']; }
+            if (!empty($row['equipment_admin_id'])) { $userIds[] = $row['equipment_admin_id']; }
+        }
+
+        //  Remove duplicates and empty values, then reindex for positional params
+        $userIds = array_values(array_unique(array_filter($userIds)));
+        error_log('[fetchAllAssignedReleases] unique userIds count=' . count($userIds));
+
+        // Fetch names in a single query
+        $userNames = [];
+        if (!empty($userIds)) {
+            $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+            $sqlUsers = "
                 SELECT 
-                    users_id,
-                    CONCAT(users_fname, ' ', COALESCE(users_mname, ''), ' ', users_lname) AS full_name
-                FROM tbl_users
-                WHERE users_id IN ($placeholders)
+                    u.users_id,
+                    TRIM(CONCAT(
+                        u.users_fname, ' ',
+                        CASE 
+                            WHEN u.users_mname IS NULL OR u.users_mname = '' THEN '' 
+                            ELSE CONCAT(SUBSTRING(u.users_mname, 1, 1), '. ')
+                        END,
+                        u.users_lname
+                    )) AS full_name
+                FROM tbl_users u
+                WHERE u.users_id IN ($placeholders)
             ";
-            $stmtPersonnel = $this->conn->prepare($sqlPersonnel);
-            $stmtPersonnel->execute($personnelIds);
-            $personnelData = $stmtPersonnel->fetchAll(PDO::FETCH_ASSOC);
-            
-            foreach ($personnelData as $person) {
-                $personnelNames[$person['users_id']] = $person['full_name'];
+            $stmtUsers = $this->conn->prepare($sqlUsers);
+            $stmtUsers->execute($userIds);
+            $userData = $stmtUsers->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($userData as $person) {
+                $userNames[$person['users_id']] = $person['full_name'];
             }
+            error_log('[fetchAllAssignedReleases] fetched user names=' . count($userData));
         }
 
         foreach (array_merge($venueData, $vehicleData, $equipmentData) as $row) {
@@ -1953,7 +2079,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                 => $row['checklist_venue_name'],
                             'isChecked'                      => (int)$row['venue_isChecked'],
                             'personnel_id'                   => $row['venue_personnel_id'],
-                            'personnel_name'                 => $personnelNames[$row['venue_personnel_id']] ?? 'N/A'
+                            'personnel_name'                 => $userNames[$row['venue_personnel_id']] ?? 'N/A',
+                            'admin_id'                       => $row['venue_admin_id'],
+                            'admin_name'                     => $userNames[$row['venue_admin_id']] ?? 'N/A'
                         ];
                         $found = true;
                         break;
@@ -1972,7 +2100,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                 => $row['checklist_venue_name'],
                             'isChecked'                      => (int)$row['venue_isChecked'],
                             'personnel_id'                   => $row['venue_personnel_id'],
-                            'personnel_name'                 => $personnelNames[$row['venue_personnel_id']] ?? 'N/A'
+                            'personnel_name'                 => $userNames[$row['venue_personnel_id']] ?? 'N/A',
+                            'admin_id'                       => $row['venue_admin_id'],
+                            'admin_name'                     => $userNames[$row['venue_admin_id']] ?? 'N/A'
                         ]]
                     ];
                 }
@@ -1988,7 +2118,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                   => $row['checklist_vehicle_name'],
                             'isChecked'                        => (int)$row['vehicle_isChecked'],
                             'personnel_id'                     => $row['vehicle_personnel_id'],
-                            'personnel_name'                   => $personnelNames[$row['vehicle_personnel_id']] ?? 'N/A'
+                            'personnel_name'                   => $userNames[$row['vehicle_personnel_id']] ?? 'N/A',
+                            'admin_id'                         => $row['vehicle_admin_id'],
+                            'admin_name'                       => $userNames[$row['vehicle_admin_id']] ?? 'N/A'
                         ];
                         $found = true;
                         break;
@@ -2008,7 +2140,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                   => $row['checklist_vehicle_name'],
                             'isChecked'                        => (int)$row['vehicle_isChecked'],
                             'personnel_id'                     => $row['vehicle_personnel_id'],
-                            'personnel_name'                   => $personnelNames[$row['vehicle_personnel_id']] ?? 'N/A'
+                            'personnel_name'                   => $userNames[$row['vehicle_personnel_id']] ?? 'N/A',
+                            'admin_id'                         => $row['vehicle_admin_id'],
+                            'admin_name'                       => $userNames[$row['vehicle_admin_id']] ?? 'N/A'
                         ]]
                     ];
                 }
@@ -2024,7 +2158,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                     => $row['checklist_equipment_name'],
                             'isChecked'                          => (int)$row['equipment_isChecked'],
                             'personnel_id'                       => $row['equipment_personnel_id'],
-                            'personnel_name'                     => $personnelNames[$row['equipment_personnel_id']] ?? 'N/A'
+                            'personnel_name'                     => $userNames[$row['equipment_personnel_id']] ?? 'N/A',
+                            'admin_id'                           => $row['equipment_admin_id'],
+                            'admin_name'                         => $userNames[$row['equipment_admin_id']] ?? 'N/A'
                         ];
                         $found = true;
                         break;
@@ -2046,7 +2182,9 @@ public function fetchAllAssignedReleases() {
                             'checklist_name'                     => $row['checklist_equipment_name'],
                             'isChecked'                          => (int)$row['equipment_isChecked'],
                             'personnel_id'                       => $row['equipment_personnel_id'],
-                            'personnel_name'                     => $personnelNames[$row['equipment_personnel_id']] ?? 'N/A'
+                            'personnel_name'                     => $userNames[$row['equipment_personnel_id']] ?? 'N/A',
+                            'admin_id'                           => $row['equipment_admin_id'],
+                            'admin_name'                         => $userNames[$row['equipment_admin_id']] ?? 'N/A'
                         ]]
                     ];
                 }
@@ -2081,6 +2219,7 @@ public function fetchAllAssignedReleases() {
             $stmtUnits = $this->conn->prepare($sqlUnits);
             $stmtUnits->execute($allEqIds);
             $unitsData = $stmtUnits->fetchAll(PDO::FETCH_ASSOC);
+            error_log('[fetchAllAssignedReleases] units rows=' . count($unitsData));
 
             // group by reservation_equipment_id
             $unitsByResEquip = [];
@@ -2129,7 +2268,10 @@ public function fetchAllAssignedReleases() {
                 WHERE r.reservation_id = :rid
             ";
             $st  = $this->conn->prepare($sqlR);
-            $st->execute(['rid' => $rid]);
+            if (!$st->execute(['rid' => $rid])) {
+                $ei = $st->errorInfo();
+                throw new PDOException('Header query failed for reservation ' . $rid . ': ' . ($ei[2] ?? 'unknown error'));
+            }
             $hdr = $st->fetch(PDO::FETCH_ASSOC);
             if ($hdr) {
                 $res['reservation_title']        = $hdr['reservation_title'];
@@ -2159,16 +2301,23 @@ public function fetchAllAssignedReleases() {
         });
 
         // Final return
+        error_log('[fetchAllAssignedReleases] success reservations=' . count($reservations) . ' filtered=' . count($filteredReservations));
         return json_encode([
             'status' => 'success',
-            'data'   => array_values($reservations)
+            'data'   => array_values($filteredReservations)
         ]);
 
     } catch (PDOException $e) {
         error_log("Error in fetchAllAssignedReleases: " . $e->getMessage());
         return json_encode([
             'status' => 'error',
-            'message' => 'An error occurred while fetching done releases.'
+            'message' => 'An error occurred while fetching assigned releases.'
+        ]);
+    } catch (Exception $e) {
+        error_log("Unexpected error in fetchAllAssignedReleases: " . $e->getMessage());
+        return json_encode([
+            'status' => 'error',
+            'message' => 'An error occurred while fetching assigned releases.'
         ]);
     }
 }
@@ -2671,8 +2820,10 @@ public function displayedMaintenanceResourcesDone() {
         return $this->executeQuery($sql);
     }
 
-    public function updateHoliday($holidayId, $holidayName, $holidayDate) {
+    public function updateHoliday($holidayId, $holidayName, $holidayDate, $userId = null) {
         try {
+            // Debug: log userId and target holiday
+            error_log("updateHoliday userId=" . var_export($userId, true) . ", holidayId=" . var_export($holidayId, true));
             // First, get the current values to check if they're the same
             $getCurrentSql = "SELECT holiday_name, holiday_date FROM `tbl_holidays` 
                              WHERE `holiday_id` = :holiday_id";
@@ -2688,9 +2839,34 @@ public function displayedMaintenanceResourcesDone() {
                 ]);
             }
     
-            // If values are the same as current values, return success
+            // If values are the same as current values, still audit and return success
             if ($currentData['holiday_name'] === $holidayName && 
                 $currentData['holiday_date'] === $holidayDate) {
+                // Audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Holiday: '" . ($currentData['holiday_name'] ?? '') . "' on '" . ($currentData['holiday_date'] ?? '') . "' -> '" . ($holidayName ?? '') . "' on '" . ($holidayDate ?? '') . "'";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                    try {
+                        $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                        $sel->execute();
+                        $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (updateHoliday same-values): " . json_encode($latest));
+                    } catch (PDOException $ex) {
+                        error_log("Audit log select failed (updateHoliday same-values): " . $ex->getMessage());
+                    }
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateHoliday same-values): " . $e->getMessage());
+                }
                 return json_encode([
                     'status' => 'success', 
                     'message' => 'Holiday updated successfully'
@@ -2731,6 +2907,31 @@ public function displayedMaintenanceResourcesDone() {
             ]);
     
             if ($stmt->rowCount() > 0) {
+                // Audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Holiday: '" . ($currentData['holiday_name'] ?? '') . "' on '" . ($currentData['holiday_date'] ?? '') . "' -> '" . ($holidayName ?? '') . "' on '" . ($holidayDate ?? '') . "'";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                    try {
+                        $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                        $sel->execute();
+                        $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (updateHoliday): " . json_encode($latest));
+                    } catch (PDOException $ex) {
+                        error_log("Audit log select failed (updateHoliday): " . $ex->getMessage());
+                    }
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateHoliday): " . $e->getMessage());
+                }
                 return json_encode([
                     'status' => 'success', 
                     'message' => 'Holiday updated successfully'
@@ -2998,82 +3199,67 @@ public function saveStock($data) {
         $inputQuantity = (int)$data['quantity'];
         $user_admin_id = (int)$data['user_admin_id'];
 
+        // Enforce always-increase behavior: quantity must be positive
+        if ($inputQuantity <= 0) {
+            return json_encode(['status' => 'error', 'message' => 'Quantity must be greater than 0']);
+        }
+
+        // Determine actor id (for audit created_by)
+        $actorId = null;
+        if (isset($data['user_personnel_id']) && $data['user_personnel_id'] !== '') {
+            $actorId = (int)$data['user_personnel_id'];
+        } elseif (isset($data['user_admin_id']) && $data['user_admin_id'] !== '') {
+            $actorId = (int)$data['user_admin_id'];
+        }
+
+        // Fetch equipment name for audit description
+        $equipName = null;
+        try {
+            $enameStmt = $this->conn->prepare("SELECT equip_name FROM tbl_equipments WHERE equip_id = :id");
+            $enameStmt->execute([':id' => $equip_id]);
+            $row = $enameStmt->fetch(PDO::FETCH_ASSOC);
+            if ($row && isset($row['equip_name'])) {
+                $equipName = $row['equip_name'];
+            }
+        } catch (Throwable $te) { /* ignore name fetch errors */ }
+
         // Check current stock entry
         $checkSql = "SELECT quantity, on_hand_quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id";
         $checkStmt = $this->conn->prepare($checkSql);
         $checkStmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
         $checkStmt->execute();
-
         if ($checkStmt->rowCount() > 0) {
-            $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
-            $currentQuantity = (int)$existing['quantity'];
-            $currentOnHand = (int)$existing['on_hand_quantity'];
+            // Always increment existing stock by the provided quantity
+            $sql = "UPDATE tbl_equipment_quantity SET 
+                        quantity = quantity + :add_qty,
+                        on_hand_quantity = on_hand_quantity + :add_qty,
+                        last_updated = NOW(),
+                        user_admin_id = :user_admin_id
+                    WHERE equip_id = :equip_id";
 
-            if ($inputQuantity < $currentQuantity) {
-                // Subtract difference
-                $diff = $currentQuantity - $inputQuantity;
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':add_qty', $inputQuantity, PDO::PARAM_INT);
+            $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
+            $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
 
-                $sql = "UPDATE tbl_equipment_quantity SET 
-                            quantity = quantity - :diff,
-                            on_hand_quantity = on_hand_quantity - :diff,
-                            last_updated = NOW(),
-                            user_admin_id = :user_admin_id
-                        WHERE equip_id = :equip_id";
-
-                $stmt = $this->conn->prepare($sql);
-                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
-                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
-                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
-
-                if ($stmt->execute()) {
-                    return json_encode([
-                        'status' => 'success',
-                        'message' => "Stock decreased by $diff successfully"
+            if ($stmt->execute()) {
+                // Audit log (non-blocking): Equipment (name) has increase quantity: X
+                try {
+                    $desc = 'Equipment (' . ($equipName ?? ('#' . $equip_id)) . ') has increase quantity: ' . $inputQuantity;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $audit->execute([
+                        ':description' => $desc,
+                        ':action' => 'UPDATE QUANTITY',
+                        ':created_by' => $actorId
                     ]);
-                }
-                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (decrease)']);
-            } elseif ($inputQuantity > $currentQuantity) {
-                // Add difference
-                $diff = $inputQuantity - $currentQuantity;
-
-                $sql = "UPDATE tbl_equipment_quantity SET 
-                            quantity = quantity + :diff,
-                            on_hand_quantity = on_hand_quantity + :diff,
-                            last_updated = NOW(),
-                            user_admin_id = :user_admin_id
-                        WHERE equip_id = :equip_id";
-
-                $stmt = $this->conn->prepare($sql);
-                $stmt->bindParam(':diff', $diff, PDO::PARAM_INT);
-                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
-                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
-
-                if ($stmt->execute()) {
-                    return json_encode([
-                        'status' => 'success',
-                        'message' => "Stock increased by $diff successfully"
-                    ]);
-                }
-                return json_encode(['status' => 'error', 'message' => 'Failed to update stock (increase)']);
-            } else {
-                // Quantity is the same, update timestamp and user only
-                $sql = "UPDATE tbl_equipment_quantity SET 
-                            last_updated = NOW(),
-                            user_admin_id = :user_admin_id
-                        WHERE equip_id = :equip_id";
-
-                $stmt = $this->conn->prepare($sql);
-                $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
-                $stmt->bindParam(':equip_id', $equip_id, PDO::PARAM_INT);
-
-                if ($stmt->execute()) {
-                    return json_encode([
-                        'status' => 'success',
-                        'message' => 'Stock unchanged, updated timestamp'
-                    ]);
-                }
-                return json_encode(['status' => 'error', 'message' => 'Failed to update timestamp']);
+                } catch (Throwable $te) { /* ignore audit errors */ }
+                return json_encode([
+                    'status' => 'success',
+                    'message' => "Stock increased by $inputQuantity successfully"
+                ]);
             }
+            return json_encode(['status' => 'error', 'message' => 'Failed to update stock']);
         } else {
             // Insert new stock record
             $sql = "INSERT INTO tbl_equipment_quantity (
@@ -3088,6 +3274,17 @@ public function saveStock($data) {
             $stmt->bindParam(':user_admin_id', $user_admin_id, PDO::PARAM_INT);
 
             if ($stmt->execute()) {
+                // Audit log (non-blocking): Equipment (name) has increase quantity: X
+                try {
+                    $desc = 'Equipment (' . ($equipName ?? ('#' . $equip_id)) . ') has increase quantity: ' . $inputQuantity;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $audit->execute([
+                        ':description' => $desc,
+                        ':action' => 'UPDATE STOCK',
+                        ':created_by' => $actorId
+                    ]);
+                } catch (Throwable $te) { /* ignore audit errors */ }
                 return json_encode([
                     'status' => 'success',
                     'message' => 'Equipment stock added successfully'
@@ -3132,6 +3329,25 @@ public function saveUnit($data) {
             return json_encode(['status' => 'error', 'message' => 'This serial number already exists']);
         }
 
+        // Determine actor id (for audit created_by)
+        $actorId = null;
+        if (isset($data['user_personnel_id']) && $data['user_personnel_id'] !== '') {
+            $actorId = (int)$data['user_personnel_id'];
+        } elseif (isset($data['user_admin_id']) && $data['user_admin_id'] !== '') {
+            $actorId = (int)$data['user_admin_id'];
+        }
+
+        // Fetch equipment name for audit description
+        $equipName = null;
+        try {
+            $enameStmt = $this->conn->prepare("SELECT equip_name FROM tbl_equipments WHERE equip_id = :id");
+            $enameStmt->execute([':id' => $data['equip_id']]);
+            $row = $enameStmt->fetch(PDO::FETCH_ASSOC);
+            if ($row && isset($row['equip_name'])) {
+                $equipName = $row['equip_name'];
+            }
+        } catch (Throwable $te) { /* ignore name fetch errors */ }
+
         // Insert query (brand, size, color removed)
         $sql = "INSERT INTO tbl_equipment_unit (
                     equip_id, serial_number, status_availability_id, unit_created_at, is_active, user_admin_id
@@ -3145,9 +3361,23 @@ public function saveUnit($data) {
         $stmt->bindParam(':status_id', $data['status_availability_id'], PDO::PARAM_INT);
         $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Equipment unit added successfully'])
-            : json_encode(['status' => 'error', 'message' => 'Failed to add equipment unit']);
+        $ok = $stmt->execute();
+        if ($ok) {
+            // Audit log (non-blocking): Equipment (name) has new Serial Number: {serial}
+            try {
+                $desc = 'Equipment (' . ($equipName ?? ('#' . $data['equip_id'])) . ') has new Serial Number: ' . $data['serial_number'];
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $audit->execute([
+                    ':description' => $desc,
+                    ':action' => 'CREATE UNIT',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
+            return json_encode(['status' => 'success', 'message' => 'Equipment unit added successfully']);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Failed to add equipment unit']);
+        }
 
     } catch (PDOException $e) {
         error_log("Database error in saveUnit: " . $e->getMessage());
@@ -3277,8 +3507,10 @@ public function updateEquipmentUnit($unitData) {
 }
 
 
-public function saveHoliday($data) {
+public function saveHoliday($data, $userId = null) {
         try {
+            // Debug: log userId for auditing context
+            error_log("saveHoliday userId=" . var_export($userId, true));
             // If data is a JSON string, decode it
             if (is_string($data)) {
                 $data = json_decode($data, true);
@@ -3312,6 +3544,34 @@ public function saveHoliday($data) {
             $stmt->bindParam(':date', $data['holiday_date'], PDO::PARAM_STR);
 
             if ($stmt->execute()) {
+                // Non-blocking audit log insert
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Created Holiday: '" . ($data['holiday_name'] ?? '') . "' on '" . ($data['holiday_date'] ?? '') . "'";
+                    $action = 'CREATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    if (!$audit->execute()) {
+                        error_log("Audit log insert failed (saveHoliday): " . print_r($audit->errorInfo(), true));
+                    } else {
+                        try {
+                            $latestAuditStmt = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1");
+                            $latest = $latestAuditStmt ? $latestAuditStmt->fetch(PDO::FETCH_ASSOC) : null;
+                            error_log("audit_log latest (saveHoliday): " . json_encode($latest));
+                        } catch (Throwable $te) {
+                            error_log("Failed to read back latest audit_log (saveHoliday): " . $te->getMessage());
+                        }
+                    }
+                } catch (Throwable $e2) {
+                    error_log("Audit logging error (saveHoliday): " . $e2->getMessage());
+                }
+
                 return json_encode([
                     'status' => 'success',
                     'message' => 'Holiday added successfully'
@@ -3550,9 +3810,24 @@ public function saveEquipment($json) {
         $stmt->bindParam(':type', $data['equip_type']);
         $stmt->bindParam(':admin_id', $data['user_admin_id'], PDO::PARAM_INT);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Equipment added successfully', 'equip_id' => $this->conn->lastInsertId()])
-            : json_encode(['status' => 'error', 'message' => 'Failed to insert equipment']);
+        if ($stmt->execute()) {
+            $equipId = $this->conn->lastInsertId();
+            // Audit log
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Equipment : " . $data['name'];
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                $audit->bindParam(':created_by', $data['user_admin_id'], PDO::PARAM_INT);
+                $audit->execute();
+            } catch (PDOException $e) {
+                error_log("Audit log insert failed (saveEquipment): " . $e->getMessage());
+            }
+            return json_encode(['status' => 'success', 'message' => 'Equipment added successfully', 'equip_id' => $equipId]);
+        }
+        return json_encode(['status' => 'error', 'message' => 'Failed to insert equipment']);
 
     } catch (PDOException $e) {
         error_log("DB error in saveEquipment: " . $e->getMessage());
@@ -3575,6 +3850,17 @@ public function updateEquipment($data) {
             }
         }
 
+        // Fetch old values for audit (name only)
+        $oldName = null;
+        try {
+            $prevStmt = $this->conn->prepare("SELECT equip_name FROM tbl_equipments WHERE equip_id = :id");
+            $prevStmt->execute([':id' => $data['equip_id']]);
+            $prev = $prevStmt->fetch(PDO::FETCH_ASSOC);
+            if ($prev && isset($prev['equip_name'])) {
+                $oldName = $prev['equip_name'];
+            }
+        } catch (PDOException $e) { /* ignore for main flow */ }
+
         // Prepare the update statement
         $sql = "UPDATE tbl_equipments SET 
                     equip_name = :name, 
@@ -3588,9 +3874,38 @@ public function updateEquipment($data) {
         $stmt->bindParam(':category_id', $data['equipments_category_id'], PDO::PARAM_INT);
         $stmt->bindParam(':id', $data['equip_id'], PDO::PARAM_INT);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Equipment updated successfully'])
-            : json_encode(['status' => 'error', 'message' => 'Failed to update equipment']);
+        $success = $stmt->execute();
+        if ($success) {
+            // Non-blocking audit logging
+            try {
+                // Determine actor id: prefer user_personnel_id, fallback to user_admin_id
+                $actorId = null;
+                if (isset($data['user_personnel_id']) && $data['user_personnel_id'] !== '') {
+                    $actorId = (int)$data['user_personnel_id'];
+                } elseif (isset($data['user_admin_id']) && $data['user_admin_id'] !== '') {
+                    $actorId = (int)$data['user_admin_id'];
+                }
+
+                $newName = $data['equip_name'] ?? '';
+                if ($oldName !== null && $oldName !== $newName) {
+                    $desc = "Updated Equipment: '" . $oldName . "' -> '" . $newName . "'";
+                } else {
+                    $desc = 'Updated Equipment: ' . $newName;
+                }
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $audit->execute([
+                    ':description' => $desc,
+                    ':action' => 'UPDATE',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
+
+            return json_encode(['status' => 'success', 'message' => 'Equipment updated successfully']);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Failed to update equipment']);
+        }
 
     } catch (PDOException $e) {
         error_log("Database error in updateEquipment: " . $e->getMessage());
@@ -3625,9 +3940,24 @@ public function saveVehicle($data) {
         $stmt->bindParam(':year', $data['year']);
         $stmt->bindParam(':adminId', $data['user_admin_id']);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Vehicle added successfully.'])
-            : json_encode(['status' => 'error', 'message' => 'Failed to add vehicle']);
+        if ($stmt->execute()) {
+            $vehicleId = $this->conn->lastInsertId();
+            // Audit log
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Vehicle : " . $data['vehicle_license'];
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                $audit->bindParam(':created_by', $data['user_admin_id'], PDO::PARAM_INT);
+                $audit->execute();
+            } catch (PDOException $e) {
+                error_log("Audit log insert failed (saveVehicle): " . $e->getMessage());
+            }
+            return json_encode(['status' => 'success', 'message' => 'Vehicle added successfully.', 'vehicle_id' => $vehicleId]);
+        }
+        return json_encode(['status' => 'error', 'message' => 'Failed to add vehicle']);
     } catch (PDOException $e) {
         error_log("saveVehicle error: " . $e->getMessage());
         return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
@@ -3641,6 +3971,19 @@ public function updateVehicleLicense($vehicleData) {
             if (!isset($vehicleData[$field])) {
                 return json_encode(['status' => 'error', 'message' => "$field is required"]);
             }
+        }
+
+        // Fetch old values (for audit description)
+        $oldLicense = null;
+        try {
+            $prevStmt = $this->conn->prepare("SELECT vehicle_license FROM tbl_vehicle WHERE vehicle_id = :id");
+            $prevStmt->execute([':id' => $vehicleData['vehicle_id']]);
+            $prev = $prevStmt->fetch(PDO::FETCH_ASSOC);
+            if ($prev && isset($prev['vehicle_license'])) {
+                $oldLicense = $prev['vehicle_license'];
+            }
+        } catch (PDOException $e) {
+            // Non-fatal for main flow; continue without old value
         }
 
         $sql = "UPDATE tbl_vehicle SET 
@@ -3662,9 +4005,40 @@ public function updateVehicleLicense($vehicleData) {
         $stmt->bindParam(':is_active', $vehicleData['is_active'], PDO::PARAM_BOOL);
         $stmt->bindParam(':id', $vehicleData['vehicle_id'], PDO::PARAM_INT);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Vehicle updated successfully', 'vehicle_id' => $vehicleData['vehicle_id']])
-            : json_encode(['status' => 'error', 'message' => 'Failed to update vehicle']);
+        // Execute update
+        $success = $stmt->execute();
+        if ($success) {
+            // Non-blocking audit logging for vehicle update
+            try {
+                // Determine actor id: prefer user_personnel_id, fallback to user_admin_id
+                $actorId = null;
+                if (isset($vehicleData['user_personnel_id']) && $vehicleData['user_personnel_id'] !== '') {
+                    $actorId = (int)$vehicleData['user_personnel_id'];
+                } elseif (isset($vehicleData['user_admin_id']) && $vehicleData['user_admin_id'] !== '') {
+                    $actorId = (int)$vehicleData['user_admin_id'];
+                }
+
+                // Compose description
+                $newLicense = $vehicleData['vehicle_license'] ?? '';
+                if ($oldLicense !== null && $oldLicense !== $newLicense) {
+                    $desc = "Updated Vehicle: '" . $oldLicense . "' -> '" . $newLicense . "'";
+                } else {
+                    $desc = 'Updated Vehicle: ' . $newLicense;
+                }
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'UPDATE VEHICLE',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
+
+            return json_encode(['status' => 'success', 'message' => 'Vehicle updated successfully', 'vehicle_id' => $vehicleData['vehicle_id']]);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Failed to update vehicle']);
+        }
     } catch (PDOException $e) {
         error_log("Database error in updateVehicleLicense: " . $e->getMessage());
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
@@ -3700,7 +4074,21 @@ public function saveVenue($data) {
         $stmt->bindParam(':area_type', $data['area_type'], PDO::PARAM_STR);
 
         if ($stmt->execute()) {
-            return json_encode(['status' => 'success', 'message' => 'Venue added successfully']);
+            $venueId = $this->conn->lastInsertId();
+            // Audit log
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Venue : " . $data['name'];
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                $audit->bindParam(':created_by', $data['user_admin_id'], PDO::PARAM_INT);
+                $audit->execute();
+            } catch (PDOException $e) {
+                error_log("Audit log insert failed (saveVenue): " . $e->getMessage());
+            }
+            return json_encode(['status' => 'success', 'message' => 'Venue added successfully', 'venue_id' => $venueId]);
         }
 
         return json_encode(['status' => 'error', 'message' => 'Failed to add venue']);
@@ -3732,9 +4120,44 @@ public function updateVenue($venueData) {
         $stmt->bindParam(':area_type', $venueData['area_type'], PDO::PARAM_STR);
         $stmt->bindParam(':venue_id', $venueData['venue_id'], PDO::PARAM_INT);
 
-        return $stmt->execute()
-            ? json_encode(['status' => 'success', 'message' => 'Venue updated successfully'])
-            : json_encode(['status' => 'error', 'message' => 'Could not update venue']);
+        $success = $stmt->execute();
+        if ($success) {
+            // Non-blocking audit logging for venue update
+            try {
+                // Determine actor id: prefer user_personnel_id, fallback to user_admin_id if provided
+                $actorId = null;
+                if (isset($venueData['user_personnel_id']) && $venueData['user_personnel_id'] !== '') {
+                    $actorId = (int)$venueData['user_personnel_id'];
+                } elseif (isset($venueData['user_admin_id']) && $venueData['user_admin_id'] !== '') {
+                    $actorId = (int)$venueData['user_admin_id'];
+                }
+
+                // Get actor name
+                $actorName = null;
+                if (!empty($actorId)) {
+                    $personSql = "SELECT CONCAT(\n                                    users_fname,\n                                    CASE WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.') ELSE '' END,\n                                    ' ', users_lname\n                                  ) AS full_name\n                               FROM tbl_users WHERE users_id = :id";
+                    $personStmt = $this->conn->prepare($personSql);
+                    $personStmt->execute([':id' => $actorId]);
+                    $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+                    $actorName = $row && !empty($row['full_name']) ? $row['full_name'] : ('User #' . $actorId);
+                }
+
+                $venueName = $venueData['venue_name'] ?? '';
+                $desc = 'Updated Venue: ' . $venueName;
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'UPDATE VENUE',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
+
+            return json_encode(['status' => 'success', 'message' => 'Venue updated successfully']);
+        } else {
+            return json_encode(['status' => 'error', 'message' => 'Could not update venue']);
+        }
     } catch (PDOException $e) {
         error_log('Database error in updateVenue: ' . $e->getMessage());
         return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
@@ -3898,6 +4321,29 @@ public function saveUser($data) {
             } catch (Exception $e) {
                 // Optionally log or handle email sending failure
             }
+            // Audit log (non-blocking): User: (fullname) has been created
+            try {
+                // Determine actor
+                $actorId = null;
+                if (isset($data['user_personnel_id']) && $data['user_personnel_id'] !== '') {
+                    $actorId = (int)$data['user_personnel_id'];
+                } elseif (isset($data['user_admin_id']) && $data['user_admin_id'] !== '') {
+                    $actorId = (int)$data['user_admin_id'];
+                }
+
+                // Build full name from provided data
+                $mInitial = (isset($data['mname']) && trim($data['mname']) !== '') ? (' ' . strtoupper(substr($data['mname'], 0, 1)) . '.') : '';
+                $fullName = trim(($data['fname'] ?? '') . $mInitial . ' ' . ($data['lname'] ?? ''));
+                $desc = 'User: ' . $fullName . ' has been created';
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $audit->execute([
+                    ':description' => $desc,
+                    ':action' => 'CREATE USER',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
             return json_encode([
                 'status'  => 'success',
                 'message' => 'User added successfully.'
@@ -3985,6 +4431,21 @@ public function updateUser($userData) {
             ]);
         }
 
+        // Fetch existing user (for audit diff)
+        $oldUser = null;
+        try {
+            $oldStmt = $this->conn->prepare("SELECT 
+                    title_id,
+                    users_fname, users_mname, users_lname,
+                    users_birthdate, users_suffix,
+                    users_email, users_school_id, users_contact_number,
+                    users_user_level_id, users_department_id,
+                    users_pic, is_active
+                FROM tbl_users WHERE users_id = :userId");
+            $oldStmt->execute([':userId' => $userId]);
+            $oldUser = $oldStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable $te) { /* ignore fetch errors */ }
+
         // —— Build the UPDATE statement ——
         $sql = "UPDATE tbl_users SET 
                     title_id             = :title_id,
@@ -4033,6 +4494,68 @@ public function updateUser($userData) {
 
         // Execute update
         if ($stmt->execute()) {
+            // Audit log (non-blocking): list specific field changes
+            try {
+                // Determine actor
+                $actorId = null;
+                if (isset($userData['user_personnel_id']) && $userData['user_personnel_id'] !== '') {
+                    $actorId = (int)$userData['user_personnel_id'];
+                } elseif (isset($userData['user_admin_id']) && $userData['user_admin_id'] !== '') {
+                    $actorId = (int)$userData['user_admin_id'];
+                }
+
+                // Compute new full name and changes
+                $mInitial = (isset($userData['mname']) && trim($userData['mname']) !== '') ? (' ' . strtoupper(substr($userData['mname'], 0, 1)) . '.') : '';
+                $fullName = trim(($userData['fname'] ?? '') . $mInitial . ' ' . ($userData['lname'] ?? ''));
+
+                $changes = [];
+                if (is_array($oldUser)) {
+                    $map = [
+                        'title_id'             => ['label' => 'title',          'new' => $userData['title_id']        ?? null],
+                        'users_fname'          => ['label' => 'first name',     'new' => $userData['fname']           ?? null],
+                        'users_mname'          => ['label' => 'middle name',    'new' => $userData['mname']           ?? null],
+                        'users_lname'          => ['label' => 'last name',      'new' => $userData['lname']           ?? null],
+                        'users_birthdate'      => ['label' => 'birthdate',      'new' => $userData['birthdate']       ?? null],
+                        'users_suffix'         => ['label' => 'suffix',         'new' => $userData['suffix']          ?? null],
+                        'users_email'          => ['label' => 'email',          'new' => $email],
+                        'users_school_id'      => ['label' => 'school id',      'new' => $schoolId],
+                        'users_contact_number' => ['label' => 'contact number', 'new' => $userData['contact']         ?? null],
+                        'users_user_level_id'  => ['label' => 'user level',     'new' => $userData['userLevelId']     ?? null],
+                        'users_department_id'  => ['label' => 'department',     'new' => $userData['departmentId']    ?? null],
+                        'users_pic'            => ['label' => 'pic',            'new' => $userData['pic']             ?? null],
+                        'is_active'            => ['label' => 'is active',      'new' => isset($userData['isActive']) ? (int)$userData['isActive'] : null],
+                    ];
+                    foreach ($map as $col => $info) {
+                        if (array_key_exists($col, $oldUser) && $info['new'] !== null) {
+                            $oldVal = $oldUser[$col];
+                            $newVal = $info['new'];
+                            // normalize boolean-like values
+                            if ($col === 'is_active') {
+                                $oldVal = ($oldVal === null) ? null : (int)$oldVal;
+                                $newVal = ($newVal === null) ? null : (int)$newVal;
+                            }
+                            if ((string)$oldVal !== (string)$newVal) {
+                                $changes[] = $info['label'] . ': ' . ( ($oldVal === null || $oldVal === '') ? 'null' : $oldVal ) . ' -> ' . ( ($newVal === null || $newVal === '') ? 'null' : $newVal );
+                            }
+                        }
+                    }
+                    if (!empty($userData['password'])) {
+                        $changes[] = 'password: changed';
+                    }
+                }
+
+                $changeDesc = empty($changes) ? 'no field changes detected' : implode('; ', $changes);
+                $desc = 'User: ' . $fullName . ' has been updated. Changes: ' . $changeDesc;
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $audit->execute([
+                    ':description' => $desc,
+                    ':action' => 'UPDATE USER',
+                    ':created_by' => $actorId
+                ]);
+            } catch (Throwable $te) { /* ignore audit errors */ }
+
             return json_encode([
                 'status'  => 'success',
                 'message' => 'User updated successfully.'
@@ -4993,7 +5516,7 @@ public function fetchNoAssignedReservation() {
         }
     }
 
-    public function fetchReservationGenerateReport($month){
+    public function fetchReservationGenerateReport($month, $user_personnel_id = null){
         try {
             // $month should be in 'YYYY-MM' format
             $startDate = $month . '-01';
@@ -5554,6 +6077,40 @@ public function fetchNoAssignedReservation() {
                 ];
             }
 
+            // Non-blocking audit logging for report generation
+            try {
+                $periodLabel = date('F Y', strtotime($startDate));
+                $count = count($finalResults);
+                $descBase = $count > 0
+                    ? "Reservation Report ({$periodLabel}) generated: {$count} record(s) found"
+                    : "Reservation Report ({$periodLabel}) generated: no records found";
+
+                // If personnel ID is provided, fetch and include full name
+                if (!empty($user_personnel_id)) {
+                    $personnelFullName = null;
+                    try {
+                        $personSql = "SELECT CONCAT(\n                                    u.users_fname,\n                                    CASE \n                                        WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')\n                                        ELSE ''\n                                    END,\n                                    ' ',\n                                    u.users_lname\n                                ) AS full_name\n                             FROM tbl_users u WHERE u.users_id = :id";
+                        $personStmt = $this->conn->prepare($personSql);
+                        $personStmt->execute([':id' => $user_personnel_id]);
+                        $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+                        $personnelFullName = $row && !empty($row['full_name']) ? $row['full_name'] : null;
+                    } catch (PDOException $e) { /* ignore */ }
+
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    $desc = $descBase . " by: {$nameForLog}";
+                } else {
+                    $desc = $descBase;
+                }
+
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'GENERATE REPORT',
+                    ':created_by' => $user_personnel_id
+                ]);
+            } catch (PDOException $e) { /* ignore logging errors */ }
+
             return json_encode(['status' => 'success', 'data' => $finalResults]);
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
@@ -5565,14 +6122,15 @@ public function fetchNoAssignedReservation() {
         return $this->executeQuery($sql);
     }
 
-    public function saveModelData($json) {
+    public function saveModelData($json, $userId = null) {
         // Handle both string and array inputs
         if (is_array($json)) {
             $data = $json;
         } else {
             $data = json_decode($json, true);
         }
-        error_log(print_r($data, true)); 
+        error_log(print_r($data, true));
+        error_log("saveModelData userId=" . var_export($userId, true)); 
 
         try {
             // Check if the model name already exists globally (unique across all models)
@@ -5598,19 +6156,48 @@ public function fetchNoAssignedReservation() {
             $stmt->bindParam(':make_id', $make_id, PDO::PARAM_INT);
             $stmt->execute();
 
+            // Non-blocking audit log insert
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Vehicle Model: '" . ($name ?? '') . "'";
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                if ($userId !== null) {
+                    $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                } else {
+                    $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                }
+                if (!$audit->execute()) {
+                    error_log("Audit log insert failed (saveModelData): " . print_r($audit->errorInfo(), true));
+                } else {
+                    try {
+                        $latestAuditStmt = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1");
+                        $latest = $latestAuditStmt ? $latestAuditStmt->fetch(PDO::FETCH_ASSOC) : null;
+                        error_log("audit_log latest (saveModelData): " . json_encode($latest));
+                    } catch (Throwable $te) {
+                        error_log("Failed to read back latest audit_log (saveModelData): " . $te->getMessage());
+                    }
+                }
+            } catch (Throwable $e2) {
+                error_log("Audit logging error (saveModelData): " . $e2->getMessage());
+            }
+
             return json_encode(['status' => 'success', 'message' => 'Model added successfully.']);
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
 
-    public function saveCategoryData($json) {
+    public function saveCategoryData($json, $userId = null) {
         // Handle both string and array inputs
         if (is_array($json)) {
             $data = $json;
         } else {
             $data = json_decode($json, true);
         }
+        error_log("saveCategoryData userId=" . var_export($userId, true));
     
         // Check if category name is set
         if (!isset($data['vehicle_category_name'])) {
@@ -5631,19 +6218,50 @@ public function fetchNoAssignedReservation() {
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':name', $data['vehicle_category_name']);
             $stmt->execute();
+
+            // Non-blocking audit log insert
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Vehicle Category: '" . ($data['vehicle_category_name'] ?? '') . "'";
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                if ($userId !== null) {
+                    $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                } else {
+                    $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                }
+                if (!$audit->execute()) {
+                    error_log("Audit log insert failed (saveCategoryData): " . print_r($audit->errorInfo(), true));
+                } else {
+                    try {
+                        $latestAuditStmt = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1");
+                        $latest = $latestAuditStmt ? $latestAuditStmt->fetch(PDO::FETCH_ASSOC) : null;
+                        error_log("audit_log latest (saveCategoryData): " . json_encode($latest));
+                    } catch (Throwable $te) {
+                        error_log("Failed to read back latest audit_log (saveCategoryData): " . $te->getMessage());
+                    }
+                }
+            } catch (Throwable $e2) {
+                error_log("Audit logging error (saveCategoryData): " . $e2->getMessage());
+            }
+
             return json_encode(['status' => 'success', 'message' => 'Category added successfully.']);
         } catch(PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
 
-    public function saveMakeData($json) {
+    public function saveMakeData($json, $userId = null) {
         // Check if $json is already an array
         if (is_array($json)) {
             $data = $json;
         } else {
             $data = json_decode($json, true);
         }
+        // Log userId for auditing
+        error_log("saveMakeData userId=" . var_export($userId, true));
         
         // Inline existence check
         $sql = "SELECT COUNT(*) FROM tbl_vehicle_make WHERE vehicle_make_name = :name";
@@ -5659,6 +6277,34 @@ public function fetchNoAssignedReservation() {
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':name', $data['vehicle_make_name']);
             $stmt->execute();
+
+            // Insert audit log (non-blocking)
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Vehicle Make: " . ($data['vehicle_make_name'] ?? '');
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                if ($userId !== null) {
+                    $audit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                } else {
+                    $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                }
+                $audit->execute();
+                // Log the latest audit_log entry for verification
+                try {
+                    $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                    $sel->execute();
+                    $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                    error_log("audit_log latest (saveMakeData): " . json_encode($latest));
+                } catch (PDOException $ex) {
+                    error_log("Audit log select failed (saveMakeData): " . $ex->getMessage());
+                }
+            } catch (PDOException $e) {
+                error_log("Audit log insert failed (saveMakeData): " . $e->getMessage());
+            }
+
             return json_encode(['status' => 'success', 'message' => 'Make added successfully.']);
         } catch(PDOException $e) {
             // Log the error message
@@ -5680,9 +6326,10 @@ public function fetchNoAssignedReservation() {
             return false; // Treat as not existing on error
         }
     }
-    public function saveEquipmentCategory($json) {
+    public function saveEquipmentCategory($json, $userId = null) {
         // Handle both string and array inputs
         $data = is_array($json) ? $json : json_decode($json, true);
+        error_log("saveEquipmentCategory userId=" . var_export($userId, true));
         
         // Check if category name is set
         if (!isset($data['equipments_category_name'])) {
@@ -5699,13 +6346,42 @@ public function fetchNoAssignedReservation() {
             $stmt = $this->conn->prepare($sql);
             $stmt->bindParam(':name', $data['equipments_category_name']);
             $stmt->execute();
+
+            // Non-blocking audit log insert
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Equipment Category: '" . ($data['equipments_category_name'] ?? '') . "'";
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                if ($userId !== null) {
+                    $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                } else {
+                    $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                }
+                if (!$audit->execute()) {
+                    error_log("Audit log insert failed (saveEquipmentCategory): " . print_r($audit->errorInfo(), true));
+                } else {
+                    try {
+                        $latestAuditStmt = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1");
+                        $latest = $latestAuditStmt ? $latestAuditStmt->fetch(PDO::FETCH_ASSOC) : null;
+                        error_log("audit_log latest (saveEquipmentCategory): " . json_encode($latest));
+                    } catch (Throwable $te) {
+                        error_log("Failed to read back latest audit_log (saveEquipmentCategory): " . $te->getMessage());
+                    }
+                }
+            } catch (Throwable $e2) {
+                error_log("Audit logging error (saveEquipmentCategory): " . $e2->getMessage());
+            }
+
             return json_encode(['status' => 'success', 'message' => 'Equipment category added successfully.']);
         } catch(PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
 
-    public function saveDepartmentData($json) {
+    public function saveDepartmentData($json, $userId = null) {
         // Check if $json is already an array
         if (is_array($json)) {
             $data = $json;
@@ -5734,6 +6410,25 @@ public function fetchNoAssignedReservation() {
             $stmt->bindParam(':name', $data['departments_name']);
             $stmt->bindParam(':type', $data['department_type']);
             $stmt->execute();
+
+            // Insert audit log (non-blocking)
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $desc = "Created Department: " . ($data['departments_name'] ?? '') . " (Type: " . ($data['department_type'] ?? '') . ")";
+                $action = 'CREATE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                if ($userId !== null) {
+                    $audit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                } else {
+                    $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                }
+                $audit->execute();
+            } catch (PDOException $e) {
+                error_log("Audit log insert failed (saveDepartmentData): " . $e->getMessage());
+            }
+
             return json_encode(['status' => 'success', 'message' => 'Department added successfully.']);
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
@@ -5745,7 +6440,9 @@ public function fetchNoAssignedReservation() {
         return $this->executeQuery($sql);
     }
 
-    public function updateVehicleMake($id, $name) {
+    public function updateVehicleMake($id, $name, $userId = null) {
+        // Log userId for auditing
+        error_log("updateVehicleMake userId=" . var_export($userId, true));
         try {
             // First, get the current vehicle make name to check if it's the same
             $currentSql = "SELECT vehicle_make_name FROM tbl_vehicle_make WHERE vehicle_make_id = :id";
@@ -5766,9 +6463,38 @@ public function fetchNoAssignedReservation() {
                 $stmt = $this->conn->prepare($sql);
                 $stmt->bindParam(':name', $name);
                 $stmt->bindParam(':id', $id, PDO::PARAM_INT);
-                
-                return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']) 
-                                         : json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+                $exec = $stmt->execute();
+                if ($exec) {
+                    // Audit log (non-blocking)
+                    try {
+                        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                        $audit = $this->conn->prepare($auditSql);
+                        $desc = "Updated Vehicle Make: '" . ($currentName ?? '') . "' -> '" . ($name ?? '') . "'";
+                        $action = 'UPDATE';
+                        $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                        $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                        if ($userId !== null) {
+                            $audit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                        } else {
+                            $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                        }
+                        $audit->execute();
+                        // Log the latest audit_log entry for verification
+                        try {
+                            $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                            $sel->execute();
+                            $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (updateVehicleMake same-name): " . json_encode($latest));
+                        } catch (PDOException $ex) {
+                            error_log("Audit log select failed (updateVehicleMake same-name): " . $ex->getMessage());
+                        }
+                    } catch (PDOException $e) {
+                        error_log("Audit log insert failed (updateVehicleMake same-name): " . $e->getMessage());
+                    }
+                    return json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']);
+                } else {
+                    return json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+                }
             }
             
             // If the name is different, check if the new name already exists
@@ -5788,8 +6514,37 @@ public function fetchNoAssignedReservation() {
             $stmt->bindParam(':name', $name);
             $stmt->bindParam(':id', $id, PDO::PARAM_INT);
             
-            return $stmt->execute() ? json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']) 
-                                     : json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+            if ($stmt->execute()) {
+                // Audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Vehicle Make: '" . ($currentName ?? '') . "' -> '" . ($name ?? '') . "'";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                    // Log the latest audit_log entry for verification
+                    try {
+                        $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                        $sel->execute();
+                        $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (updateVehicleMake): " . json_encode($latest));
+                    } catch (PDOException $ex) {
+                        error_log("Audit log select failed (updateVehicleMake): " . $ex->getMessage());
+                    }
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateVehicleMake): " . $e->getMessage());
+                }
+                return json_encode(['status' => 'success', 'message' => 'Vehicle make updated successfully']);
+            } else {
+                return json_encode(['status' => 'error', 'message' => 'Could not update vehicle make']);
+            }
                                      
         } catch (PDOException $e) {
             return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
@@ -5802,7 +6557,7 @@ public function fetchNoAssignedReservation() {
     }
 
 
-    public function updateVehicleCategory($id, $name) {
+    public function updateVehicleCategory($id, $name, $userId = null) {
         try {
             // First, get the current vehicle category name to check if it's the same
             $currentSql = "SELECT vehicle_category_name FROM tbl_vehicle_category WHERE vehicle_category_id = :id";
@@ -5825,6 +6580,31 @@ public function fetchNoAssignedReservation() {
                 $stmt->bindParam(':id', $id, PDO::PARAM_INT);
                 
                 if ($stmt->execute()) {
+                    // Audit log (non-blocking)
+                    try {
+                        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                        $audit = $this->conn->prepare($auditSql);
+                        $desc = "Updated Vehicle Category: '" . ($currentName ?? '') . "' -> '" . ($name ?? '') . "'";
+                        $action = 'UPDATE';
+                        $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                        $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                        if ($userId !== null) {
+                            $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                        } else {
+                            $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                        }
+                        $audit->execute();
+                        try {
+                            $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                            $sel->execute();
+                            $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (updateVehicleCategory same-name): " . json_encode($latest));
+                        } catch (PDOException $ex) {
+                            error_log("Audit log select failed (updateVehicleCategory same-name): " . $ex->getMessage());
+                        }
+                    } catch (PDOException $e) {
+                        error_log("Audit log insert failed (updateVehicleCategory same-name): " . $e->getMessage());
+                    }
                     // Fetch updated list
                     $categories = $this->fetchVehicleCategories();
                     $categoriesData = json_decode($categories, true)['data'] ?? [];
@@ -5856,6 +6636,31 @@ public function fetchNoAssignedReservation() {
             $stmt->bindParam(':id', $id, PDO::PARAM_INT);
             
             if ($stmt->execute()) {
+                // Audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Vehicle Category: '" . ($currentName ?? '') . "' -> '" . ($name ?? '') . "'";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                    try {
+                        $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                        $sel->execute();
+                        $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (updateVehicleCategory): " . json_encode($latest));
+                    } catch (PDOException $ex) {
+                        error_log("Audit log select failed (updateVehicleCategory): " . $ex->getMessage());
+                    }
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateVehicleCategory): " . $e->getMessage());
+                }
                 // Fetch updated list
                 $categories = $this->fetchVehicleCategories();
                 $categoriesData = json_decode($categories, true)['data'] ?? [];
@@ -5897,7 +6702,7 @@ public function fetchNoAssignedReservation() {
         return $this->executeQuery($sql);
     }
 
-    public function updateVehicleModel($modelData) {
+    public function updateVehicleModel($modelData, $userId = null) {
         // Validate input data
         if (!isset($modelData['id']) || !isset($modelData['name']) || 
             !isset($modelData['category_id']) || !isset($modelData['make_id'])) {
@@ -5906,6 +6711,7 @@ public function fetchNoAssignedReservation() {
         }
 
         error_log("Starting vehicle model update with data: " . print_r($modelData, true));
+        error_log("updateVehicleModel userId=" . var_export($userId, true));
         
         $sql = "UPDATE tbl_vehicle_model SET 
                     vehicle_model_name = :modelName, 
@@ -5939,6 +6745,33 @@ public function fetchNoAssignedReservation() {
             
             if ($result) {
                 if ($rowCount > 0) {
+                    // Non-blocking audit log insert
+                    try {
+                        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                        $audit = $this->conn->prepare($auditSql);
+                        $desc = "Updated Vehicle Model: '" . ($currentName ?? '') . "' -> '" . ($modelData['name'] ?? '') . "'";
+                        $action = 'UPDATE';
+                        $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                        $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                        if ($userId !== null) {
+                            $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                        } else {
+                            $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                        }
+                        if (!$audit->execute()) {
+                            error_log("Audit log insert failed (updateVehicleModel): " . print_r($audit->errorInfo(), true));
+                        } else {
+                            try {
+                                $latestAuditStmt = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1");
+                                $latest = $latestAuditStmt ? $latestAuditStmt->fetch(PDO::FETCH_ASSOC) : null;
+                                error_log("audit_log latest (updateVehicleModel): " . json_encode($latest));
+                            } catch (Throwable $te) {
+                                error_log("Failed to read back latest audit_log (updateVehicleModel): " . $te->getMessage());
+                            }
+                        }
+                    } catch (Throwable $e2) {
+                        error_log("Audit logging error (updateVehicleModel): " . $e2->getMessage());
+                    }
                     return json_encode(['status' => 'success', 'message' => 'Vehicle model updated successfully']);
                 } else {
                     return json_encode(['status' => 'error', 'message' => 'No matching record found']);
@@ -5959,7 +6792,7 @@ public function fetchNoAssignedReservation() {
         return $this->executeQuery($sql);
     }
 
-    public function updateEquipmentCategory($categoryData) {
+    public function updateEquipmentCategory($categoryData, $userId = null) {
         try {
             // First, get the current equipment category name to check if it's the same
             $currentSql = "SELECT equipments_category_name FROM tbl_equipment_category WHERE equipments_category_id = :id";
@@ -5992,6 +6825,31 @@ public function fetchNoAssignedReservation() {
                 error_log("Rows affected: " . $stmt->rowCount());
 
                 if ($result) {
+                    // Audit log (non-blocking)
+                    try {
+                        $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                        $audit = $this->conn->prepare($auditSql);
+                        $desc = "Updated Equipment Category: '" . ($currentName ?? '') . "' -> '" . ($categoryData['name'] ?? '') . "'";
+                        $action = 'UPDATE';
+                        $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                        $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                        if ($userId !== null) {
+                            $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                        } else {
+                            $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                        }
+                        $audit->execute();
+                        try {
+                            $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                            $sel->execute();
+                            $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (updateEquipmentCategory same-name): " . json_encode($latest));
+                        } catch (PDOException $ex) {
+                            error_log("Audit log select failed (updateEquipmentCategory same-name): " . $ex->getMessage());
+                        }
+                    } catch (PDOException $e) {
+                        error_log("Audit log insert failed (updateEquipmentCategory same-name): " . $e->getMessage());
+                    }
                     return json_encode(['status' => 'success', 'message' => 'Category updated successfully.']);
                 } else {
                     return json_encode(['status' => 'error', 'message' => 'Failed to update category.']);
@@ -6026,6 +6884,31 @@ public function fetchNoAssignedReservation() {
             error_log("Rows affected: " . $stmt->rowCount());
 
             if ($result) {
+                // Audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Equipment Category: '" . ($currentName ?? '') . "' -> '" . ($categoryData['name'] ?? '') . "'";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                    try {
+                        $sel = $this->conn->prepare("SELECT id, description, action, created_at, created_by FROM audit_log WHERE 1 ORDER BY id DESC LIMIT 1");
+                        $sel->execute();
+                        $latest = $sel->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (updateEquipmentCategory): " . json_encode($latest));
+                    } catch (PDOException $ex) {
+                        error_log("Audit log select failed (updateEquipmentCategory): " . $ex->getMessage());
+                    }
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateEquipmentCategory): " . $e->getMessage());
+                }
                 return json_encode(['status' => 'success', 'message' => 'Category updated successfully.']);
             } else {
                 return json_encode(['status' => 'error', 'message' => 'Failed to update category.']);
@@ -6037,7 +6920,7 @@ public function fetchNoAssignedReservation() {
         }
     }
 
-    public function updateDepartment($id, $name, $type) {
+    public function updateDepartment($id, $name, $type, $userId = null) {
         try {
             // First, get the current department data
             $currentSql = "SELECT departments_name, department_type 
@@ -6085,6 +6968,23 @@ public function fetchNoAssignedReservation() {
             $stmt->bindParam(':id', $id, PDO::PARAM_INT);
             
             if ($stmt->execute()) {
+                // Insert audit log (non-blocking)
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $desc = "Updated Department: {$currentName} ({$currentType}) -> {$name} ({$type})";
+                    $action = 'UPDATE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindParam(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    $audit->execute();
+                } catch (PDOException $e) {
+                    error_log("Audit log insert failed (updateDepartment): " . $e->getMessage());
+                }
                 return json_encode([
                     'status' => 'success', 
                     'message' => 'Department updated successfully.'
@@ -6461,6 +7361,7 @@ public function fetchNoAssignedReservation() {
                     rce.qty_bad                        AS quantity,
                     re.reservation_equipment_equip_id  AS resource_id,
                     c.condition_name                   AS condition_name,
+                    rce.remarks                        AS remarks,
                     rce.created_at                     AS created_at,
                     r.reservation_title                AS reservation_title,
                     r.reservation_description          AS reservation_description,
@@ -6498,6 +7399,7 @@ public function fetchNoAssignedReservation() {
                     NULL                              AS quantity,
                     rv.reservation_venue_venue_id     AS resource_id,
                     c.condition_name                  AS condition_name,
+                    rcv.remarks                       AS remarks,
                     rcv.created_at                    AS created_at,
                     r.reservation_title               AS reservation_title,
                     r.reservation_description         AS reservation_description,
@@ -6534,6 +7436,7 @@ public function fetchNoAssignedReservation() {
                     NULL                                 AS quantity,
                     rv.reservation_vehicle_vehicle_id AS resource_id,
                     c.condition_name                  AS condition_name,
+                    rcvh.remarks                      AS remarks,
                     rcvh.created_at                   AS created_at,
                     r.reservation_title              AS reservation_title,
                     r.reservation_description        AS reservation_description,
@@ -6570,6 +7473,7 @@ public function fetchNoAssignedReservation() {
                     eu.serial_number AS resource_name,
                     eu.unit_id       AS resource_id,
                     c.condition_name AS condition_name,
+                    rcu.remarks      AS remarks,
                     rcu.created_at   AS created_at,
                     r.reservation_title             AS reservation_title,
                     r.reservation_description       AS reservation_description,
@@ -6615,7 +7519,7 @@ public function fetchNoAssignedReservation() {
         }
     }
 
-     public function updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed = false) {
+     public function updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed = false, $user_personnel_id = null) {
     try {
         $type       = strtolower($type);
         $resourceId = (int)$resourceId;
@@ -6763,6 +7667,73 @@ public function fetchNoAssignedReservation() {
         }
 
         $this->conn->commit();
+
+        // Non-blocking audit logging for admin availability updates
+        try {
+            // Determine availability label
+            $availability = $isFixed ? 'Available' : 'Unavailable';
+
+            // Build resource label based on type
+            $resourceTypeLabel = '';
+            $resourceLabel = '';
+            if ($type === 'venue') {
+                $resourceTypeLabel = 'Venue';
+                $stmtInfo = $this->conn->prepare("SELECT ven_name FROM tbl_venue WHERE ven_id = :id");
+                $stmtInfo->execute([':id' => $resourceId]);
+                $rowInfo = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                $resourceLabel = $rowInfo && !empty($rowInfo['ven_name']) ? $rowInfo['ven_name'] : ('ID #' . (int)$resourceId);
+            } elseif ($type === 'vehicle') {
+                $resourceTypeLabel = 'Vehicle';
+                $stmtInfo = $this->conn->prepare("SELECT vehicle_license FROM tbl_vehicle WHERE vehicle_id = :id");
+                $stmtInfo->execute([':id' => $resourceId]);
+                $rowInfo = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                $resourceLabel = $rowInfo && !empty($rowInfo['vehicle_license']) ? $rowInfo['vehicle_license'] : ('ID #' . (int)$resourceId);
+            } elseif ($type === 'equipment_unit') {
+                $resourceTypeLabel = 'Equipment Unit';
+                $stmtInfo = $this->conn->prepare("SELECT eu.serial_number, e.equip_name FROM tbl_equipment_unit eu LEFT JOIN tbl_equipments e ON eu.equip_id = e.equip_id WHERE eu.unit_id = :id");
+                $stmtInfo->execute([':id' => $resourceId]);
+                $rowInfo = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                $sn = $rowInfo['serial_number'] ?? null;
+                $eqn = $rowInfo['equip_name'] ?? null;
+                if ($eqn || $sn) {
+                    $resourceLabel = trim(($eqn ? $eqn : '') . ($sn ? (' - SN: ' . $sn) : ''));
+                } else {
+                    $resourceLabel = 'ID #' . (int)$resourceId;
+                }
+            }
+
+            if ($resourceTypeLabel !== '') {
+                // Fetch personnel name if provided
+                $nameForLog = null;
+                if (!empty($user_personnel_id)) {
+                    try {
+                        $personSql = "SELECT CONCAT(\n                                    u.users_fname,\n                                    CASE \n                                        WHEN u.users_mname IS NOT NULL AND u.users_mname != '' THEN CONCAT(' ', LEFT(u.users_mname, 1), '.')\n                                        ELSE ''\n                                    END,\n                                    ' ',\n                                    u.users_lname\n                                ) AS full_name\n                             FROM tbl_users u WHERE u.users_id = :id";
+                        $personStmt = $this->conn->prepare($personSql);
+                        $personStmt->execute([':id' => $user_personnel_id]);
+                        $prow = $personStmt->fetch(PDO::FETCH_ASSOC);
+                        $personnelFullName = $prow && !empty($prow['full_name']) ? $prow['full_name'] : null;
+                        $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                    } catch (PDOException $e) { /* ignore */ }
+                }
+
+                $desc = sprintf('%s (%s) availability set to %s%s',
+                                $resourceTypeLabel,
+                                $resourceLabel,
+                                $availability,
+                                $nameForLog ? (' by: ' . $nameForLog) : '');
+
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $auditStmt = $this->conn->prepare($auditSql);
+                    $auditStmt->execute([
+                        ':description' => $desc,
+                        ':action' => 'UPDATE AVAILABILITY',
+                        ':created_by' => $user_personnel_id
+                    ]);
+                } catch (PDOException $e) { /* ignore logging insert errors */ }
+            }
+        } catch (Throwable $te) { /* ignore all logging errors */ }
+
         return json_encode(['status'=>'success','message'=>"Updated {$type} and deactivated condition #{$recordId}."]);
     }
     catch (Exception $e) {
@@ -7029,6 +8000,8 @@ public function updateChecklist($data) {
 
         $this->conn->beginTransaction();
         $results = [];
+        $auditItems = [];
+        $user_personnel_id = $data['user_personnel_id'] ?? null;
 
         foreach ($data['checklist_updates'] as $update) {
             if (empty($update['type']) || !isset($update['id']) || empty($update['checklist_name'])) {
@@ -7043,18 +8016,60 @@ public function updateChecklist($data) {
 
             switch ($update['type']) {
                 case 'venue':
+                    // Fetch current name and resource foreign id for logging
+                    try {
+                        $sel = $this->conn->prepare("SELECT checklist_name, checklist_venue_ven_id AS fk FROM tbl_checklist_venue_master WHERE checklist_venue_id = :id");
+                        $sel->execute([':id' => $update['id']]);
+                        $row = $sel->fetch(PDO::FETCH_ASSOC);
+                        if ($row) {
+                            $auditItems[] = [
+                                'type' => 'venue',
+                                'fk'   => (int)($row['fk'] ?? 0),
+                                'old'  => $row['checklist_name'] ?? '',
+                                'new'  => $update['checklist_name']
+                            ];
+                        }
+                    } catch (PDOException $e) { /* ignore */ }
                     $updateSql = "UPDATE tbl_checklist_venue_master 
                                 SET checklist_name = :name 
                                 WHERE checklist_venue_id = :id";
                     break;
 
                 case 'vehicle':
+                    // Fetch current name and resource foreign id for logging
+                    try {
+                        $sel = $this->conn->prepare("SELECT checklist_name, checklist_vehicle_vehicle_id AS fk FROM tbl_checklist_vehicle_master WHERE checklist_vehicle_id = :id");
+                        $sel->execute([':id' => $update['id']]);
+                        $row = $sel->fetch(PDO::FETCH_ASSOC);
+                        if ($row) {
+                            $auditItems[] = [
+                                'type' => 'vehicle',
+                                'fk'   => (int)($row['fk'] ?? 0),
+                                'old'  => $row['checklist_name'] ?? '',
+                                'new'  => $update['checklist_name']
+                            ];
+                        }
+                    } catch (PDOException $e) { /* ignore */ }
                     $updateSql = "UPDATE tbl_checklist_vehicle_master 
                                 SET checklist_name = :name 
                                 WHERE checklist_vehicle_id = :id";
                     break;
 
                 case 'equipment':
+                    // Fetch current name and resource foreign id for logging
+                    try {
+                        $sel = $this->conn->prepare("SELECT checklist_name, checklist_equipment_equip_id AS fk FROM tbl_checklist_equipment_master WHERE checklist_equipment_id = :id");
+                        $sel->execute([':id' => $update['id']]);
+                        $row = $sel->fetch(PDO::FETCH_ASSOC);
+                        if ($row) {
+                            $auditItems[] = [
+                                'type' => 'equipment',
+                                'fk'   => (int)($row['fk'] ?? 0),
+                                'old'  => $row['checklist_name'] ?? '',
+                                'new'  => $update['checklist_name']
+                            ];
+                        }
+                    } catch (PDOException $e) { /* ignore */ }
                     $updateSql = "UPDATE tbl_checklist_equipment_master 
                                 SET checklist_name = :name 
                                 WHERE checklist_equipment_id = :id";
@@ -7075,6 +8090,83 @@ public function updateChecklist($data) {
 
         $this->conn->commit();
 
+        // Non-blocking audit logging after successful commit
+        try {
+            // Resolve personnel full name once
+            $nameForLog = null;
+            if (!empty($user_personnel_id)) {
+                try {
+                    $personSql = "SELECT CONCAT(
+                                        users_fname,
+                                        CASE 
+                                            WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.')
+                                            ELSE ''
+                                        END,
+                                        ' ',
+                                        users_lname
+                                    ) AS full_name
+                                 FROM tbl_users WHERE users_id = :id";
+                    $personStmt = $this->conn->prepare($personSql);
+                    $personStmt->execute([':id' => $user_personnel_id]);
+                    $prow = $personStmt->fetch(PDO::FETCH_ASSOC);
+                    $personnelFullName = $prow && !empty($prow['full_name']) ? $prow['full_name'] : null;
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                } catch (PDOException $e) { /* ignore */ }
+            }
+
+            foreach ($auditItems as $ai) {
+                $typeLower = strtolower($ai['type']);
+                $resourceLabel = '';
+                if ($typeLower === 'venue') {
+                    $stmtInfo = $this->conn->prepare("SELECT ven_name FROM tbl_venue WHERE ven_id = :id");
+                    $stmtInfo->execute([':id' => $ai['fk']]);
+                    $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                    $resourceLabel = $row && !empty($row['ven_name']) ? $row['ven_name'] : ('ID #' . (int)$ai['fk']);
+                } elseif ($typeLower === 'equipment') {
+                    $stmtInfo = $this->conn->prepare("SELECT equip_name FROM tbl_equipments WHERE equip_id = :id");
+                    $stmtInfo->execute([':id' => $ai['fk']]);
+                    $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                    $resourceLabel = $row && !empty($row['equip_name']) ? $row['equip_name'] : ('ID #' . (int)$ai['fk']);
+                } elseif ($typeLower === 'vehicle') {
+                    $stmtInfo = $this->conn->prepare(
+                        "SELECT mk.vehicle_make_name AS make, vm.vehicle_model_name AS model, v.vehicle_license AS license
+                         FROM tbl_vehicle v
+                         JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                         JOIN tbl_vehicle_make mk ON vm.vehicle_model_vehicle_make_id = mk.vehicle_make_id
+                         WHERE v.vehicle_id = :id"
+                    );
+                    $stmtInfo->execute([':id' => $ai['fk']]);
+                    $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                    if ($row && (!empty($row['make']) || !empty($row['model']) || !empty($row['license']))) {
+                        $resourceLabel = trim(($row['make'] ?? '') . ' ' . ($row['model'] ?? ''));
+                        if (!empty($row['license'])) {
+                            $resourceLabel .= ' (' . $row['license'] . ')';
+                        }
+                        $resourceLabel = trim($resourceLabel);
+                    } else {
+                        $resourceLabel = 'ID #' . (int)$ai['fk'];
+                    }
+                }
+
+                $desc = sprintf("Updated Checklist in %s %s: '%s' -> '%s'%s",
+                                $typeLower,
+                                $resourceLabel,
+                                (string)$ai['old'],
+                                (string)$ai['new'],
+                                $nameForLog ? (' by: ' . $nameForLog) : '');
+
+                try {
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $auditStmt = $this->conn->prepare($auditSql);
+                    $auditStmt->execute([
+                        ':description' => $desc,
+                        ':action' => 'UPDATE CHECKLIST',
+                        ':created_by' => $user_personnel_id
+                    ]);
+                } catch (PDOException $e) { /* ignore insert errors */ }
+            }
+        } catch (Throwable $te) { /* ignore all logging errors */ }
+
         return json_encode([
             'status' => 'success',
             'message' => 'Checklists updated successfully.',
@@ -7090,7 +8182,7 @@ public function updateChecklist($data) {
     }
 }
 
-public function saveMasterChecklist($checklistNames, $type, $id) {
+public function saveMasterChecklist($checklistNames, $type, $id, $user_personnel_id = null) {
     try {
 
 
@@ -7126,6 +8218,73 @@ public function saveMasterChecklist($checklistNames, $type, $id) {
 
         $this->conn->commit();
 
+        // Non-blocking audit logging of the master checklist creation
+        try {
+            $count = is_array($checklistNames) ? count($checklistNames) : 0;
+            $typeLower = strtolower($type);
+            $resourceLabel = '';
+
+            if ($typeLower === 'venue') {
+                $stmtInfo = $this->conn->prepare("SELECT ven_name FROM tbl_venue WHERE ven_id = :id");
+                $stmtInfo->execute([':id' => $id]);
+                $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                $resourceLabel = $row && !empty($row['ven_name']) ? $row['ven_name'] : ('ID #' . (int)$id);
+            } elseif ($typeLower === 'equipment') {
+                $stmtInfo = $this->conn->prepare("SELECT equip_name FROM tbl_equipments WHERE equip_id = :id");
+                $stmtInfo->execute([':id' => $id]);
+                $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                $resourceLabel = $row && !empty($row['equip_name']) ? $row['equip_name'] : ('ID #' . (int)$id);
+            } elseif ($typeLower === 'vehicle') {
+                $stmtInfo = $this->conn->prepare(
+                    "SELECT mk.vehicle_make_name AS make, vm.vehicle_model_name AS model, v.vehicle_license AS license
+                     FROM tbl_vehicle v
+                     JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+                     JOIN tbl_vehicle_make mk ON vm.vehicle_model_vehicle_make_id = mk.vehicle_make_id
+                     WHERE v.vehicle_id = :id"
+                );
+                $stmtInfo->execute([':id' => $id]);
+                $row = $stmtInfo->fetch(PDO::FETCH_ASSOC);
+                if ($row && (!empty($row['make']) || !empty($row['model']) || !empty($row['license']))) {
+                    $resourceLabel = trim(($row['make'] ?? '') . ' ' . ($row['model'] ?? ''));
+                    if (!empty($row['license'])) {
+                        $resourceLabel .= ' (' . $row['license'] . ')';
+                    }
+                    $resourceLabel = trim($resourceLabel);
+                } else {
+                    $resourceLabel = 'ID #' . (int)$id;
+                }
+            }
+
+            // Fetch personnel full name if provided
+            $nameForLog = null;
+            if (!empty($user_personnel_id)) {
+                try {
+                    $personSql = "SELECT CONCAT(\n                                users_fname,\n                                CASE \n                                    WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.')\n                                    ELSE ''\n                                END,\n                                ' ',\n                                users_lname\n                            ) AS full_name\n                         FROM tbl_users WHERE users_id = :id";
+                    $personStmt = $this->conn->prepare($personSql);
+                    $personStmt->execute([':id' => $user_personnel_id]);
+                    $prow = $personStmt->fetch(PDO::FETCH_ASSOC);
+                    $personnelFullName = $prow && !empty($prow['full_name']) ? $prow['full_name'] : null;
+                    $nameForLog = $personnelFullName ?? ('User #' . (int)$user_personnel_id);
+                } catch (PDOException $e) { /* ignore name errors */ }
+            }
+
+            $desc = sprintf('Added Checklist to %s %s: No. Checklist (%d)%s',
+                            $typeLower,
+                            $resourceLabel,
+                            $count,
+                            $nameForLog ? (' by: ' . $nameForLog) : '');
+
+            try {
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $auditStmt = $this->conn->prepare($auditSql);
+                $auditStmt->execute([
+                    ':description' => $desc,
+                    ':action' => 'ADD CHECKLIST',
+                    ':created_by' => $user_personnel_id
+                ]);
+            } catch (PDOException $e) { /* ignore insert errors */ }
+        } catch (Throwable $te) { /* ignore all logging errors */ }
+
         return json_encode([
             'status' => 'success',
             'message' => 'Checklist items saved successfully'
@@ -7151,6 +8310,34 @@ public function saveChecklist($data) {
 
         $this->conn->beginTransaction();
         $results = [];
+        // Capture actor for audit after commit
+        $admin_id = isset($data['admin_id']) ? $data['admin_id'] : null;
+        // Prepare personnel full name once (same personnel_id used for all items in this call)
+        $personnelFullName = null;
+        try {
+            $personSql = "SELECT CONCAT(
+                                users_fname,
+                                CASE 
+                                    WHEN users_mname IS NOT NULL AND users_mname != '' THEN CONCAT(' ', LEFT(users_mname, 1), '.')
+                                    ELSE ''
+                                END,
+                                ' ',
+                                users_lname
+                            ) AS full_name
+                         FROM tbl_users WHERE users_id = :id";
+            $personStmt = $this->conn->prepare($personSql);
+            $personStmt->execute([':id' => $data['personnel_id']]);
+            $row = $personStmt->fetch(PDO::FETCH_ASSOC);
+            $personnelFullName = $row && !empty($row['full_name']) ? $row['full_name'] : null;
+        } catch (PDOException $e) {
+            // If name lookup fails, fallback later
+            $personnelFullName = null;
+        }
+
+        // Pick a single parent reservation_id to notify (can be passed explicitly)
+        $reservationIdForNotif = isset($data['notification_reservation_reservation_id'])
+            ? (int)$data['notification_reservation_reservation_id']
+            : null;
 
         foreach ($data['checklist_ids'] as $checklist) {
             $admin_id = $data['admin_id'];
@@ -7174,6 +8361,17 @@ public function saveChecklist($data) {
                                 VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
                     $params[':reservation_id'] = $checklist['reservation_venue_id'];
                     $params[':checklist_id'] = $checklist['checklist_id'];
+                    $reservationRefId = $checklist['reservation_venue_id'];
+                    // Derive parent reservation_id once if not provided
+                    if (!$reservationIdForNotif) {
+                        try {
+                            $parentSql = "SELECT reservation_reservation_id FROM tbl_reservation_venue WHERE reservation_venue_id = :id";
+                            $stmtP = $this->conn->prepare($parentSql);
+                            $stmtP->execute([':id' => $reservationRefId]);
+                            $parentId = $stmtP->fetchColumn();
+                            if ($parentId) { $reservationIdForNotif = (int)$parentId; }
+                        } catch (PDOException $e) { /* ignore */ }
+                    }
                     break;
 
                 case 'vehicle':
@@ -7185,6 +8383,17 @@ public function saveChecklist($data) {
                                 VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
                     $params[':reservation_id'] = $checklist['reservation_vehicle_id'];
                     $params[':checklist_id'] = $checklist['checklist_id'];
+                    $reservationRefId = $checklist['reservation_vehicle_id'];
+                    // Derive parent reservation_id once if not provided
+                    if (!$reservationIdForNotif) {
+                        try {
+                            $parentSql = "SELECT reservation_reservation_id FROM tbl_reservation_vehicle WHERE reservation_vehicle_id = :id";
+                            $stmtP = $this->conn->prepare($parentSql);
+                            $stmtP->execute([':id' => $reservationRefId]);
+                            $parentId = $stmtP->fetchColumn();
+                            if ($parentId) { $reservationIdForNotif = (int)$parentId; }
+                        } catch (PDOException $e) { /* ignore */ }
+                    }
                     break;
 
                 case 'equipment':
@@ -7196,6 +8405,17 @@ public function saveChecklist($data) {
                                 VALUES (:reservation_id, :checklist_id, :admin_id, :personnel_id, :isChecked)";
                     $params[':reservation_id'] = $checklist['reservation_equipment_id'];
                     $params[':checklist_id'] = $checklist['checklist_id'];
+                    $reservationRefId = $checklist['reservation_equipment_id'];
+                    // Derive parent reservation_id once if not provided
+                    if (!$reservationIdForNotif) {
+                        try {
+                            $parentSql = "SELECT reservation_reservation_id FROM tbl_reservation_equipment WHERE reservation_equipment_id = :id";
+                            $stmtP = $this->conn->prepare($parentSql);
+                            $stmtP->execute([':id' => $reservationRefId]);
+                            $parentId = $stmtP->fetchColumn();
+                            if ($parentId) { $reservationIdForNotif = (int)$parentId; }
+                        } catch (PDOException $e) { /* ignore */ }
+                    }
                     break;
 
                 default:
@@ -7207,18 +8427,28 @@ public function saveChecklist($data) {
             $results[] = $this->conn->lastInsertId();
         }
 
-        // Insert notification for the personnel
-        $notificationSql = "INSERT INTO notification_user 
-                            (notification_message, notification_user_id, is_read, created_at)
-                            VALUES (:message, :user_id, 0, NOW())";
-
-        $notifMessage = "You have been assigned new checklist tasks.";
-        $stmtNotif = $this->conn->prepare($notificationSql);
-        $stmtNotif->bindParam(':message', $notifMessage, PDO::PARAM_STR);
-        $stmtNotif->bindParam(':user_id', $data['personnel_id'], PDO::PARAM_INT);
-        $stmtNotif->execute();
+        // Insert a single reservation notification into tbl_notification_reservation
+        $notifMessageRes = "You have been assigned new checklist tasks.";
+        if (!empty($reservationIdForNotif)) {
+            try {
+                $this->insertNotificationTouser($notifMessageRes, (int)$data['personnel_id'], (int)$reservationIdForNotif);
+            } catch (Throwable $te) { /* ignore notification errors */ }
+        }
 
         $this->conn->commit();
+
+        // Single audit log for the entire assignment action (non-blocking, not based on count)
+        try {
+            $nameForLog = $personnelFullName ?? ('User #' . (int)($data['personnel_id'] ?? 0));
+            $desc = "Assigned Checklist to: {$nameForLog}";
+            $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+            $auditStmt = $this->conn->prepare($auditSql);
+            $auditStmt->execute([
+                ':description' => $desc,
+                ':action' => 'ASSIGN',
+                ':created_by' => $admin_id
+            ]);
+        } catch (Throwable $te) { /* ignore audit errors */ }
 
         return json_encode([
             'status' => 'success',
@@ -7363,6 +8593,22 @@ public function fetchEquipmentCategoryById($id) {
     return $this->executeQuery($sql, [':id' => $id]);
 }
 
+    public function fetchAudit() {
+        $sql = "
+            SELECT 
+                a.id,
+                a.description,
+                a.action,
+                a.created_at,
+                a.created_by,
+                CONCAT_WS(' ', u.users_fname, u.users_mname, u.users_lname) AS created_by_name
+            FROM audit_log a
+            LEFT JOIN tbl_users u ON a.created_by = u.users_id
+            ORDER BY a.created_at DESC
+        ";
+        return $this->executeQuery($sql);
+    }
+
 public function fetchDeansApproval($reservationId) {
     try {
         $sql = "
@@ -7418,6 +8664,432 @@ public function fetchDeansApproval($reservationId) {
     }
 }
 
+public function doubleCheckAvailability($startDateTime, $endDateTime) {
+    try {
+        // Initialize the result array with empty arrays for each resource type
+        $result = [
+            'reservation_users' => [],
+            'unavailable_vehicles' => [],
+            'unavailable_venues' => [],
+            'unavailable_equipment' => [],
+            'unavailable_drivers' => []
+        ];
+
+        // --- Query for Reserved Users (reservation_users) ---
+        // This query fetches details of users who have reservations that overlap with the given date range
+        // and are in 'Approved' status (status_id = 6) and active.
+        $userQuery = "
+            SELECT DISTINCT
+                r.reservation_user_id,
+                r.reservation_id,
+                r.reservation_start_date,
+                r.reservation_end_date,
+                r.reservation_title,
+                r.reservation_description,
+                CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
+                ul.user_level_name,
+                d.departments_name
+            FROM tbl_reservation r
+            INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
+            INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+            LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+            WHERE r.reservation_start_date <= :endDate
+            AND r.reservation_end_date >= :startDate
+            AND rs.reservation_status_status_id = 6 
+            AND rs.reservation_active = 1
+        ";
+        $stmt = $this->conn->prepare($userQuery);
+        $stmt->execute([
+            ':startDate' => $startDateTime,
+            ':endDate' => $endDateTime
+        ]);
+        $result['reservation_users'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // --- Query for Unavailable Vehicles ---
+        // This query identifies vehicles that are part of approved and active reservations
+        // overlapping with the given date range.
+        $vehicleQuery = "
+            SELECT DISTINCT
+                v.vehicle_id,
+                v.vehicle_license,
+                vm.vehicle_model_name,
+                vmake.vehicle_make_name
+            FROM tbl_reservation r
+            INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
+            INNER JOIN tbl_vehicle v ON rv.reservation_vehicle_vehicle_id = v.vehicle_id
+            INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
+            INNER JOIN tbl_vehicle_make vmake ON vm.vehicle_model_vehicle_make_id = vmake.vehicle_make_id
+            WHERE r.reservation_start_date <= :endDate
+            AND r.reservation_end_date >= :startDate
+            AND rs.reservation_status_status_id = 6
+            AND rs.reservation_active = 1
+        ";
+        $stmt = $this->conn->prepare($vehicleQuery);
+        $stmt->execute([
+            ':startDate' => $startDateTime,
+            ':endDate' => $endDateTime
+        ]);
+        $result['unavailable_vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // --- Query for Unavailable Venues ---
+        // This query identifies venues that are part of approved and active reservations
+        // overlapping with the given date range.
+        $venueQuery = "
+            SELECT DISTINCT
+                v.ven_id,
+                v.ven_name
+            FROM tbl_reservation r
+            INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            INNER JOIN tbl_reservation_venue rv ON r.reservation_id = rv.reservation_reservation_id
+            INNER JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
+            WHERE r.reservation_start_date <= :endDate
+            AND r.reservation_end_date >= :startDate
+            AND rs.reservation_status_status_id = 6
+            AND rs.reservation_active = 1
+        ";
+        $stmt = $this->conn->prepare($venueQuery);
+        $stmt->execute([
+            ':startDate' => $startDateTime,
+            ':endDate' => $endDateTime
+        ]);
+        $result['unavailable_venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $equipmentQuery = "
+            WITH EquipmentTotalQuantities AS (
+                SELECT
+                    e.equip_id,
+                    CASE
+                        -- If there are any units for this equipment in tbl_equipment_unit, it's considered serialized.
+                        WHEN EXISTS (SELECT 1 FROM tbl_equipment_unit u WHERE u.equip_id = e.equip_id) THEN (
+                            -- For serialized equipment, count the available units.
+                            SELECT COUNT(*)
+                            FROM tbl_equipment_unit u_inner
+                            WHERE u_inner.equip_id = e.equip_id
+                        )
+                        ELSE (
+                            -- For non-serialized equipment, get the quantity from tbl_equipment_quantity.
+                            -- LIMIT 1 is used here assuming tbl_equipment_quantity holds a single current quantity per equip_id.
+                            -- If it's a history, you might need to order by 'last_updated' and take the latest.
+                            SELECT eq.quantity
+                            FROM tbl_equipment_quantity eq
+                            WHERE eq.equip_id = e.equip_id
+                            LIMIT 1
+                        )
+                    END AS total_quantity
+                FROM tbl_equipments e
+            )
+            SELECT DISTINCT
+                e.equip_id,
+                e.equip_name,
+                COALESCE(etq.total_quantity, 0) AS total_quantity, -- Ensure total_quantity is not null
+                COALESCE(SUM(re.reservation_equipment_quantity), 0) AS reserved_quantity
+            FROM tbl_equipments e
+            INNER JOIN EquipmentTotalQuantities etq ON e.equip_id = etq.equip_id -- Join with the calculated total quantities
+            LEFT JOIN tbl_reservation_equipment re ON e.equip_id = re.reservation_equipment_equip_id
+            LEFT JOIN tbl_reservation r ON r.reservation_id = re.reservation_reservation_id
+            LEFT JOIN tbl_reservation_status rs ON rs.reservation_reservation_id = r.reservation_id
+            WHERE
+                (r.reservation_start_date <= :endDate AND r.reservation_end_date >= :startDate)
+                AND rs.reservation_status_status_id = 6
+                AND rs.reservation_active = 1
+            GROUP BY e.equip_id, e.equip_name, etq.total_quantity
+            HAVING COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0);
+
+        ";
+        $stmt = $this->conn->prepare($equipmentQuery);
+        $stmt->execute([
+            ':startDate' => $startDateTime,
+            ':endDate' => $endDateTime
+        ]);
+        $result['unavailable_equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // --- Query for Unavailable Drivers ---
+        // This query identifies drivers who are assigned to approved and active reservations
+        // overlapping with the given date range.
+        $driverQuery = "
+            SELECT DISTINCT
+                rd.reservation_driver_user_id as users_id,
+                rd.driver_name as full_name
+            FROM tbl_reservation r
+            INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+            INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
+            INNER JOIN tbl_reservation_driver rd ON rv.reservation_vehicle_id = rd.reservation_vehicle_id
+            WHERE r.reservation_start_date <= :endDate
+            AND r.reservation_end_date >= :startDate
+            AND rs.reservation_status_status_id = 6
+            AND rs.reservation_active = 1
+        ";
+        $stmt = $this->conn->prepare($driverQuery);
+        $stmt->execute([
+            ':startDate' => $startDateTime,
+            ':endDate' => $endDateTime
+        ]);
+        $result['unavailable_drivers'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Return the results as a JSON success response
+        return json_encode(['status' => 'success', 'data' => $result]);
+    } catch (PDOException $e) {
+        // Catch any PDO exceptions (database errors) and return an error JSON response
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+public function insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate) {
+    try {
+        $this->conn->beginTransaction();
+        $results = [];
+
+        for ($i = 0; $i < count($equipIds); $i++) {
+            $equipId = $equipIds[$i];
+            $quantity = $quantities[$i];
+
+            // Get equipment type
+            $stmtType = $this->conn->prepare("SELECT equip_type FROM tbl_equipments WHERE equip_id = :equip_id");
+            $stmtType->execute([':equip_id' => $equipId]);
+            $equipData = $stmtType->fetch(PDO::FETCH_ASSOC);
+
+            if (!$equipData) {
+                throw new Exception("Equipment ID $equipId not found.");
+            }
+
+            $equipType = strtolower($equipData['equip_type']);
+
+            // Get reservation_equipment_id
+            $stmtReservationEquip = $this->conn->prepare("SELECT reservation_equipment_id 
+                                                          FROM tbl_reservation_equipment 
+                                                          WHERE reservation_equipment_equip_id = :equip_id 
+                                                          AND reservation_reservation_id = :reservation_id");
+            $stmtReservationEquip->execute([
+                ':equip_id' => $equipId,
+                ':reservation_id' => $reservationId
+            ]);
+            $reservationEquip = $stmtReservationEquip->fetch(PDO::FETCH_ASSOC);
+
+            if (!$reservationEquip) {
+                throw new Exception("No reservation_equipment found for equip_id $equipId and reservation_id $reservationId");
+            }
+
+            $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
+
+            if ($equipType === 'bulk') {
+                // Check available quantity (but don't deduct)
+                $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
+                $stmtQty->execute([':equip_id' => $equipId]);
+                $qtyData = $stmtQty->fetch(PDO::FETCH_ASSOC);
+                $availableQty = $qtyData ? (int)$qtyData['quantity'] : 0;
+
+                if ($availableQty < $quantity) {
+                    throw new Exception("Not enough quantity for bulk equipment ID $equipId. Only $availableQty available.");
+                }
+
+                // Commented out quantity deduction for bulk equipment
+                // $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
+                // $stmtUpdateQty->execute([
+                //     ':qty' => $quantity,
+                //     ':equip_id' => $equipId
+                // ]);
+
+                $results[] = [
+                    'equip_id' => $equipId,
+                    'reservation_equipment_id' => $reservationEquipmentId,
+                    'type' => 'bulk',
+                    'quantity_used' => $quantity,
+                    'can_release' => true
+                ];
+            } else {
+                // Serialized logic
+                $sqlUnits = "
+                    SELECT eu.unit_id, eu.serial_number 
+                    FROM tbl_equipment_unit eu
+                    WHERE eu.equip_id = :equip_id 
+                        AND eu.status_availability_id != 2 
+                        AND eu.is_active = 1
+                        AND eu.unit_id NOT IN (
+                            SELECT tru.unit_id
+                            FROM tbl_reservation_unit tru
+                            JOIN tbl_reservation_equipment tre ON tru.reservation_equipment_id = tre.reservation_equipment_id
+                            JOIN tbl_reservation tr ON tre.reservation_reservation_id = tr.reservation_id
+                            JOIN tbl_reservation_status trs ON tr.reservation_id = trs.reservation_reservation_id
+                            WHERE trs.reservation_status_status_id = 6
+                                AND trs.reservation_active = 1
+                                AND eu.unit_id = tru.unit_id
+                                AND (
+                                    (tr.reservation_start_date <= :end_date AND tr.reservation_end_date >= :start_date)
+                                )
+                        )
+                    LIMIT :qty";
+
+                $stmtUnits = $this->conn->prepare($sqlUnits);
+                $stmtUnits->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+                $stmtUnits->bindValue(':qty', (int)$quantity, PDO::PARAM_INT);
+                $stmtUnits->bindParam(':start_date', $startDate);
+                $stmtUnits->bindParam(':end_date', $endDate);
+                $stmtUnits->execute();
+                $units = $stmtUnits->fetchAll(PDO::FETCH_ASSOC);
+
+                $availableUnits = count($units);
+
+                if ($availableUnits === 0) {
+                    $results[] = [
+                        'equip_id' => $equipId,
+                        'reservation_equipment_id' => $reservationEquipmentId,
+                        'type' => 'serialized',
+                        'units_inserted' => 0,
+                        'units' => [],
+                        'can_release' => false,
+                        'message' => "No available units for equipment ID $equipId"
+                    ];
+                    continue;
+                }
+
+                // Insert available units
+                $stmtInsert = $this->conn->prepare("INSERT INTO tbl_reservation_unit 
+                                                    (reservation_equipment_id, unit_id, active) 
+                                                    VALUES (:reservation_equipment_id, :unit_id, 0)");
+                foreach ($units as $unit) {
+                    $stmtInsert->execute([
+                        ':reservation_equipment_id' => $reservationEquipmentId,
+                        ':unit_id' => $unit['unit_id']
+                    ]);
+                }
+
+                $results[] = [
+                    'equip_id' => $equipId,
+                    'reservation_equipment_id' => $reservationEquipmentId,
+                    'type' => 'serialized',
+                    'units_inserted' => $availableUnits,
+                    'units_missing' => max(0, $quantity - $availableUnits),
+                    'units' => $units,
+                    'can_release' => $availableUnits > 0
+                ];
+            }
+        }
+
+        $this->conn->commit();
+
+        return json_encode([
+            'operation' => 'insertUnits',
+            'status' => 'success',
+            'data' => $results
+        ]);
+    } catch (Exception $e) {
+        $this->conn->rollBack();
+        return json_encode([
+            'operation' => 'insertUnits',
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ]);
+    }
+}
+
+public function handleRequest($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
+    try {
+        $this->conn->beginTransaction();
+
+        if ($isAccepted) {
+            // For user ID 99, handle status ID 8
+            if ($userId == 99) {
+                $sqlUpdate = "
+                    UPDATE tbl_reservation_status 
+                    SET reservation_active = 1 
+                    WHERE reservation_reservation_id = :reservation_id 
+                    AND reservation_status_status_id = 8";
+                
+                $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                $reservation_id = $reservationId;
+                $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtUpdate->execute();
+                
+                // Insert status 6
+                $sqlInsert = "
+                    INSERT INTO tbl_reservation_status 
+                    (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                    VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
+                
+                $stmtInsert = $this->conn->prepare($sqlInsert);
+                $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                $stmtInsert->execute();
+            } else {
+                // For other users, handle status ID 1 normally
+                $sqlUpdate = "
+                    UPDATE tbl_reservation_status 
+                    SET reservation_active = 1 
+                    WHERE reservation_reservation_id = :reservation_id 
+                    AND reservation_status_status_id = 1";
+                
+                $stmtUpdate = $this->conn->prepare($sqlUpdate);
+                $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                $stmtUpdate->execute();
+            }
+        } else {
+            $sqlUpdate = "
+                UPDATE tbl_reservation_status 
+                SET reservation_active = -1 
+                WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
+            $stmtUpdate = $this->conn->prepare($sqlUpdate);
+            $reservation_id = $reservationId; // Store in variable
+            $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmtUpdate->execute();
+            
+            $sqlInsert = "
+                INSERT INTO tbl_reservation_status 
+                (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
+            
+            $stmtInsert = $this->conn->prepare($sqlInsert);
+            $reservation_id = $reservationId; // Store in variable
+            $user_id = $userId; // Store in variable
+            $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
+            $stmtInsert->execute();
+        }
+
+        // Insert notification with proper notification_user_id
+        if (!empty($notificationMessage)) {
+            $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                             (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                             VALUES (:message, :reservation_id, :notification_user_id, NOW())";
+            
+            $stmtNotification = $this->conn->prepare($sqlNotification);
+            $message = $notificationMessage; // Store in variable
+            $reservation_id = $reservationId; // Store in variable
+            $notification_user = $notification_user_id ?? $userId; // Store in variable
+            $stmtNotification->bindParam(':message', $message, PDO::PARAM_STR);
+            $stmtNotification->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmtNotification->bindParam(':notification_user_id', $notification_user, PDO::PARAM_INT);
+            $stmtNotification->execute();
+        }
+
+        $this->conn->commit();
+        
+        // Send push notification to the requester after successful database operations
+        $notificationUserId = $notification_user_id ?? $userId;
+        // Compose notification content
+        $status = $isAccepted ? 'approved' : 'declined';
+        $title = "Reservation " . ucfirst($status);
+        $body = "Your reservation has been {$status}.";
+        $data = [
+            'reservation_id' => $reservationId,
+            'status' => $status,
+            'type' => 'reservation_approval'
+        ];
+        $this->sendPushNotificationToUser($notificationUserId, $title, $body, $data);
+
+        return json_encode([
+            'status' => 'success', 
+            'message' => 'Request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
+            'reservation_id' => $reservationId
+        ]);
+
+    } catch (PDOException $e) {
+        $this->conn->rollBack();
+        return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 
 
     
@@ -7467,6 +9139,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     switch ($operation) {
 
+        case "handleRequest":
+            $reservationId = $input['reservation_id'] ?? null;
+            $isAccepted = $input['is_accepted'] ?? false;
+            $notificationMessage = $input['notification_message'] ?? '';
+            $notificationUserId = $input['notification_user_id'] ?? null;
+            if ($reservationId === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
+                break;
+            }
+            echo $user->handleRequest($reservationId, $isAccepted, $userId, $notificationMessage, $notificationUserId);
+            break;
+
+        case "insertUnits":
+            $equipIds = $input['equip_ids'] ?? [];
+            $quantities = $input['quantities'] ?? [];
+            $reservationId = $input['reservation_id'] ?? null;
+            $startDate = $input['start_date'] ?? null;
+            $endDate = $input['end_date'] ?? null;
+
+            if (empty($equipIds) || empty($quantities) || $reservationId === null || $startDate === null || $endDate === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Equip IDs, Quantities, Reservation ID, Start Date, and End Date are required']);
+                break;
+            }
+
+            echo $user->insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate);
+            break;
+
+        case "doubleCheckAvailability":
+            $startDateTime = $input['start_datetime'] ?? null;
+            $endDateTime = $input['end_datetime'] ?? null;
+            if ($startDateTime === null || $endDateTime === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Start and end datetime are required']);
+                break;
+            }
+            echo $user->doubleCheckAvailability($startDateTime, $endDateTime);
+            break;
+
         case "fetchEquipmentCategoryById": // Fetch equipment category by ID
             $equipmentId = $input['id'] ?? ($_POST['id'] ?? null);
             if ($equipmentId) {
@@ -7506,7 +9215,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $checklistNames = $input['checklistNames'] ?? [];
             $type = $input['type'] ?? '';
             $id = $input['id'] ?? 0;
-            echo $user->saveMasterChecklist($checklistNames, $type, $id);
+            $user_personnel_id = $input['user_personnel_id'] ?? ($_POST['user_personnel_id'] ?? null);
+            echo $user->saveMasterChecklist($checklistNames, $type, $id, $user_personnel_id);
             break;
 
         case "updateChecklist":
@@ -7514,6 +9224,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$data) {
                 echo json_encode(['status' => 'error', 'message' => 'No data provided']);
                 break;
+            }
+            // Support user_personnel_id passed at the top-level of the request
+            $top_user_pid = $input['user_personnel_id'] ?? ($_POST['user_personnel_id'] ?? null);
+            if (is_array($data) && !isset($data['user_personnel_id']) && $top_user_pid !== null) {
+                $data['user_personnel_id'] = $top_user_pid;
             }
             echo $user->updateChecklist($data);
             break;
@@ -7563,7 +9278,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = $input['id'] ?? '';
             $name = $input['name'] ?? '';
             $type = $input['type'] ?? '';
-            echo $user->updateDepartment($id, $name, $type);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            echo $user->updateDepartment($id, $name, $type, $userId);
             break;
 
         case "updateVehicleMake":
@@ -7573,7 +9289,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Missing id or name']);
                 break;
             }
-            echo $user->updateVehicleMake($id, $name);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            echo $user->updateVehicleMake($id, $name, $userId);
             break;
 
         case "fetchMake":
@@ -7586,6 +9303,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case "fetchRecord":
             echo $user->fetchRecord();
+            break;
+        case "fetchAudit":
+            echo $user->fetchAudit();
             break;
         case "fetchStatusAvailability":
             echo $user->fetchStatusAvailability();
@@ -7642,7 +9362,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo $user->saveDriver($input);
             break;
         case "saveHoliday":
-            echo $user->saveHoliday($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route saveHoliday userId=" . var_export($userId, true));
+            echo $user->saveHoliday($input, $userId);
             break;
         case "updateDriver":
             echo $user->updateDriver($input);
@@ -7720,7 +9442,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
                 break;
             }
-            echo $user->updateHoliday($holidayId, $holidayName, $holidayDate);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route updateHoliday userId=" . var_export($userId, true));
+            echo $user->updateHoliday($holidayId, $holidayName, $holidayDate, $userId);
             break;
 
         case "deleteHoliday":
@@ -7962,28 +9686,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Month is required']);
                 break;
             }
-            echo $user->fetchReservationGenerateReport($month);
+            $user_personnel_id = $input['user_personnel_id'] ?? null;
+            echo $user->fetchReservationGenerateReport($month, $user_personnel_id);
             break;
         // Remove or fix the incomplete fetchReservation case
 
         case "saveModelData":
-            echo $user->saveModelData($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route saveModelData userId=" . var_export($userId, true));
+            echo $user->saveModelData($input, $userId);
             break;
         case "saveMakeData":
-            echo $user->saveMakeData($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route saveMakeData userId=" . var_export($userId, true));
+            echo $user->saveMakeData($input, $userId);
             break;
         case "saveEquipmentCategory":
-            echo $user->saveEquipmentCategory($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route saveEquipmentCategory userId=" . var_export($userId, true));
+            echo $user->saveEquipmentCategory($input, $userId);
             break;
         case "saveDepartmentData":
-            echo $user->saveDepartmentData($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            echo $user->saveDepartmentData($input, $userId);
             break;
         case "saveCategoryData":
-            echo $user->saveCategoryData($input);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route saveCategoryData userId=" . var_export($userId, true));
+            echo $user->saveCategoryData($input, $userId);
             break;
 
         case "fetchVehicleCategories":
             echo $user->fetchVehicleCategories();
+            break;
+
+        case "updateVehicleMake":
+            $id = $input['id'] ?? null;
+            $name = $input['name'] ?? null;
+            if (!$id || !$name) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing id or name']);
+                break;
+            }
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            echo $user->updateVehicleMake($id, $name, $userId);
             break;
 
         case "updateVehicleCategory":
@@ -7993,12 +9738,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Missing id or name']);
                 break;
             }
-            echo $user->updateVehicleCategory($id, $name);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route updateVehicleCategory userId=" . var_export($userId, true));
+            echo $user->updateVehicleCategory($id, $name, $userId);
             break;
 
         case "updateVehicleModel":
             if (isset($input['modelData'])) {
-                echo $user->updateVehicleModel($input['modelData']);
+                $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+                error_log("route updateVehicleModel userId=" . var_export($userId, true));
+                echo $user->updateVehicleModel($input['modelData'], $userId);
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'Missing modelData']);
             }
@@ -8017,7 +9766,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Missing categoryData']);
                 break;
             }
-            echo $user->updateEquipmentCategory($categoryData);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            error_log("route updateEquipmentCategory userId=" . var_export($userId, true));
+            echo $user->updateEquipmentCategory($categoryData, $userId);
             break;
         
         case "fetchModelsByCategoryAndMake":
@@ -8076,8 +9827,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $resourceId = $input['resourceId'] ?? ($_POST['resourceId'] ?? null);
             $recordId = $input['recordId'] ?? ($_POST['recordId'] ?? null);
             $isFixed = $input['isFixed'] ?? ($_POST['isFixed'] ?? false);
+            $user_personnel_id = $input['user_personnel_id'] ?? ($_POST['user_personnel_id'] ?? null);
             if ($type && $resourceId && $recordId) {
-                echo $user->updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed);
+                echo $user->updateResourceStatusAndCondition($type, $resourceId, $recordId, $isFixed, $user_personnel_id);
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'Missing required parameters (type, resourceId, recordId)']);
             }

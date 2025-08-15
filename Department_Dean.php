@@ -186,13 +186,18 @@ class Department_Dean {
             WHERE
                 da.department_approval_department_id = :department_id
                 AND da.department_is_approved = 0
+                AND (
+                    :user_level_id <> 6 OR r.reservation_user_id <> :current_user_id
+                )
                 
             GROUP BY r.reservation_id, da.department_approval_id
         ";
 
         $stmt = $this->conn->prepare($sql);
         $stmt->execute([
-            'department_id' => $departmentId
+            'department_id'   => $departmentId,
+            'user_level_id'   => $userLevelId,
+            'current_user_id' => $currentUserId
         ]);
 
         $result = [];

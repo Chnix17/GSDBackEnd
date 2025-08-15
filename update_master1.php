@@ -780,7 +780,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "updateVehicleMake":
             $id = $jsonInput['id'] ?? '';
             $name = $jsonInput['name'] ?? '';
-            echo $user->updateVehicleMake($id, $name);
+            $userId = $jsonInput['userid'] ?? null;
+            error_log("update_master1 updateVehicleMake userId=" . var_export($userId, true));
+            echo $user->updateVehicleMake($id, $name, $userId);
             break;
             
         case "updateVehicleCategory":
