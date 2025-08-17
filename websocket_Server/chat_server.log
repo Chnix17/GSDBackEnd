@@ -1,0 +1,272 @@
+WS IN [53]: {"type":"register","user_id":42}
+Registered 53 as user 42
+WS IN [53]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 53
+WS IN [90]: {"type":"register","user_id":42}
+Registered 90 as user 42
+WS IN [95]: {"type":"register","user_id":42}
+Registered 95 as user 42
+WS IN [95]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 95
+WS IN [95]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 95
+WS IN [95]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 95
+WS IN [106]: {"type":"register","user_id":42}
+Registered 106 as user 42
+WS IN [111]: {"type":"register","user_id":42}
+Registered 111 as user 42
+WS IN [111]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 111
+WS IN [111]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 111
+WS IN [111]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 111
+WS IN [111]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 111
+WS IN [124]: {"type":"register","user_id":42}
+Registered 124 as user 42
+WS IN [124]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 124
+WS IN [124]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 124
+WS IN [124]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 124
+WS IN [135]: {"type":"register","user_id":42}
+Registered 135 as user 42
+WS IN [140]: {"type":"register","user_id":42}
+Registered 140 as user 42
+WS IN [145]: {"type":"register","user_id":42}
+Registered 145 as user 42
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [145]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 145
+WS IN [162]: {"type":"register","user_id":109}
+Registered 162 as user 109
+WS IN [167]: {"type":"register","user_id":42}
+Registered 167 as user 42
+WS IN [172]: {"type":"register","user_id":42}
+Registered 172 as user 42
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [172]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 172
+WS IN [247]: {"type":"register","user_id":42}
+Registered 247 as user 42
+WS IN [252]: {"type":"register","user_id":42}
+Registered 252 as user 42
+WS IN [257]: {"type":"register","user_id":99}
+Registered 257 as user 99
+WS IN [262]: {"type":"register","user_id":78}
+Registered 262 as user 78
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [345]: {"type":"register","user_id":42}
+Registered 345 as user 42
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262
+WS IN [262]: {"type":"ping"}
+Ignoring non-chat message type 'ping' from 262

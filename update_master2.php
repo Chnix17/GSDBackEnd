@@ -835,6 +835,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result = $user->fetch2FA($user_id);
             echo json_encode($result);
             break;
+        case 'updateEquipmentUnit':
+            // Expecting payload in $input['json'] with at least unit_id
+            $data = isset($input['json']) ? $input['json'] : null;
+            if (!is_array($data) || empty($data['unit_id'])) {
+                echo json_encode(["status" => "error", "message" => "Invalid payload: unit_id is required"]);
+                exit;
+            }
+            $result = $user->updateEquipmentUnit($data);
+            // Method already returns JSON-encoded string
+            echo $result;
+            break;
         default:
             echo json_encode(["status" => "error", "message" => "Invalid operation"]);
             break;

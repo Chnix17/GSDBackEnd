@@ -3417,9 +3417,7 @@ public function updateEquipmentUnit($unitData) {
         // Map the allowed fields that can be updated
         $allowedFields = [
             'serial_number' => PDO::PARAM_STR,
-            'brand' => PDO::PARAM_STR,
-            'size' => PDO::PARAM_STR,
-            'color' => PDO::PARAM_STR,
+            'status_availability_id' => PDO::PARAM_INT,
             'is_active' => PDO::PARAM_BOOL,
             'user_admin_id' => PDO::PARAM_INT
         ];
@@ -3453,9 +3451,9 @@ public function updateEquipmentUnit($unitData) {
         // Bind unit_id parameter
         $updateStmt->bindParam(':unit_id', $unitData['unit_id'], PDO::PARAM_INT);
         
-        // Bind all other parameters
+        // Bind all other parameters (use bindValue since we have literal values, not references)
         foreach ($params as $field => $param) {
-            $updateStmt->bindParam(":$field", $param['value'], $param['type']);
+            $updateStmt->bindValue(":$field", $param['value'], $param['type']);
         }
         
         // Add debug logging
@@ -9138,6 +9136,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
+
+        case 'updateEquipmentUnit':
+            // Accept payload from various shapes: input.json, input.unitData, input.data, or top-level fields/POST
+            $data = $input['json'] ?? ($input['unitData'] ?? ($input['data'] ?? $input ?? null));
+
+            // If string JSON slipped through
+            if (is_string($data)) {
+                $decoded = json_decode($data, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $data = $decoded;
+                }
+            }
+
+            // Fallback to POST if still not array
+            if (!is_array($data) || empty($data)) {
+                $data = $_POST ?? null;
+            }
+
+            // Normalize keys (camelCase to snake_case)
+            if (is_array($data)) {
+                if (!isset($data['unit_id']) && isset($data['unitId'])) {
+                    $data['unit_id'] = $data['unitId'];
+                }
+            }
+
+            if (!is_array($data) || empty($data['unit_id'])) {
+                echo json_encode(["status" => "error", "message" => "Invalid payload: unit_id is required"]);
+                exit;
+            }
+            $result = $user->updateEquipmentUnit($data);
+            // Method already returns JSON-encoded string
+            echo $result;
+            break;
 
         case "handleRequest":
             $reservationId = $input['reservation_id'] ?? null;

@@ -18,6 +18,7 @@ class Chat implements MessageComponentInterface {
             die("Connection failed: " . $this->db->connect_error);
         }
         echo "Database connection successful\n";
+        echo "Chat server build: assoc-array validation enabled\n";
     }
 
     public function onOpen(ConnectionInterface $conn) {
@@ -28,16 +29,66 @@ class Chat implements MessageComponentInterface {
     }
 
     public function onMessage(ConnectionInterface $from, $msg) {
-        $data = json_decode($msg);
+        $data = json_decode($msg, true);
+        // Trace raw incoming message (first 500 chars max)
+        $logMsg = substr(is_string($msg) ? $msg : json_encode($msg), 0, 500);
+        @error_log("WS IN [{$from->resourceId}]: $logMsg\n", 3, __DIR__ . '/chat_server.log');
 
         // Validate incoming data to prevent errors on non-chat messages
+        if ($data === null || json_last_error() !== JSON_ERROR_NONE) {
+            echo "Invalid JSON received from {$from->resourceId}\n";
+            @error_log("Invalid JSON from {$from->resourceId}\n", 3, __DIR__ . '/chat_server.log');
+            return;
+        }
+        if (!is_array($data)) {
+            echo "Invalid payload type from {$from->resourceId}\n";
+            @error_log("Invalid payload type from {$from->resourceId}\n", 3, __DIR__ . '/chat_server.log');
+            return;
+        }
 
-        
-        $sender_id = $data->sender_id;
-        $receiver_id = $data->receiver_id;
-        $message = $data->message;
+        // Optional protocol: registration message to bind a connection to a user_id
+        $type = isset($data['type']) ? (string)$data['type'] : '';
+        if ($type === 'register') {
+            $userId = isset($data['user_id']) ? (int)$data['user_id'] : 0;
+            if ($userId > 0) {
+                // Store metadata on this connection
+                $this->clients[$from] = ['user_id' => $userId];
+                echo "Registered connection {$from->resourceId} as user {$userId}\n";
+                @error_log("Registered {$from->resourceId} as user {$userId}\n", 3, __DIR__ . '/chat_server.log');
+            } else {
+                echo "Invalid register payload from {$from->resourceId}\n";
+                @error_log("Invalid register payload from {$from->resourceId}\n", 3, __DIR__ . '/chat_server.log');
+            }
+            return;
+        }
+
+        // Only process chat messages
+        if ($type !== 'chat_message') {
+            echo "Ignoring non-chat message type '{$type}' from {$from->resourceId}\n";
+            @error_log("Ignoring non-chat message type '{$type}' from {$from->resourceId}\n", 3, __DIR__ . '/chat_server.log');
+            return;
+        }
+
+        $sender_id = isset($data['sender_id']) ? (int)$data['sender_id'] : 0;
+        // Fallback: if sender_id missing, try to use registered connection user_id
+        if ($sender_id <= 0 && isset($this->clients[$from]) && is_array($this->clients[$from]) && isset($this->clients[$from]['user_id'])) {
+            $sender_id = (int)$this->clients[$from]['user_id'];
+        }
+        $receiver_id = isset($data['receiver_id']) ? (int)$data['receiver_id'] : 0;
+        $message = isset($data['message']) ? trim((string)$data['message']) : '';
+
+        if ($sender_id <= 0 || $receiver_id <= 0 || $message === '') {
+            echo "Missing/invalid fields from {$from->resourceId} - sender_id: {$sender_id}, receiver_id: {$receiver_id}, message length: " . strlen($message) . "\n";
+            @error_log("Missing/invalid fields from {$from->resourceId} (s:$sender_id r:$receiver_id len:" . strlen($message) . ")\n", 3, __DIR__ . '/chat_server.log');
+            return;
+        }
 
         $stmt = $this->db->prepare("INSERT INTO tbl_chat (sender_id, receiver_id, message) VALUES (?, ?, ?)");
+        if (!$stmt) {
+            echo "Prepare failed: {$this->db->error}\n";
+            @error_log("DB prepare failed: {$this->db->error}\n", 3, __DIR__ . '/chat_server.log');
+            return;
+        }
         $stmt->bind_param("iis", $sender_id, $receiver_id, $message);
         
         if ($stmt->execute()) {
@@ -126,8 +177,18 @@ class Chat implements MessageComponentInterface {
         }
         $stmt->close();
 
+        // Broadcast sanitized payload to all clients
+        $broadcast = [
+            'sender_id'   => $sender_id,
+            'receiver_id' => $receiver_id,
+            'message'     => $message,
+            'message_id'  => isset($data['message_id']) ? (string)$data['message_id'] : (string)time(),
+            'timestamp'   => isset($data['timestamp']) ? (string)$data['timestamp'] : date(DATE_ISO8601),
+        ];
+        $out = json_encode($broadcast);
+        @error_log("WS OUT [{$from->resourceId}]: $out\n", 3, __DIR__ . '/chat_server.log');
         foreach ($this->clients as $client) {
-            $client->send($msg);
+            $client->send($out);
         }
     }
 

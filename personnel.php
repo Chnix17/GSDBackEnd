@@ -26,6 +26,69 @@ class User {
         }
     }
 
+    // Check if a personnel/user has an active push subscription
+    private function hasActiveSubscription($userId) {
+        try {
+            $sql = "SELECT 1 FROM tbl_push_subscriptions WHERE user_id = :uid AND is_active = 1 LIMIT 1";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute(['uid' => $userId]);
+            return (bool)$stmt->fetchColumn();
+        } catch (PDOException $e) {
+            error_log('hasActiveSubscription error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    // Send a test reminder push using existing send-push-notification.php endpoint
+    public function sendTestReminder($personnel_id) {
+        if (!$personnel_id) {
+            return json_encode(['status' => 'error', 'message' => 'Personnel ID is required']);
+        }
+
+        // Verify active subscription first
+        if (!$this->hasActiveSubscription($personnel_id)) {
+            return json_encode(['status' => 'error', 'message' => 'No active push subscription for this personnel']);
+        }
+
+        // Prepare payload
+        $payload = [
+            'operation' => 'send',
+            'user_id'   => (int)$personnel_id,
+            'title'     => 'GSD Reminder (Test)',
+            'body'      => 'This is a 1-minute test reminder. If you see this, push works.',
+            'data'      => [
+                'url' => '/ViewRequest',
+            ],
+        ];
+
+        // Call the existing push sender via HTTP to avoid including its request handler
+        $url = (isset($_SERVER['REQUEST_SCHEME']) ? $_SERVER['REQUEST_SCHEME'] : 'http') . '://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/send-push-notification.php';
+
+        try {
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            if ($response === false) {
+                $err = curl_error($ch);
+                curl_close($ch);
+                return json_encode(['status' => 'error', 'message' => 'cURL error: ' . $err]);
+            }
+            curl_close($ch);
+
+            // Pass through the sender response
+            if ($httpCode >= 200 && $httpCode < 300) {
+                return json_encode(['status' => 'success', 'message' => 'Test reminder sent', 'sender_response' => json_decode($response, true)]);
+            }
+            return json_encode(['status' => 'error', 'message' => 'Push sender HTTP ' . $httpCode, 'sender_response' => $response]);
+        } catch (Exception $e) {
+            return json_encode(['status' => 'error', 'message' => 'Exception: ' . $e->getMessage()]);
+        }
+    }
+
     public function fetchAssignedRelease($personnel_id) {
         if (!$personnel_id) {
             return json_encode(['status' => 'error', 'message' => 'Personnel ID is required']);
@@ -1697,8 +1760,8 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
 
 }
 
-// Handle the request
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Handle the request (web requests only; skip when included by CLI)
+if (php_sapi_name() !== 'cli' && isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // Get JSON input
     $jsonInput = json_decode(file_get_contents('php://input'), true);
     
@@ -1735,6 +1798,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]));
             }
             echo $user->fetchAssignedRelease($personnel_id);
+            break;
+
+        case 'sendTestReminder':
+            if (!$personnel_id) {
+                die(json_encode([
+                    'status' => 'error',
+                    'message' => 'Personnel ID is required',
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]));
+            }
+            echo $user->sendTestReminder($personnel_id);
             break;
     
         case 'fetchCompletedTask':  // Add this case for fetchCompletedTask

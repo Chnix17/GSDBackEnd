@@ -373,8 +373,8 @@ class Reservation {
             }
             $dept = strtolower(trim($row['dept_name'] ?? ''));
             $level = strtolower(trim($row['level_name'] ?? ''));
-            $bypass = ($dept === 'coo' && $level === 'department head') ||
-                      ($dept === 'gsd' && $level === 'secretary');
+            $bypass = ($dept === 'coo' && $level === 'department head');
+                    
             if ($bypass) {
                 error_log(sprintf('Bypassing conflict checks for user_id=%d (dept=%s, level=%s)', (int)$userId, $row['dept_name'], $row['level_name']));
             }
