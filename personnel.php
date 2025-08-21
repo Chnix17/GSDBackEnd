@@ -105,7 +105,16 @@ class User {
                     rc_venue.isChecked AS venue_isChecked,
                     rv.reservation_reservation_id,
                     rv.reservation_venue_id,
-                    rv.reservation_venue_venue_id,
+                    CASE 
+                        WHEN rv.reservation_change_venue_id IS NOT NULL AND EXISTS (
+                            SELECT 1 FROM tbl_reservation_status s
+                            WHERE s.reservation_reservation_id = rv.reservation_reservation_id
+                              AND s.reservation_status_status_id = 10
+                              AND s.reservation_active = 1
+                        ) THEN rv.reservation_change_venue_id
+                        ELSE rv.reservation_venue_venue_id
+                    END AS reservation_venue_venue_id,
+                    rv.reservation_change_venue_id,
                     rv.active AS venue_active,
                     v.ven_name AS venue_name,
                     cvc.checklist_name AS checklist_venue_name,
@@ -122,7 +131,15 @@ class User {
                 INNER JOIN tbl_reservation_venue rv
                     ON rc_venue.reservation_venue_id = rv.reservation_venue_id
                 LEFT JOIN tbl_venue v
-                    ON rv.reservation_venue_venue_id = v.ven_id
+                    ON v.ven_id = CASE 
+                        WHEN rv.reservation_change_venue_id IS NOT NULL AND EXISTS (
+                            SELECT 1 FROM tbl_reservation_status s
+                            WHERE s.reservation_reservation_id = rv.reservation_reservation_id
+                              AND s.reservation_status_status_id = 10
+                              AND s.reservation_active = 1
+                        ) THEN rv.reservation_change_venue_id
+                        ELSE rv.reservation_venue_venue_id
+                    END
                 LEFT JOIN tbl_checklist_venue_master cvc
                     ON rc_venue.checklist_venue_id = cvc.checklist_venue_id
                 INNER JOIN tbl_reservation r
@@ -256,8 +273,9 @@ class User {
                         'reservation_id'          => $rid,
                         'reservation_title'       => '',
                         'reservation_description' => '',
-                        'reservation_start_date'  => '',
-                        'reservation_end_date'    => '',
+                        // Dates will be set conditionally below based on status 10 & active 1
+                        // If active reschedule: include only reschedule_* dates
+                        // Else: include only reservation_* dates
                         'reservation_participants'=> '',
                         'reservation_user_id'     => '',
                         'user_details'            => [],
@@ -462,6 +480,8 @@ foreach ($reservations as $rid => &$res) {
             r.reservation_description,
             r.reservation_start_date,
             r.reservation_end_date,
+            r.reschedule_start_date,
+            r.reschedule_end_date,
             r.reservation_participants,
             r.reservation_user_id,
             u.users_fname,
@@ -469,6 +489,12 @@ foreach ($reservations as $rid => &$res) {
             u.users_lname,
             d.departments_name,
             ul.user_level_name AS role,
+            (EXISTS (
+                SELECT 1 FROM tbl_reservation_status s
+                WHERE s.reservation_reservation_id = r.reservation_id
+                  AND s.reservation_status_status_id = 10
+                  AND s.reservation_active = 1
+            )) AS has_active_reschedule,
             sm.status_master_name AS reservation_status
         FROM tbl_reservation r
         INNER JOIN tbl_users u
@@ -501,8 +527,14 @@ foreach ($reservations as $rid => &$res) {
     if ($hdr) {
         $res['reservation_title']        = $hdr['reservation_title'];
         $res['reservation_description']  = $hdr['reservation_description'];
-        $res['reservation_start_date']   = $hdr['reservation_start_date'];
-        $res['reservation_end_date']     = $hdr['reservation_end_date'];
+        // Only display two date fields, decided by active reschedule (status_id = 10 and active = 1)
+        if (!empty($hdr['has_active_reschedule'])) {
+            $res['reschedule_start_date'] = $hdr['reschedule_start_date'];
+            $res['reschedule_end_date']   = $hdr['reschedule_end_date'];
+        } else {
+            $res['reservation_start_date'] = $hdr['reservation_start_date'];
+            $res['reservation_end_date']   = $hdr['reservation_end_date'];
+        }
         $res['reservation_participants'] = $hdr['reservation_participants'];
         $res['reservation_user_id']      = $hdr['reservation_user_id'];
         $res['reservation_status']       = $hdr['reservation_status'] ?? 'N/A';
@@ -1283,7 +1315,7 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
 
         switch ($type) {
             case 'venue':
-                $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
+                $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id, reservation_change_venue_id, reservation_reservation_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
                 $stmtFetchVenueId->execute(['reservation_id' => $reservation_id]);
                 $venue = $stmtFetchVenueId->fetch(PDO::FETCH_ASSOC);
 
@@ -1294,7 +1326,13 @@ public function updateRelease($type, $reservation_id, $resource_id, $quantity = 
                     ]);
                 }
 
-                $venue_id = $venue['reservation_venue_venue_id'];
+                // Determine if reservation has active status 10
+                $ridForStatus = (int)$venue['reservation_reservation_id'];
+                $stmtStatus = $this->conn->prepare("SELECT 1 FROM tbl_reservation_status WHERE reservation_reservation_id = :rid AND reservation_status_status_id = 10 AND reservation_active = 1 LIMIT 1");
+                $stmtStatus->execute([':rid' => $ridForStatus]);
+                $useChangeVenue = (bool)$stmtStatus->fetchColumn();
+
+                $venue_id = ($useChangeVenue && !empty($venue['reservation_change_venue_id'])) ? (int)$venue['reservation_change_venue_id'] : (int)$venue['reservation_venue_venue_id'];
 
                 $sqlUpdateStatus = "UPDATE tbl_venue SET status_availability_id = :status_availability_id WHERE ven_id = :venue_id";
                 $stmtStatus = $this->conn->prepare($sqlUpdateStatus);
@@ -1578,7 +1616,7 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
 
         switch ($type) {
             case 'venue':
-                $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
+                $stmtFetchVenueId = $this->conn->prepare("SELECT reservation_venue_venue_id, reservation_change_venue_id, reservation_reservation_id FROM tbl_reservation_venue WHERE reservation_venue_id = :reservation_id");
                 $stmtFetchVenueId->execute(['reservation_id' => $reservation_id]);
                 $venue = $stmtFetchVenueId->fetch(PDO::FETCH_ASSOC);
                 if (!$venue) {
@@ -1587,7 +1625,14 @@ public function updateReturn($type, $reservation_id, $resource_id, $condition, $
                         'message' => 'Reservation venue ID not found.'
                     ]);
                 }
-                $venue_id = $venue['reservation_venue_venue_id'];
+                // Determine if reservation has active status 10
+                $ridForStatus = (int)$venue['reservation_reservation_id'];
+                $stmtStatusCheck = $this->conn->prepare("SELECT 1 FROM tbl_reservation_status WHERE reservation_reservation_id = :rid AND reservation_status_status_id = 10 AND reservation_active = 1 LIMIT 1");
+                $stmtStatusCheck->execute([':rid' => $ridForStatus]);
+                $useChangeVenue = (bool)$stmtStatusCheck->fetchColumn();
+
+                $venue_id = ($useChangeVenue && !empty($venue['reservation_change_venue_id'])) ? (int)$venue['reservation_change_venue_id'] : (int)$venue['reservation_venue_venue_id'];
+
                 $stmtStatus = $this->conn->prepare("UPDATE tbl_venue SET status_availability_id = :status_availability_id WHERE ven_id = :venue_id");
                 $stmtStatus->execute([
                     'status_availability_id' => $status_availability_id,

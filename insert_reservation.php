@@ -65,35 +65,131 @@ class Reservation {
                 case 'venue':
                     $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
                             FROM tbl_reservation r
-                            INNER JOIN tbl_reservation_status rs
-                              ON r.reservation_id = rs.reservation_reservation_id
                             INNER JOIN tbl_reservation_venue v
                               ON r.reservation_id = v.reservation_reservation_id
+                            LEFT JOIN (
+                                SELECT rs1.*
+                                FROM tbl_reservation_status rs1
+                                INNER JOIN (
+                                    SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                    FROM tbl_reservation_status
+                                    GROUP BY reservation_reservation_id
+                                ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                                     AND rs1.reservation_updated_at = mu.max_updated_at
+                                INNER JOIN (
+                                    SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                                    FROM tbl_reservation_status x
+                                    INNER JOIN (
+                                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                        FROM tbl_reservation_status
+                                        GROUP BY reservation_reservation_id
+                                    ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                                       AND y.max_updated_at = x.reservation_updated_at
+                                    GROUP BY x.reservation_reservation_id
+                                ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                                     AND rs1.reservation_status_id = mid.max_id
+                            ) ls ON ls.reservation_reservation_id = r.reservation_id
+                            LEFT JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                                FROM tbl_reservation_status
+                                WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                                GROUP BY reservation_reservation_id
+                            ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                             WHERE v.reservation_venue_venue_id = :resource_id
-                              AND rs.reservation_status_status_id = 1
-                              AND r.reservation_id NOT IN (
-                                SELECT DISTINCT reservation_reservation_id 
-                                FROM tbl_reservation_status 
-                                WHERE reservation_status_status_id IN (2,5)
+                              AND (
+                                ls.reservation_status_status_id IN (1, 6, 8, 10)
+                                AND (
+                                  (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                                  OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                                )
                               )
-                              AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)";
+                              AND (
+                                (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end_date
+                                AND (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start_date
+                              )";
                     break;
 
                 case 'vehicle':
                     $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
                             FROM tbl_reservation r
-                            INNER JOIN tbl_reservation_status rs
-                              ON r.reservation_id = rs.reservation_reservation_id
                             INNER JOIN tbl_reservation_vehicle v
                               ON r.reservation_id = v.reservation_reservation_id
+                            LEFT JOIN (
+                                SELECT rs1.*
+                                FROM tbl_reservation_status rs1
+                                INNER JOIN (
+                                    SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                    FROM tbl_reservation_status
+                                    GROUP BY reservation_reservation_id
+                                ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                                     AND rs1.reservation_updated_at = mu.max_updated_at
+                                INNER JOIN (
+                                    SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                                    FROM tbl_reservation_status x
+                                    INNER JOIN (
+                                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                        FROM tbl_reservation_status
+                                        GROUP BY reservation_reservation_id
+                                    ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                                       AND y.max_updated_at = x.reservation_updated_at
+                                    GROUP BY x.reservation_reservation_id
+                                ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                                     AND rs1.reservation_status_id = mid.max_id
+                            ) ls ON ls.reservation_reservation_id = r.reservation_id
+                            LEFT JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                                FROM tbl_reservation_status
+                                WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                                GROUP BY reservation_reservation_id
+                            ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                             WHERE v.reservation_vehicle_vehicle_id = :resource_id
-                              AND rs.reservation_status_status_id = 1
-                              AND r.reservation_id NOT IN (
-                                SELECT DISTINCT reservation_reservation_id 
-                                FROM tbl_reservation_status 
-                                WHERE reservation_status_status_id IN (2,5)
+                              AND (
+                                ls.reservation_status_status_id IN (1, 6, 8, 10)
+                                AND (
+                                  (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                                  OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                                )
                               )
-                              AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)";
+                              AND (
+                                (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end_date
+                                AND (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start_date
+                              )";
                     break;
                     // driver conflict check removed
 
@@ -917,9 +1013,22 @@ class Reservation {
                                         $userDeptId, $userLevelId));
                                 }
                             } 
-                            // For Big Event in Close Area and user level 16 or 17 - only department 29
+                            // For Big Event in Close Area
                             elseif (($hasBigEvent && $hasCloseArea) && in_array($userLevelId, [16, 17])) {
-                                $departmentsToApprove = [29];
+                                if ($userLevelId == 17) {
+                                    // For level 17: include department 29 and the user's own department
+                                    if ($userDeptId > 0) {
+                                        $departmentsToApprove = [29, (int)$userDeptId];
+                                    } else {
+                                        $departmentsToApprove = [29];
+                                    }
+                                    // De-duplicate and normalize
+                                    $departmentsToApprove = array_values(array_unique(array_map('intval', $departmentsToApprove)));
+                                    error_log(sprintf("Adding departments for level 17 (Big Event, Close Area): %s", json_encode($departmentsToApprove)));
+                                } else {
+                                    // For level 16: only department 29
+                                    $departmentsToApprove = [29];
+                                }
                                 
                                 // For user levels 5, 6, and 18, exclude their own department if it's 29
                                 if (in_array($userLevelId, [5, 6, 18]) && isset($userLevel['users_department_id'])) {
@@ -931,7 +1040,19 @@ class Reservation {
                                     }
                                 }
                             } 
-                            // For Small Event in Close Area - use existing logic (empty array means no department approvals needed)
+                            // For Small Event in Close Area
+                            else if ($hasCloseArea && $userLevelId == 17) {
+                                // For level 17: include department 29 and the user's own department
+                                if ($userDeptId > 0) {
+                                    $departmentsToApprove = [29, (int)$userDeptId];
+                                } else {
+                                    $departmentsToApprove = [29];
+                                }
+                                // De-duplicate and normalize
+                                $departmentsToApprove = array_values(array_unique(array_map('intval', $departmentsToApprove)));
+                                error_log(sprintf("Adding departments for level 17 (Small Event, Close Area): %s", json_encode($departmentsToApprove)));
+                            }
+                            // Fallback: no department approvals needed
                             else if ($hasCloseArea) {
                                 $departmentsToApprove = [];
                             }
@@ -1297,10 +1418,21 @@ class Reservation {
                             }
                             // For Small Event in Close Area - no department approvals needed
                             
-                            // Exclude user's own department
-                            $departmentsToApprove = array_filter($departmentsToApprove, function($deptId) use ($userDeptId) {
-                                return (int)$deptId !== $userDeptId;
-                            });
+                            // Include or exclude user's own department based on user level
+                            if ((int)$userLevelId === 17) {
+                                // For user level 17, ensure the user's own department is included
+                                if ($userDeptId > 0 && !in_array((int)$userDeptId, array_map('intval', $departmentsToApprove), true)) {
+                                    $departmentsToApprove[] = (int)$userDeptId;
+                                }
+                            } else {
+                                // For other levels, exclude requester's own department from approvals
+                                $departmentsToApprove = array_filter($departmentsToApprove, function($deptId) use ($userDeptId) {
+                                    return (int)$deptId !== $userDeptId;
+                                });
+                            }
+
+                            // Deduplicate and normalize department IDs
+                            $departmentsToApprove = array_values(array_unique(array_map('intval', $departmentsToApprove)));
                             
                             // Insert department approvals if any
                             if (!empty($departmentsToApprove)) {

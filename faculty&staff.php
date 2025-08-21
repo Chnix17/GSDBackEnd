@@ -651,6 +651,55 @@ class FacultyStaff {
             ]);
         }
     }
+    
+    public function updateReschedule(int $reservationId, int $active, ?int $actingUserId = null) {
+        try {
+            if (!in_array($active, [1, -1], true)) {
+                return json_encode(['status' => 'error', 'message' => 'Invalid active value. Use 1 for confirm or -1 for decline.']);
+            }
+
+            $this->conn->beginTransaction();
+
+            // 1) Update the latest pending status (status 10 with active = 0)
+            $updSql = "
+                UPDATE tbl_reservation_status
+                SET reservation_active = :active,
+                    reservation_updated_at = NOW(),
+                    reservation_users_id = :user_id
+                WHERE reservation_reservation_id = :rid
+                  AND reservation_status_status_id = 10
+                  AND reservation_active = 0
+                ORDER BY reservation_status_id DESC
+                LIMIT 1
+            ";
+            $upd = $this->conn->prepare($updSql);
+            $upd->bindValue(':active', $active, PDO::PARAM_INT);
+            $upd->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+            $upd->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+            $upd->execute();
+
+            // 2) Insert a new status row (status 10) for history/audit
+            $insSql = "
+                INSERT INTO tbl_reservation_status
+                    (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                VALUES (6, :rid, :active, NOW(), :user_id)
+            ";
+            $ins = $this->conn->prepare($insSql);
+            $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+            $ins->bindValue(':active', $active, PDO::PARAM_INT);
+            $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+            $ins->execute();
+
+            $this->conn->commit();
+
+            return json_encode(['status' => 'success', 'message' => 'Reschedule status updated']);
+        } catch (PDOException $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            return json_encode(['status' => 'error', 'message' => 'Error updating reschedule: ' . $e->getMessage()]);
+        }
+    }
 }
 
 
@@ -722,6 +771,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             echo $facultyStaff->updateReadNotification($notificationIds, $userId);
+            break;
+        case 'updateReschedule':
+            $reservationId = $input['reservationId'] ?? null;
+            // Accept either explicit active (1 or -1) or confirm boolean/string
+            $active = null;
+            if (isset($input['active'])) {
+                $active = (int)$input['active'];
+            } elseif (isset($input['confirm'])) {
+                $confirm = $input['confirm'];
+                // Handle boolean, numeric, or string values
+                $truthy = [true, 1, '1', 'true', 'TRUE', 'confirm', 'CONFIRM', 'yes', 'YES'];
+                $active = in_array($confirm, $truthy, true) ? 1 : -1;
+            }
+            if (!$reservationId || !in_array($active, [1, -1], true)) {
+                echo json_encode(['status' => 'error', 'message' => 'reservationId and active (1 or -1) or confirm flag are required']);
+                break;
+            }
+            echo $facultyStaff->updateReschedule((int)$reservationId, (int)$active, $userId !== null ? (int)$userId : null);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);

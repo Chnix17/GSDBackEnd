@@ -239,12 +239,250 @@ public function fetchEquipmentsWithStatus() {
     }
 }
 
+    public function hasConflictRequest($resourceType, $resourceId, $startDate, $endDate, $requestedQuantity = 0) {
+        if (!in_array($resourceType, ['venue', 'vehicle', 'equipment'])) {
+            error_log("Invalid resource type: " . $resourceType);
+            return ['status' => false, 'count' => 0];
+        }
 
+        try {
+            $sql = "";
 
+            switch ($resourceType) {
+                case 'venue':
+                    $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
+                            FROM tbl_reservation r
+                            INNER JOIN tbl_reservation_venue v
+                              ON r.reservation_id = v.reservation_reservation_id
+                            LEFT JOIN (
+                                SELECT rs1.*
+                                FROM tbl_reservation_status rs1
+                                INNER JOIN (
+                                    SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                    FROM tbl_reservation_status
+                                    GROUP BY reservation_reservation_id
+                                ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                                     AND rs1.reservation_updated_at = mu.max_updated_at
+                                INNER JOIN (
+                                    SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                                    FROM tbl_reservation_status x
+                                    INNER JOIN (
+                                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                        FROM tbl_reservation_status
+                                        GROUP BY reservation_reservation_id
+                                    ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                                       AND y.max_updated_at = x.reservation_updated_at
+                                    GROUP BY x.reservation_reservation_id
+                                ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                                     AND rs1.reservation_status_id = mid.max_id
+                            ) ls ON ls.reservation_reservation_id = r.reservation_id
+                            LEFT JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                                FROM tbl_reservation_status
+                                WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                                GROUP BY reservation_reservation_id
+                            ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                            WHERE (
+                              CASE 
+                                WHEN (
+                                      (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                      OR (
+                                          ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                          AND active_resched.max_reschedule_status_id IS NOT NULL
+                                      )
+                                    )
+                                    AND v.reservation_change_venue_id IS NOT NULL
+                                THEN v.reservation_change_venue_id
+                                ELSE v.reservation_venue_venue_id
+                              END
+                            ) = :resource_id
+                              AND (
+                                ls.reservation_status_status_id IN (1, 6, 8, 10)
+                                AND (
+                                  (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                                  OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                                )
+                              )
+                              AND (
+                                (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end_date
+                                AND (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start_date
+                              )";
+                    break;
 
+                case 'vehicle':
+                    $sql = "SELECT COUNT(DISTINCT r.reservation_id) AS conflict_count
+                            FROM tbl_reservation r
+                            INNER JOIN tbl_reservation_vehicle v
+                              ON r.reservation_id = v.reservation_reservation_id
+                            LEFT JOIN (
+                                SELECT rs1.*
+                                FROM tbl_reservation_status rs1
+                                INNER JOIN (
+                                    SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                    FROM tbl_reservation_status
+                                    GROUP BY reservation_reservation_id
+                                ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                                     AND rs1.reservation_updated_at = mu.max_updated_at
+                                INNER JOIN (
+                                    SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                                    FROM tbl_reservation_status x
+                                    INNER JOIN (
+                                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                        FROM tbl_reservation_status
+                                        GROUP BY reservation_reservation_id
+                                    ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                                       AND y.max_updated_at = x.reservation_updated_at
+                                    GROUP BY x.reservation_reservation_id
+                                ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                                     AND rs1.reservation_status_id = mid.max_id
+                            ) ls ON ls.reservation_reservation_id = r.reservation_id
+                            LEFT JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                                FROM tbl_reservation_status
+                                WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                                GROUP BY reservation_reservation_id
+                            ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                            WHERE (
+                              CASE 
+                                WHEN (
+                                      (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                      OR (
+                                          ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                          AND active_resched.max_reschedule_status_id IS NOT NULL
+                                      )
+                                    )
+                                    AND v.reservation_change_vehicle_id IS NOT NULL
+                                THEN v.reservation_change_vehicle_id
+                                ELSE v.reservation_vehicle_vehicle_id
+                              END
+                            ) = :resource_id
+                              AND (
+                                ls.reservation_status_status_id IN (1, 6, 8, 10)
+                                AND (
+                                  (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                                  OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                                )
+                              )
+                              AND (
+                                (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end_date
+                                AND (CASE
+                                  WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                      )
+                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                  THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start_date
+                              )";
+                    break;
+                    // driver conflict check removed
 
+                case 'equipment':
+                    // Compute capacity based on inventory model (bulk or serial)
+                    //  - Bulk: use tbl_equipment_quantity.on_hand_quantity (fallback to quantity if null)
+                    //  - Serial: count of active units in tbl_equipment_unit whose status is not 2 (only 2 is considered unavailable)
+                    // Then subtract overlapping reserved quantities from tbl_reservation_equipment.
+                    $sql = "SELECT t.equip_id,
+                                   t.equip_name,
+                                   t.total_capacity,
+                                   COALESCE(ur.used_quantity, 0) AS used_quantity,
+                                   (t.total_capacity - COALESCE(ur.used_quantity, 0)) AS remaining_quantity
+                            FROM (
+                              SELECT eq.equip_id,
+                                     eq.equip_name,
+                                     CASE 
+                                       WHEN LOWER(eq.equip_type) = 'bulk' THEN (
+                                         SELECT COALESCE(SUM(COALESCE(q.on_hand_quantity, q.quantity)), 0)
+                                         FROM tbl_equipment_quantity q
+                                         WHERE q.equip_id = eq.equip_id
+                                           AND (q.status_availability_id IS NULL OR q.status_availability_id <> 2)
+                                       )
+                                       ELSE (
+                                         SELECT COALESCE(SUM(CASE WHEN u.is_active = 1 AND (u.status_availability_id IS NULL OR u.status_availability_id <> 2) THEN 1 ELSE 0 END), 0)
+                                         FROM tbl_equipment_unit u
+                                         WHERE u.equip_id = eq.equip_id
+                                       )
+                                     END AS total_capacity
+                              FROM tbl_equipments eq
+                              WHERE eq.equip_id = :resource_id
+                            ) t
+                            LEFT JOIN (
+                              SELECT e.reservation_equipment_equip_id AS equip_id,
+                                     COALESCE(SUM(e.reservation_equipment_quantity), 0) AS used_quantity
+                              FROM tbl_reservation_equipment e
+                              INNER JOIN tbl_reservation r ON e.reservation_reservation_id = r.reservation_id
+                              INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                              WHERE e.reservation_equipment_equip_id = :resource_id
+                                AND rs.reservation_status_status_id = 1
+                                AND r.reservation_id NOT IN (
+                                  SELECT DISTINCT reservation_reservation_id 
+                                  FROM tbl_reservation_status 
+                                  WHERE reservation_status_status_id IN (2,5)
+                                )
+                                AND (:start_date <= r.reservation_end_date AND :end_date >= r.reservation_start_date)
+                            ) ur ON ur.equip_id = t.equip_id";
 
-    
+                    $stmt = $this->conn->prepare($sql);
+                    $stmt->bindValue(':resource_id', $resourceId, PDO::PARAM_INT);
+                    $stmt->bindValue(':start_date', $startDate);
+                    $stmt->bindValue(':end_date', $endDate);
+                    $stmt->execute();
+                    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$result) {
+                        return ['status' => true, 'count' => 0];
+                    }
+                    $remainingQuantity = (int)$result['remaining_quantity'];
+                    error_log('Equipment check equip_id=' . (int)$resourceId . ' remaining=' . $remainingQuantity . ' requested=' . (int)$requestedQuantity . ' total_capacity=' . (int)$result['total_capacity']);
+                    return ['status' => true, 'count' => ($requestedQuantity > $remainingQuantity ? 1 : 0)];
+            }
+
+            // Generic path for venue/vehicle
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindParam(':resource_id', $resourceId, PDO::PARAM_INT);
+            $stmt->bindParam(':start_date', $startDate);
+            $stmt->bindParam(':end_date', $endDate);
+            $stmt->execute();
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            $conflictCount = (int)($result['conflict_count'] ?? 0);
+            return ['status' => true, 'count' => $conflictCount];
+
+        } catch (PDOException $e) {
+            error_log("Conflict check error: " . $e->getMessage());
+            return ['status' => false, 'count' => 0];
+        }
+    }
+
     public function fetchUserByEmailOrFullname($searchTerm) {
         $sql = "SELECT 
                     users_id,
@@ -363,11 +601,28 @@ public function fetchEquipmentsWithStatus() {
                 'equipments'  => []
             ];
     
+            // 1b. Check status to decide if we should use change venue for checklist
+            $statusSql = "
+                SELECT 1
+                FROM tbl_reservation_status
+                WHERE reservation_reservation_id = :reservation_id
+                  AND reservation_status_status_id = 10
+                  AND reservation_active = 1
+                LIMIT 1
+            ";
+            $stmtStatus = $this->conn->prepare($statusSql);
+            $stmtStatus->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+            $stmtStatus->execute();
+            $useChangeVenue = (bool)$stmtStatus->fetchColumn();
+
             // 2. Fetch venues
             $venueSql = "
                 SELECT 
                     rv.reservation_venue_id, 
-                    rv.reservation_venue_venue_id AS venue_id
+                    rv.reservation_venue_venue_id AS original_venue_id,
+                    rv.reservation_change_venue_id,
+                    rv.reservation_reservation_id,
+                    rv.active
                 FROM 
                     tbl_reservation_venue rv
                 WHERE 
@@ -379,16 +634,21 @@ public function fetchEquipmentsWithStatus() {
             $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
             foreach ($venues as $venueRow) {
+                $venueIdToUse = ($useChangeVenue && !empty($venueRow['reservation_change_venue_id'])) ? (int)$venueRow['reservation_change_venue_id'] : (int)$venueRow['original_venue_id'];
+    
                 $venueDetail = [
                     'reservation_venue_id' => $venueRow['reservation_venue_id'],
-                    'venue_id' => $venueRow['venue_id'],
+                    'venue_id' => $venueIdToUse,
+                    'original_venue_id' => $venueRow['original_venue_id'],
+                    'change_venue_id' => $venueRow['reservation_change_venue_id'],
+                    'active' => $venueRow['active'],
                     'name' => null,
                     'checklists' => []
                 ];
     
                 $venNameSql = "SELECT ven_name FROM tbl_venue WHERE ven_id = :venue_id";
                 $stmtName = $this->conn->prepare($venNameSql);
-                $stmtName->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtName->bindParam(':venue_id', $venueIdToUse, PDO::PARAM_INT);
                 $stmtName->execute();
                 $venueName = $stmtName->fetch(PDO::FETCH_ASSOC);
                 $venueDetail['name'] = $venueName ? $venueName['ven_name'] : null;
@@ -399,7 +659,7 @@ public function fetchEquipmentsWithStatus() {
                     WHERE checklist_venue_ven_id = :venue_id
                 ";
                 $stmtChecklist = $this->conn->prepare($checklistVenueSql);
-                $stmtChecklist->bindParam(':venue_id', $venueRow['venue_id'], PDO::PARAM_INT);
+                $stmtChecklist->bindParam(':venue_id', $venueIdToUse, PDO::PARAM_INT);
                 $stmtChecklist->execute();
                 $venueDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
     
@@ -410,7 +670,9 @@ public function fetchEquipmentsWithStatus() {
             $vehicleSql = "
                 SELECT 
                     rvh.reservation_vehicle_id, 
-                    rvh.reservation_vehicle_vehicle_id AS vehicle_id
+                    rvh.reservation_vehicle_vehicle_id AS vehicle_id,
+                    rvh.reservation_change_vehicle_id,
+                    rvh.active
                 FROM 
                     tbl_reservation_vehicle rvh
                 WHERE 
@@ -422,14 +684,21 @@ public function fetchEquipmentsWithStatus() {
             $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
             foreach ($vehicles as $vehicleRow) {
+                $vehicleIdToUse = ($useChangeVenue && !empty($vehicleRow['reservation_change_vehicle_id']))
+                    ? (int)$vehicleRow['reservation_change_vehicle_id']
+                    : (int)$vehicleRow['vehicle_id'];
+
                 $vehicleDetail = [
                     'reservation_vehicle_id' => $vehicleRow['reservation_vehicle_id'],
-                    'vehicle_id' => $vehicleRow['vehicle_id'],
+                    'vehicle_id' => $vehicleIdToUse,
+                    'original_vehicle_id' => $vehicleRow['vehicle_id'],
+                    'change_vehicle_id' => $vehicleRow['reservation_change_vehicle_id'],
+                    'active' => isset($vehicleRow['active']) ? $vehicleRow['active'] : null,
                     'model' => null,
                     'license' => null,
                     'checklists' => []
                 ];
-    
+
                 $vehicleDetailSql = "
                     SELECT 
                         vm.vehicle_model_name, 
@@ -442,25 +711,25 @@ public function fetchEquipmentsWithStatus() {
                         v.vehicle_id = :vehicle_id
                 ";
                 $stmtVehicle = $this->conn->prepare($vehicleDetailSql);
-                $stmtVehicle->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtVehicle->bindParam(':vehicle_id', $vehicleIdToUse, PDO::PARAM_INT);
                 $stmtVehicle->execute();
                 $vehicleInfo = $stmtVehicle->fetch(PDO::FETCH_ASSOC);
-    
+
                 if ($vehicleInfo) {
                     $vehicleDetail['model'] = $vehicleInfo['vehicle_model_name'];
                     $vehicleDetail['license'] = $vehicleInfo['vehicle_license'];
                 }
-    
+
                 $checklistVehicleSql = "
                     SELECT checklist_vehicle_id, checklist_name 
                     FROM tbl_checklist_vehicle_master 
                     WHERE checklist_vehicle_vehicle_id = :vehicle_id
                 ";
                 $stmtChecklist = $this->conn->prepare($checklistVehicleSql);
-                $stmtChecklist->bindParam(':vehicle_id', $vehicleRow['vehicle_id'], PDO::PARAM_INT);
+                $stmtChecklist->bindParam(':vehicle_id', $vehicleIdToUse, PDO::PARAM_INT);
                 $stmtChecklist->execute();
                 $vehicleDetail['checklists'] = $stmtChecklist->fetchAll(PDO::FETCH_ASSOC);
-    
+
                 $result['vehicles'][] = $vehicleDetail;
             }
     
@@ -614,24 +883,64 @@ public function fetchEquipmentsWithStatus() {
                         v.ven_id,
                         v.ven_name,
                         v.ven_occupancy,
+                        rv.reservation_change_venue_id AS change_venue_id,
+                        change_venue.ven_name AS change_venue_name,
                         r.reservation_id,
                         r.reservation_title,
                         r.reservation_start_date,
                         r.reservation_end_date,
-                        rs.reservation_status_status_id,
-                        rs.reservation_active
+                        r.reschedule_start_date,
+                        r.reschedule_end_date,
+                        latest_status.reservation_status_status_id AS reservation_status_status_id,
+                        latest_status.reservation_active AS reservation_active,
+                        CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule
                     FROM tbl_venue v
                     LEFT JOIN tbl_reservation_venue rv
                         ON v.ven_id = rv.reservation_venue_venue_id
                     LEFT JOIN tbl_reservation r
                         ON rv.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs
-                        ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE v.ven_id IN ($placeholders)
-                      AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                      )
+                    LEFT JOIN tbl_venue change_venue
+                        ON rv.reservation_change_venue_id = change_venue.ven_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) latest_status
+                        ON latest_status.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    WHERE (
+                        CASE
+                            WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (active_resched.max_reschedule_status_id IS NOT NULL AND latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                                
+                            ) AND rv.reservation_change_venue_id IS NOT NULL
+                            THEN rv.reservation_change_venue_id
+                            ELSE v.ven_id
+                        END
+                    ) IN ($placeholders)
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
@@ -641,19 +950,56 @@ public function fetchEquipmentsWithStatus() {
                 // Add date range filtering if provided
                 if ($startDateTime && $endDateTime) {
                     $sql .= " AND (
-                        (r.reservation_start_date BETWEEN :startDateTime AND :endDateTime)
-                        OR (r.reservation_end_date BETWEEN :startDateTime AND :endDateTime)
-                        OR (:startDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                        OR (:endDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                        (
+                            (CASE
+                                WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                            BETWEEN :startDateTime AND :endDateTime
+                        )
+                        OR (
+                            (CASE
+                                WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                            BETWEEN :startDateTime AND :endDateTime
+                        )
+                        OR (
+                            :startDateTime BETWEEN 
+                                (CASE
+                                    WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                AND 
+                                (CASE
+                                    WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                        )
+                        OR (
+                            :endDateTime BETWEEN 
+                                (CASE
+                                    WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                AND 
+                                (CASE
+                                    WHEN active_resched.max_reschedule_status_id IS NOT NULL
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                        )
                     )";
                 }
                 
                 $sql .= " GROUP BY
                         v.ven_id, v.ven_name, v.ven_occupancy,
+                        rv.reservation_change_venue_id, change_venue.ven_name,
                         r.reservation_id, r.reservation_title,
                         r.reservation_start_date, r.reservation_end_date,
-                        rs.reservation_status_status_id,
-                        rs.reservation_active
+                        r.reschedule_start_date, r.reschedule_end_date,
+                        latest_status.reservation_status_status_id,
+                        latest_status.reservation_active,
+                        has_active_reschedule
                 ";
                 $stmt = $this->conn->prepare($sql);
                 
@@ -666,24 +1012,86 @@ public function fetchEquipmentsWithStatus() {
     
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($results as &$result) {
+                    // Check status first, then apply reschedule rules
+                    $hasActiveReschedule = (!empty($result['has_active_reschedule']) && (int)$result['has_active_reschedule'] === 1);
+                    $isReschedActive = ((int)$result['reservation_status_status_id'] === 10 && (int)$result['reservation_active'] === 1);
+                    $isReservedActive = ((int)$result['reservation_status_status_id'] === 6 && (int)$result['reservation_active'] === 1);
+                    $isPending = ((int)$result['reservation_status_status_id'] === 1);
+    
+                    if ($isReschedActive || ($hasActiveReschedule && $isReservedActive)) {
+                        // Prefer reschedule dates if available
+                        if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                            $result['reservation_start_date'] = $result['reschedule_start_date'];
+                            $result['reservation_end_date'] = $result['reschedule_end_date'];
+                        }
+                        // If reschedule is in effect and there is a change venue, use it; otherwise keep original
+                        if (!empty($result['change_venue_id'])) {
+                            if (array_key_exists('change_venue_id', $result)) {
+                                $result['ven_id'] = $result['change_venue_id'];
+                            }
+                            if (array_key_exists('change_venue_name', $result) && !empty($result['change_venue_name'])) {
+                                $result['ven_name'] = $result['change_venue_name'];
+                            }
+                        }
+                    }
+                    // Do not expose reschedule_* keys; keep only reservation_* naming
+                    if (array_key_exists('reschedule_start_date', $result)) {
+                        unset($result['reschedule_start_date']);
+                    }
+                    if (array_key_exists('reschedule_end_date', $result)) {
+                        unset($result['reschedule_end_date']);
+                    }
+                    // Hide helper change venue fields from output
+                    if (array_key_exists('change_venue_id', $result)) {
+                        unset($result['change_venue_id']);
+                    }
+                    if (array_key_exists('change_venue_name', $result)) {
+                        unset($result['change_venue_name']);
+                    }
+                    if (array_key_exists('has_active_reschedule', $result)) {
+                        unset($result['has_active_reschedule']);
+                    }
+                    
+                    // Set availability based on status
                     $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
-                    $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
-                        ? 'Reserved' : 'Available';
+                    
+                    // Set reservation status text
+                    switch ($result['reservation_status_status_id']) {
+                        case 1:
+                            $result['reservation_status'] = 'Pending';
+                            break;
+                        case 6:
+                            $result['reservation_status'] = 'Reserved';
+                            break;
+                        case 10:
+                            $result['reservation_status'] = 'Rescheduled';
+                            break;
+                        default:
+                            $result['reservation_status'] = 'Available';
+                    }
                 }
     
             } elseif ($itemType === 'vehicle') {
+                // Remove the complex status filtering from the WHERE clause
                 $sql = "
                     SELECT
                         v.vehicle_id,
                         v.vehicle_license,
                         vm.vehicle_make_name,
                         vmd.vehicle_model_name,
+                        rv.reservation_change_vehicle_id AS change_vehicle_id,
+                        cv.vehicle_license AS change_vehicle_license,
+                        cvmk.vehicle_make_name AS change_vehicle_make_name,
+                        cvmd.vehicle_model_name AS change_vehicle_model_name,
                         r.reservation_id,
                         r.reservation_title,
                         r.reservation_start_date,
                         r.reservation_end_date,
-                        rs.reservation_status_status_id,
-                        rs.reservation_active,
+                        r.reschedule_start_date,
+                        r.reschedule_end_date,
+                        latest_status.reservation_status_status_id,
+                        latest_status.reservation_active,
+                        CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
                         (
                             SELECT COUNT(DISTINCT u.users_id)
                             FROM tbl_users u
@@ -699,6 +1107,7 @@ public function fetchEquipmentsWithStatus() {
                                         (
                                             (rs2.reservation_status_status_id = 1 AND (rs2.reservation_active = 1 OR rs2.reservation_active = -1 OR rs2.reservation_active IS NULL))
                                             OR (rs2.reservation_status_status_id = 6 AND rs2.reservation_active = 1)
+                                            OR (rs2.reservation_status_status_id = 10 AND (rs2.reservation_active = 0 OR rs2.reservation_active = 1))
                                         )
                                         AND r2.reservation_id NOT IN (
                                             SELECT DISTINCT reservation_reservation_id 
@@ -706,12 +1115,72 @@ public function fetchEquipmentsWithStatus() {
                                             WHERE reservation_status_status_id IN (2, 5)
                                         )
                                         AND (
-                                            (r2.reservation_start_date BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                                            OR (r2.reservation_end_date BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                                            OR (r.reservation_start_date BETWEEN r2.reservation_start_date AND r2.reservation_end_date)
-                                            OR (r.reservation_end_date BETWEEN r2.reservation_start_date AND r2.reservation_end_date)
+                                            (
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_start_date ELSE r2.reservation_start_date END)
+                                                BETWEEN 
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                                AND 
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                                            )
+                                            OR (
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_end_date ELSE r2.reservation_end_date END)
+                                                BETWEEN 
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                                AND 
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                                            )
+                                            OR (
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                                BETWEEN 
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_start_date ELSE r2.reservation_start_date END)
+                                                AND 
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_end_date ELSE r2.reservation_end_date END)
+                                            )
+                                            OR (
+                                                (CASE
+                                                    WHEN latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1 
+                                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                                                BETWEEN 
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_start_date ELSE r2.reservation_start_date END)
+                                                AND 
+                                                (CASE
+                                                    WHEN rs2.reservation_status_status_id = 10 AND rs2.reservation_active = 1 
+                                                         AND r2.reschedule_start_date IS NOT NULL AND r2.reschedule_end_date IS NOT NULL
+                                                    THEN r2.reschedule_end_date ELSE r2.reservation_end_date END)
+                                            )
                                         )
-                                )
+                                    )
                         ) AS available_drivers_count
                     FROM tbl_vehicle v
                     LEFT JOIN tbl_vehicle_model vmd
@@ -722,14 +1191,51 @@ public function fetchEquipmentsWithStatus() {
                         ON v.vehicle_id = rv.reservation_vehicle_vehicle_id
                     LEFT JOIN tbl_reservation r
                         ON rv.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs
-                        ON r.reservation_id = rs.reservation_reservation_id
-                    WHERE v.vehicle_id IN ($placeholders)
-                    AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
-                     
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    )
+                    LEFT JOIN tbl_vehicle cv
+                        ON rv.reservation_change_vehicle_id = cv.vehicle_id
+                    LEFT JOIN tbl_vehicle_model cvmd
+                        ON cv.vehicle_model_id = cvmd.vehicle_model_id
+                    LEFT JOIN tbl_vehicle_make cvmk
+                        ON cvmd.vehicle_model_vehicle_make_id = cvmk.vehicle_make_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) latest_status
+                        ON latest_status.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    WHERE (
+                        CASE
+                            WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (active_resched.max_reschedule_status_id IS NOT NULL AND latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                            ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                            THEN rv.reservation_change_vehicle_id
+                            ELSE v.vehicle_id
+                        END
+                    ) IN ($placeholders)
                     AND r.reservation_id NOT IN (
                         SELECT DISTINCT reservation_reservation_id 
                         FROM tbl_reservation_status 
@@ -738,21 +1244,80 @@ public function fetchEquipmentsWithStatus() {
                     GROUP BY
                         v.vehicle_id, v.vehicle_license,
                         vm.vehicle_make_name, vmd.vehicle_model_name,
+                        rv.reservation_change_vehicle_id, cv.vehicle_license, cvmk.vehicle_make_name, cvmd.vehicle_model_name,
                         r.reservation_id, r.reservation_title,
                         r.reservation_start_date, r.reservation_end_date,
-                        rs.reservation_status_status_id,
-                        rs.reservation_active
+                        r.reschedule_start_date, r.reschedule_end_date,
+                        latest_status.reservation_status_status_id,
+                        latest_status.reservation_active,
+                        has_active_reschedule
                 ";
                 $stmt = $this->conn->prepare($sql);
                 $stmt->execute($itemIds);
-
+    
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($results as &$result) {
+                    // Check status first, then apply reschedule rules
+                    $hasActiveReschedule = (!empty($result['has_active_reschedule']) && (int)$result['has_active_reschedule'] === 1);
+                    $isReschedActive = ((int)$result['reservation_status_status_id'] === 10 && (int)$result['reservation_active'] === 1);
+                    $isReservedActive = ((int)$result['reservation_status_status_id'] === 6 && (int)$result['reservation_active'] === 1);
+                    $isPending = ((int)$result['reservation_status_status_id'] === 1);
+    
+                    if ($isReschedActive || ($hasActiveReschedule && $isReservedActive)) {
+                        // Prefer reschedule dates if present
+                        if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                            $result['reservation_start_date'] = $result['reschedule_start_date'];
+                            $result['reservation_end_date'] = $result['reschedule_end_date'];
+                        }
+                        // If change vehicle exists, display change vehicle instead
+                        if (!empty($result['change_vehicle_id'])) {
+                            $result['vehicle_id'] = $result['change_vehicle_id'];
+                            if (!empty($result['change_vehicle_license'])) {
+                                $result['vehicle_license'] = $result['change_vehicle_license'];
+                            }
+                            if (!empty($result['change_vehicle_make_name'])) {
+                                $result['vehicle_make_name'] = $result['change_vehicle_make_name'];
+                            }
+                            if (!empty($result['change_vehicle_model_name'])) {
+                                $result['vehicle_model_name'] = $result['change_vehicle_model_name'];
+                            }
+                        }
+                    }
+                    // Do not expose reschedule_* keys; keep only reservation_* naming
+                    if (array_key_exists('reschedule_start_date', $result)) {
+                        unset($result['reschedule_start_date']);
+                    }
+                    if (array_key_exists('reschedule_end_date', $result)) {
+                        unset($result['reschedule_end_date']);
+                    }
+                    // Hide helper change vehicle fields from output
+                    foreach (['change_vehicle_id','change_vehicle_license','change_vehicle_make_name','change_vehicle_model_name'] as $k) {
+                        if (array_key_exists($k, $result)) { unset($result[$k]); }
+                    }
+                    if (array_key_exists('has_active_reschedule', $result)) {
+                        unset($result['has_active_reschedule']);
+                    }
+                    
+                    // Set availability based on status
                     $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
-                    $result['reservation_status'] = ($result['reservation_status_status_id'] === 6)
-                        ? 'Reserved' : 'Available';
+                    
+                    // Set reservation status text
+                    switch ($result['reservation_status_status_id']) {
+                        case 1:
+                            $result['reservation_status'] = 'Pending';
+                            break;
+                        case 6:
+                            $result['reservation_status'] = 'Reserved';
+                            break;
+                        case 10:
+                            $result['reservation_status'] = 'Rescheduled';
+                            break;
+                        default:
+                            $result['reservation_status'] = 'Available';
+                    }
                 }
             } elseif ($itemType === 'equipment') {
+                // Remove the complex status filtering from the WHERE clause
                 $sql = "
                     SELECT
                         e.equip_id,
@@ -766,6 +1331,11 @@ public function fetchEquipmentsWithStatus() {
                         COALESCE(re.reservation_equipment_quantity, 0) AS reserved_quantity,
                         r.reservation_start_date,
                         r.reservation_end_date,
+                        r.reschedule_start_date,
+                        r.reschedule_end_date,
+                        latest_status.reservation_status_status_id,
+                        latest_status.reservation_active,
+                        CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
                         r.reservation_id,
                         e.equip_created_at,
                         e.equipments_category_id
@@ -775,12 +1345,12 @@ public function fetchEquipmentsWithStatus() {
                         SELECT
                             equip_id,
                             quantity
-                        FROM tbl_equipment_quantity
-                        WHERE (equip_id, last_updated) IN (
-                            SELECT equip_id, MAX(last_updated)
                             FROM tbl_equipment_quantity
-                            GROUP BY equip_id
-                        )
+                            WHERE (equip_id, last_updated) IN (
+                                SELECT equip_id, MAX(last_updated)
+                                FROM tbl_equipment_quantity
+                                GROUP BY equip_id
+                            )
                     ) AS eq ON e.equip_id = eq.equip_id AND e.equip_type = 'Bulk'
                     LEFT JOIN (
                         SELECT
@@ -792,13 +1362,35 @@ public function fetchEquipmentsWithStatus() {
                     ) AS eu ON e.equip_id = eu.equip_id AND e.equip_type != 'Bulk'
                     LEFT JOIN tbl_reservation_equipment re ON e.equip_id = re.reservation_equipment_equip_id
                     LEFT JOIN tbl_reservation r ON re.reservation_reservation_id = r.reservation_id
-                    LEFT JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     WHERE e.equip_id IN ($placeholders)
-                      AND (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
-            
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    )
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
@@ -816,6 +1408,40 @@ public function fetchEquipmentsWithStatus() {
                     $result['is_available'] = ($result['current_quantity'] - $result['reserved_quantity']) > 0;
                     $result['availability_status'] = ($result['current_quantity'] - $result['reserved_quantity']) > 0 ? 'Available' : 'Unavailable';
                     $result['total_available'] = $result['current_quantity'] - $result['reserved_quantity'];
+                    
+                    // Use reschedule dates when an active reschedule exists (status 10, active 1)
+                    if (((int)$result['reservation_status_status_id'] === 10 && (int)$result['reservation_active'] === 1)
+                        || (!empty($result['has_active_reschedule']) && (int)$result['has_active_reschedule'] === 1)) {
+                        if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                            $result['reservation_start_date'] = $result['reschedule_start_date'];
+                            $result['reservation_end_date'] = $result['reschedule_end_date'];
+                        }
+                    }
+                    // Do not expose reschedule_* keys; keep only reservation_* naming
+                    if (array_key_exists('reschedule_start_date', $result)) {
+                        unset($result['reschedule_start_date']);
+                    }
+                    if (array_key_exists('reschedule_end_date', $result)) {
+                        unset($result['reschedule_end_date']);
+                    }
+                    if (array_key_exists('has_active_reschedule', $result)) {
+                        unset($result['has_active_reschedule']);
+                    }
+                    
+                    // Set reservation status text
+                    switch ($result['reservation_status_status_id']) {
+                        case 1:
+                            $result['reservation_status'] = 'Pending';
+                            break;
+                        case 6:
+                            $result['reservation_status'] = 'Reserved';
+                            break;
+                        case 10:
+                            $result['reservation_status'] = 'Rescheduled';
+                            break;
+                        default:
+                            $result['reservation_status'] = 'Available';
+                    }
                 }
             }
     
@@ -884,21 +1510,117 @@ public function fetchEquipmentsWithStatus() {
                 FROM tbl_reservation_driver rd
                 INNER JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
                 INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 WHERE 
-                  
-                        (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
- 
-                    AND r.reservation_id NOT IN (
-                        SELECT DISTINCT reservation_reservation_id 
-                        FROM tbl_reservation_status 
-                        WHERE reservation_status_status_id IN (2, 5)
+                    (
+                        latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                        AND (
+                            (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                            OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active = 0 OR latest_status.reservation_active = 1))
+                        )
                     )
                     AND (
-                        (r.reservation_start_date BETWEEN :startDateTime AND :endDateTime)
-                        OR (r.reservation_end_date BETWEEN :startDateTime AND :endDateTime)
-                        OR (:startDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
-                        OR (:endDateTime BETWEEN r.reservation_start_date AND r.reservation_end_date)
+                        (
+                            (CASE
+                                WHEN (
+                                        (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                        OR (
+                                            latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                     )
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                            BETWEEN :startDateTime AND :endDateTime
+                        )
+                        OR (
+                            (CASE
+                                WHEN (
+                                        (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                        OR (
+                                            latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                     )
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                            BETWEEN :startDateTime AND :endDateTime
+                        )
+                        OR (
+                            :startDateTime BETWEEN 
+                                (CASE
+                                    WHEN (
+                                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                            OR (
+                                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                                            )
+                                         )
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                AND 
+                                (CASE
+                                    WHEN (
+                                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                            OR (
+                                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                                            )
+                                         )
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                        )
+                        OR (
+                            :endDateTime BETWEEN 
+                                (CASE
+                                    WHEN (
+                                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                            OR (
+                                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                                            )
+                                         )
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_start_date ELSE r.reservation_start_date END)
+                                AND 
+                                (CASE
+                                    WHEN (
+                                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                            OR (
+                                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                                            )
+                                         )
+                                         AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                    THEN r.reschedule_end_date ELSE r.reservation_end_date END)
+                        )
                     )
             ";
     
@@ -1526,7 +2248,21 @@ public function fetchEquipmentsWithStatus() {
             LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
             LEFT JOIN tbl_reservation_condition_vehicle rcv ON rcv.reservation_vehicle_id = rv.reservation_vehicle_id
             LEFT JOIN tbl_condition c ON rcv.condition_id = c.id
-            WHERE rv.reservation_vehicle_vehicle_id = :vehicleId
+            WHERE (
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1
+                          FROM tbl_reservation_status rs2
+                         WHERE rs2.reservation_reservation_id = r.reservation_id
+                           AND rs2.reservation_status_status_id = 10
+                           AND rs2.reservation_active = 1
+                    )
+                     AND rv.reservation_change_vehicle_id IS NOT NULL
+                     AND rv.reservation_change_vehicle_id > 0
+                    THEN rv.reservation_change_vehicle_id
+                    ELSE rv.reservation_vehicle_vehicle_id
+                END
+            ) = :vehicleId
             ORDER BY r.reservation_start_date DESC
 
         ";
@@ -1627,7 +2363,21 @@ public function getVenueUsage($venueId) {
             LEFT JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
             LEFT JOIN tbl_reservation_condition_venue rcv ON rcv.reservation_venue_id = rv.reservation_venue_id
             LEFT JOIN tbl_condition c ON rcv.condition_id = c.id
-            WHERE rv.reservation_venue_venue_id = :venueId
+            WHERE (
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1 
+                          FROM tbl_reservation_status rs2 
+                         WHERE rs2.reservation_reservation_id = r.reservation_id 
+                           AND rs2.reservation_status_status_id = 10 
+                           AND rs2.reservation_active = 1
+                    )
+                     AND rv.reservation_change_venue_id IS NOT NULL
+                     AND rv.reservation_change_venue_id > 0
+                    THEN rv.reservation_change_venue_id
+                    ELSE rv.reservation_venue_venue_id
+                END
+            ) = :venueId
             ORDER BY r.reservation_start_date DESC
         ";
 
@@ -4162,7 +4912,97 @@ public function updateVenue($venueData) {
     }
 }
 
+public function updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id) {
+    try {
+        if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
+            return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+        }
 
+        $sql = "UPDATE tbl_reservation_venue
+                SET reservation_change_venue_id = :reservation_change_venue_id
+                WHERE reservation_venue_id = :reservation_venue_id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindValue(':reservation_change_venue_id', (int)$reservation_change_venue_id, PDO::PARAM_INT);
+        $stmt->bindValue(':reservation_venue_id', (int)$reservation_venue_id, PDO::PARAM_INT);
+
+        $ok = $stmt->execute();
+        if ($ok) {
+            return json_encode(['status' => 'success', 'message' => 'Venue reschedule updated successfully']);
+        }
+        return json_encode(['status' => 'error', 'message' => 'Failed to update venue reschedule']);
+    } catch (PDOException $e) {
+        error_log('Database error in updateVenueReschedule: ' . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+public function updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id) {
+    try {
+        if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
+            return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+        }
+
+        $sql = "UPDATE tbl_reservation_vehicle
+                SET reservation_change_vehicle_id = :reservation_change_vehicle_id
+                WHERE reservation_vehicle_id = :reservation_vehicle_id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindValue(':reservation_change_vehicle_id', (int)$reservation_change_vehicle_id, PDO::PARAM_INT);
+        $stmt->bindValue(':reservation_vehicle_id', (int)$reservation_vehicle_id, PDO::PARAM_INT);
+
+        $ok = $stmt->execute();
+        if ($ok) {
+            return json_encode(['status' => 'success', 'message' => 'Vehicle reschedule updated successfully']);
+        }
+        return json_encode(['status' => 'error', 'message' => 'Failed to update vehicle reschedule']);
+    } catch (PDOException $e) {
+        error_log('Database error in updateVehicleReschedule: ' . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+public function updateReservationReschedule($reservation_id, $reschedule_start_date, $reschedule_end_date, $user_admin_id = null) {
+    try {
+        if ($reservation_id === null || $reschedule_start_date === null || $reschedule_end_date === null) {
+            return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+        }
+
+        $this->conn->beginTransaction();
+
+        // 1) Update reschedule dates on reservation
+        $sql = "UPDATE tbl_reservation
+                SET reschedule_start_date = :reschedule_start_date,
+                    reschedule_end_date = :reschedule_end_date
+                WHERE reservation_id = :reservation_id";
+        $stmt = $this->conn->prepare($sql);
+        $stmt->bindValue(':reschedule_start_date', $reschedule_start_date, PDO::PARAM_STR);
+        $stmt->bindValue(':reschedule_end_date', $reschedule_end_date, PDO::PARAM_STR);
+        $stmt->bindValue(':reservation_id', (int)$reservation_id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        // 2) Insert a new status row with reservation_active = 0 and fixed status id 10
+        $ins = $this->conn->prepare("INSERT INTO tbl_reservation_status
+            (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+            VALUES (:status_id, :reservation_id, 0, NOW(), :user_admin_id)");
+        $ins->bindValue(':status_id', 10, PDO::PARAM_INT);
+        $ins->bindValue(':reservation_id', (int)$reservation_id, PDO::PARAM_INT);
+        if ($user_admin_id === null || $user_admin_id === '') {
+            $ins->bindValue(':user_admin_id', null, PDO::PARAM_NULL);
+        } else {
+            $ins->bindValue(':user_admin_id', (int)$user_admin_id, PDO::PARAM_INT);
+        }
+        $ins->execute();
+
+        $this->conn->commit();
+
+        return json_encode(['status' => 'success', 'message' => 'Reservation reschedule updated successfully']);
+    } catch (PDOException $e) {
+        if ($this->conn->inTransaction()) {
+            $this->conn->rollBack();
+        }
+        error_log('Database error in updateReservationReschedule: ' . $e->getMessage());
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
 
 public function saveUser($data) {
     try {
@@ -4802,6 +5642,8 @@ public function venueExists($venueName) {
                     r.reservation_description, 
                     r.reservation_start_date, 
                     r.reservation_end_date, 
+                    r.reschedule_start_date,
+                    r.reschedule_end_date,
                     r.reservation_participants, 
                     r.reservation_user_id,
                     r.reservation_created_at,
@@ -4825,25 +5667,32 @@ public function venueExists($venueName) {
                     dep.departments_name AS department_name,
 
                     -- Venue details
-                    GROUP_CONCAT(DISTINCT 
-                        CONCAT(
-                            COALESCE(v.reservation_venue_id, ''), ':', 
-                            COALESCE(v.reservation_venue_venue_id, ''), ':',
-                            COALESCE(venue.ven_name, ''), ':',
-                            COALESCE(venue.ven_occupancy, ''), ':',
-                            COALESCE(venue.ven_operating_hours, ''), ':',
-                            COALESCE(venue.ven_pic, '')
-                        ) SEPARATOR '|'
+                    GROUP_CONCAT(DISTINCT
+                        CONCAT_WS(0x1F,
+                            COALESCE(v.reservation_venue_id, ''),
+                            COALESCE(v.reservation_venue_venue_id, ''),
+                            COALESCE(venue.ven_name, ''),
+                            COALESCE(venue.ven_occupancy, ''),
+                            COALESCE(venue.ven_operating_hours, ''),
+                            COALESCE(venue.ven_pic, ''),
+                            COALESCE(v.reservation_change_venue_id, ''),
+                            COALESCE(change_venue.ven_name, '')
+                        )
+                        SEPARATOR 0x1E
                     ) as venue_data,
 
                     -- Vehicle details
-                    GROUP_CONCAT(DISTINCT 
-                        CONCAT(
-                            ve.reservation_vehicle_id, ':',
-                            ve.reservation_vehicle_vehicle_id, ':',
-                            vm.vehicle_license, ':',
-                            vmm.vehicle_model_name
-                        ) SEPARATOR '|'
+                    GROUP_CONCAT(DISTINCT
+                        CONCAT_WS(0x1F,
+                            COALESCE(ve.reservation_vehicle_id, ''),
+                            COALESCE(ve.reservation_vehicle_vehicle_id, ''),
+                            COALESCE(vm.vehicle_license, ''),
+                            COALESCE(vmm.vehicle_model_name, ''),
+                            COALESCE(ve.reservation_change_vehicle_id, ''),
+                            COALESCE(change_vm.vehicle_license, ''),
+                            COALESCE(change_vmm.vehicle_model_name, '')
+                        )
+                        SEPARATOR 0x1E
                     ) as vehicle_data,
 
                     -- Equipment details
@@ -4884,10 +5733,13 @@ public function venueExists($venueName) {
 
                 LEFT JOIN tbl_reservation_venue v ON r.reservation_id = v.reservation_reservation_id
                 LEFT JOIN tbl_venue venue ON v.reservation_venue_venue_id = venue.ven_id
+                LEFT JOIN tbl_venue change_venue ON v.reservation_change_venue_id = change_venue.ven_id
 
                 LEFT JOIN tbl_reservation_vehicle ve ON r.reservation_id = ve.reservation_reservation_id
                 LEFT JOIN tbl_vehicle vm ON ve.reservation_vehicle_vehicle_id = vm.vehicle_id
                 LEFT JOIN tbl_vehicle_model vmm ON vm.vehicle_model_id = vmm.vehicle_model_id
+                LEFT JOIN tbl_vehicle change_vm ON ve.reservation_change_vehicle_id = change_vm.vehicle_id
+                LEFT JOIN tbl_vehicle_model change_vmm ON change_vm.vehicle_model_id = change_vmm.vehicle_model_id
 
                 LEFT JOIN tbl_reservation_equipment e ON r.reservation_id = e.reservation_reservation_id
                 LEFT JOIN tbl_equipments equip ON e.reservation_equipment_equip_id = equip.equip_id
@@ -4918,6 +5770,8 @@ public function venueExists($venueName) {
                     'reservation_description' => $row['reservation_description'],
                     'reservation_start_date' => $row['reservation_start_date'],
                     'reservation_end_date' => $row['reservation_end_date'],
+                    'reschedule_start_date' => $row['reschedule_start_date'],
+                    'reschedule_end_date' => $row['reschedule_end_date'],
                     'reservation_participants' => $row['reservation_participants'],
                     'additional_note' => $row['additional_note'],
                     'status_name' => $row['status_name'],  // Keep for backward compatibility
@@ -4931,33 +5785,61 @@ public function venueExists($venueName) {
                 ];
 
                 // VENUES
-                if (!empty($row['venue_data']) && $row['venue_data'] !== '::::::') {
-                    foreach (explode('|', $row['venue_data']) as $venueStr) {
-                        $venueParts = explode(':', $venueStr);
-                        if (count($venueParts) >= 6 && !empty(array_filter($venueParts))) {
-                            $venues[] = [
-                                'reservation_venue_id' => $venueParts[0] ?: '',
-                                'venue_id' => $venueParts[1] ?: '',
-                                'venue_name' => $venueParts[2] ?: '',
-                                'occupancy' => $venueParts[3] ?: '',
-                                'operating_hours' => $venueParts[4] ?: '',
-                                'picture' => $venueParts[5] ?: ''
+                if (!empty($row['venue_data'])) {
+                    foreach (explode(chr(30), $row['venue_data']) as $venueStr) {
+                        if ($venueStr === '' || $venueStr === null) { continue; }
+                        $venueParts = explode(chr(31), $venueStr);
+                        // Ensure at least base fields exist and not all empty
+                        if (count($venueParts) >= 6 && trim(implode('', $venueParts)) !== '') {
+                            $venueItem = [
+                                'reservation_venue_id' => $venueParts[0] ?? '',
+                                'venue_id' => $venueParts[1] ?? '',
+                                'venue_name' => $venueParts[2] ?? '',
+                                'occupancy' => $venueParts[3] ?? '',
+                                'operating_hours' => $venueParts[4] ?? '',
+                                'picture' => $venueParts[5] ?? ''
                             ];
+                            if (count($venueParts) >= 8) {
+                                $venueItem['change_venue_id'] = $venueParts[6] ?? '';
+                                $venueItem['change_venue_name'] = $venueParts[7] ?? '';
+                            }
+                            $venues[] = $venueItem;
                         }
                     }
                 }
 
                 // VEHICLES
                 if (!empty($row['vehicle_data'])) {
-                    foreach (explode('|', $row['vehicle_data']) as $vehicleStr) {
-                        $vehicleParts = explode(':', $vehicleStr);
+                    foreach (explode(chr(30), $row['vehicle_data']) as $vehicleStr) {
+                        if ($vehicleStr === '' || $vehicleStr === null) { continue; }
+                        $vehicleParts = explode(chr(31), $vehicleStr);
+
+                        // Skip entries where all parts are empty
+                        if (trim(implode('', $vehicleParts)) === '') { continue; }
+
                         if (count($vehicleParts) >= 4) {
-                            $vehicles[] = [
-                                'reservation_vehicle_id' => $vehicleParts[0],
-                                'vehicle_id' => $vehicleParts[1],
-                                'license' => $vehicleParts[2],
-                                'model' => $vehicleParts[3]
+                            $vehicleItem = [
+                                'reservation_vehicle_id' => $vehicleParts[0] ?? '',
+                                'vehicle_id' => $vehicleParts[1] ?? '',
+                                'license' => $vehicleParts[2] ?? '',
+                                'model' => $vehicleParts[3] ?? ''
                             ];
+                            // If change vehicle data is present, include it as well
+                            if (count($vehicleParts) >= 7) {
+                                $vehicleItem['change_vehicle_id'] = $vehicleParts[4] ?? '';
+                                $vehicleItem['change_vehicle_license'] = $vehicleParts[5] ?? '';
+                                $vehicleItem['change_vehicle_model'] = $vehicleParts[6] ?? '';
+                            }
+
+                            // Only push if at least one primary field has a value
+                            if (
+                                $vehicleItem['reservation_vehicle_id'] !== '' ||
+                                $vehicleItem['vehicle_id'] !== '' ||
+                                $vehicleItem['license'] !== '' ||
+                                $vehicleItem['model'] !== ''
+                            ) {
+                                $vehicles[] = $vehicleItem;
+                            }
                         }
                     }
                 }
@@ -4979,7 +5861,7 @@ public function venueExists($venueName) {
                 // DRIVERS: fetch all drivers for this reservation and their details
                 $drivers = [];
                 $driverStmt = $this->conn->prepare(
-                    "SELECT rd.reservation_driver_id, rd.reservation_driver_user_id, rd.reservation_vehicle_id, rd.is_accepted_trip, rd.driver_name, rd.created_at, rd.updated_at, u.users_fname, u.users_mname, u.users_lname, u.users_birthdate, u.users_suffix, u.users_email, u.users_school_id, u.users_contact_number, u.users_user_level_id, u.users_pic, u.is_active, u.title_id
+                    "SELECT rd.reservation_driver_id, rd.reservation_driver_user_id, rd.reservation_vehicle_id, rv.reservation_vehicle_vehicle_id, rd.is_accepted_trip, rd.driver_name, rd.created_at, rd.updated_at, u.users_fname, u.users_mname, u.users_lname, u.users_birthdate, u.users_suffix, u.users_email, u.users_school_id, u.users_contact_number, u.users_user_level_id, u.users_pic, u.is_active, u.title_id
                      FROM tbl_reservation_driver rd
                      JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
                      LEFT JOIN tbl_users u ON rd.reservation_driver_user_id = u.users_id
@@ -4992,6 +5874,7 @@ public function venueExists($venueName) {
                         'driver_id' => $driverRow['reservation_driver_user_id'],
                         'driver_name' => $driverRow['driver_name'] ?? trim($driverRow['users_fname'] . ' ' . $driverRow['users_mname'] . ' ' . $driverRow['users_lname']),
                         'reservation_vehicle_id' => $driverRow['reservation_vehicle_id'],
+                        'reservation_vehicle_vehicle_id' => $driverRow['reservation_vehicle_vehicle_id'],
                         'is_accepted_trip' => $driverRow['is_accepted_trip'],
                         'created_at' => $driverRow['created_at'],
                         'updated_at' => $driverRow['updated_at'],
@@ -5094,20 +5977,62 @@ public function venueExists($venueName) {
                     FROM tbl_reservation_equipment re
                     JOIN tbl_reservation r
                         ON r.reservation_id = re.reservation_reservation_id
-                    JOIN tbl_reservation_status rs
-                        ON r.reservation_id = rs.reservation_reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) ls ON ls.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     WHERE (
-                        (rs.reservation_status_status_id = 1 AND (rs.reservation_active = 0 OR rs.reservation_active = 1 OR rs.reservation_active = -1 OR rs.reservation_active IS NULL))
-                        OR (rs.reservation_status_status_id = 6 AND rs.reservation_active = 1)
-                    )
-                    AND r.reservation_id NOT IN (
-                        SELECT DISTINCT reservation_reservation_id 
-                        FROM tbl_reservation_status 
-                        WHERE reservation_status_status_id IN (2, 5)
+                        ls.reservation_status_status_id IN (1, 6, 8, 10)
+                        AND (
+                            (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                            OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                        )
                     )
                     AND (
-                        r.reservation_start_date <= :end
-                        AND r.reservation_end_date >= :start
+                        (CASE
+                            WHEN (
+                                    (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                    OR (
+                                        ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                        AND active_resched.max_reschedule_status_id IS NOT NULL
+                                    )
+                                 )
+                                 AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                            THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end
+                        AND (CASE
+                            WHEN (
+                                    (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                    OR (
+                                        ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                        AND active_resched.max_reschedule_status_id IS NOT NULL
+                                    )
+                                 )
+                                 AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                            THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start
                     )
                     GROUP BY re.reservation_equipment_equip_id
                 ) AS r ON e.equip_id = r.equip_id
@@ -7272,6 +8197,235 @@ public function fetchNoAssignedReservation() {
         return $this->executeQuery($sql);
     }
 
+    public function fetchAvailableVenues($startDateTime = null, $endDateTime = null) {
+        header('Content-Type: application/json');
+        try {
+            $sql = "
+                SELECT 
+                    v.ven_id, 
+                    v.ven_name, 
+                    v.ven_occupancy, 
+                    v.ven_created_at, 
+                    v.ven_updated_at, 
+                    v.status_availability_id,
+                    sa.status_availability_name,
+                    v.ven_pic
+                FROM tbl_venue v
+                INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+                WHERE v.status_availability_id NOT IN (7, 8)
+                  AND v.ven_id NOT IN (
+                    SELECT DISTINCT 
+                        CASE 
+                            WHEN (
+                                (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                OR (active_resched.max_reschedule_status_id IS NOT NULL AND ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                            ) AND rv.reservation_change_venue_id IS NOT NULL
+                            THEN rv.reservation_change_venue_id
+                            ELSE rv.reservation_venue_venue_id
+                        END AS venue_id_in_use
+                    FROM tbl_reservation_venue rv
+                    INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) ls ON ls.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    WHERE 
+                        (
+                            ls.reservation_status_status_id IN (1, 6, 8, 10)
+                            AND (
+                                (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                                OR (ls.reservation_status_status_id IN (1, 8, 10) AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                            )
+                        )
+                        AND (
+                            (CASE
+                                WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                     )
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end
+                            AND (CASE
+                                WHEN (
+                                        (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                        OR (
+                                            ls.reservation_status_status_id = 6 AND ls.reservation_active = 1
+                                            AND active_resched.max_reschedule_status_id IS NOT NULL
+                                        )
+                                     )
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start
+                        )
+                  )
+                ORDER BY v.ven_name
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':start' => $startDateTime, ':end' => $endDateTime]);
+            $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            http_response_code(200);
+            echo json_encode([
+                'status' => 'success',
+                'data' => $venues,
+                'timestamp' => date('Y-m-d H:i:s')
+            ], JSON_UNESCAPED_SLASHES);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage(),
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'General error: ' . $e->getMessage(),
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+        }
+    }
+
+    public function fetchAvailableVehicles($startDateTime = null, $endDateTime = null) {
+        header('Content-Type: application/json');
+        try {
+            $sql = "
+                SELECT  
+                    v.vehicle_id,
+                    v.vehicle_pic,
+                    v.year,
+                    vm.vehicle_make_name, 
+                    vc.vehicle_category_name,
+                    vmd.vehicle_model_name,      
+                    v.vehicle_license,
+                    sa.status_availability_name
+                FROM tbl_vehicle v 
+                INNER JOIN tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id 
+                INNER JOIN tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id 
+                INNER JOIN tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
+                INNER JOIN tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+                WHERE v.status_availability_id NOT IN (7, 8)
+                  AND v.vehicle_id NOT IN (
+                    SELECT DISTINCT 
+                        CASE 
+                            WHEN (
+                                (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                OR (active_resched.max_reschedule_status_id IS NOT NULL AND ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                            ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                            THEN rv.reservation_change_vehicle_id
+                            ELSE rv.reservation_vehicle_vehicle_id
+                        END AS vehicle_id_in_use
+                    FROM tbl_reservation_vehicle rv
+                    INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) ls ON ls.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    WHERE 
+                        (
+                            (ls.reservation_status_status_id = 1 AND (ls.reservation_active = 0 OR ls.reservation_active = 1 OR ls.reservation_active = -1 OR ls.reservation_active IS NULL))
+                            OR (ls.reservation_status_status_id = 8 AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                            OR (ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
+                            OR (ls.reservation_status_status_id = 10 AND (ls.reservation_active = 0 OR ls.reservation_active = 1))
+                        )
+                        AND r.reservation_id NOT IN (
+                            SELECT DISTINCT reservation_reservation_id 
+                            FROM tbl_reservation_status 
+                            WHERE reservation_status_status_id IN (2, 5)
+                        )
+                        AND (
+                            (CASE
+                                WHEN (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :end
+                            AND (CASE
+                                WHEN (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
+                                     AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                                THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :start
+                        )
+                  )
+                ORDER BY v.vehicle_license
+            ";
+
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([':start' => $startDateTime, ':end' => $endDateTime]);
+            $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            http_response_code(200);
+            echo json_encode([
+                'status' => 'success',
+                'data' => $vehicles,
+                'timestamp' => date('Y-m-d H:i:s')
+            ], JSON_UNESCAPED_SLASHES);
+        } catch (PDOException $e) {
+            http_response_code(500);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Database error: ' . $e->getMessage(),
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'General error: ' . $e->getMessage(),
+                'timestamp' => date('Y-m-d H:i:s')
+            ]);
+        }
+    }
+
     public function fetchAllResources($type = null) {
         // SQL query for vehicles - only fetch vehicle_license and vehicle_model_name (vehicle model title)
         $vehicleQuery = "
@@ -7395,7 +8549,19 @@ public function fetchNoAssignedReservation() {
                     'venue'                           AS resource_type,
                     v.ven_name                        AS resource_name,
                     NULL                              AS quantity,
-                    rv.reservation_venue_venue_id     AS resource_id,
+                    CASE 
+                        WHEN EXISTS (
+                            SELECT 1 
+                              FROM tbl_reservation_status rs 
+                             WHERE rs.reservation_reservation_id = r.reservation_id 
+                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_active = 1
+                        )
+                         AND rv.reservation_change_venue_id IS NOT NULL
+                         AND rv.reservation_change_venue_id > 0
+                        THEN rv.reservation_change_venue_id
+                        ELSE rv.reservation_venue_venue_id
+                    END                              AS resource_id,
                     c.condition_name                  AS condition_name,
                     rcv.remarks                       AS remarks,
                     rcv.created_at                    AS created_at,
@@ -7416,7 +8582,19 @@ public function fetchNoAssignedReservation() {
                 JOIN tbl_reservation               r  ON rv.reservation_reservation_id = r.reservation_id
                 JOIN tbl_users                     u  ON r.reservation_user_id = u.users_id
                 LEFT JOIN titles               t  ON u.title_id = t.id
-                JOIN tbl_venue                     v  ON rv.reservation_venue_venue_id = v.ven_id
+                JOIN tbl_venue                     v  ON v.ven_id = CASE 
+                        WHEN EXISTS (
+                            SELECT 1 
+                              FROM tbl_reservation_status rs 
+                             WHERE rs.reservation_reservation_id = r.reservation_id 
+                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_active = 1
+                        )
+                         AND rv.reservation_change_venue_id IS NOT NULL
+                         AND rv.reservation_change_venue_id > 0
+                        THEN rv.reservation_change_venue_id
+                        ELSE rv.reservation_venue_venue_id
+                    END
                 JOIN tbl_condition                 c  ON rcv.condition_id = c.id
                 WHERE rcv.condition_id != 2
                   AND rcv.is_active = 1
@@ -7432,7 +8610,19 @@ public function fetchNoAssignedReservation() {
                     'vehicle'                         AS resource_type,
                     CONCAT(vm.vehicle_model_name, ' (', vh.vehicle_license, ')') AS resource_name,
                     NULL                                 AS quantity,
-                    rv.reservation_vehicle_vehicle_id AS resource_id,
+                    CASE 
+                        WHEN EXISTS (
+                            SELECT 1 
+                              FROM tbl_reservation_status rs 
+                             WHERE rs.reservation_reservation_id = r.reservation_id 
+                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_active = 1
+                        )
+                         AND rv.reservation_change_vehicle_id IS NOT NULL
+                         AND rv.reservation_change_vehicle_id > 0
+                        THEN rv.reservation_change_vehicle_id
+                        ELSE rv.reservation_vehicle_vehicle_id
+                    END                               AS resource_id,
                     c.condition_name                  AS condition_name,
                     rcvh.remarks                      AS remarks,
                     rcvh.created_at                   AS created_at,
@@ -7453,7 +8643,19 @@ public function fetchNoAssignedReservation() {
                 JOIN tbl_reservation                r  ON rv.reservation_reservation_id = r.reservation_id
                 JOIN tbl_users                      u  ON r.reservation_user_id = u.users_id
                 LEFT JOIN titles                t  ON u.title_id = t.id
-                JOIN tbl_vehicle                    vh ON rv.reservation_vehicle_vehicle_id = vh.vehicle_id
+                JOIN tbl_vehicle                    vh ON vh.vehicle_id = CASE 
+                        WHEN EXISTS (
+                            SELECT 1 
+                              FROM tbl_reservation_status rs 
+                             WHERE rs.reservation_reservation_id = r.reservation_id 
+                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_active = 1
+                        )
+                         AND rv.reservation_change_vehicle_id IS NOT NULL
+                         AND rv.reservation_change_vehicle_id > 0
+                        THEN rv.reservation_change_vehicle_id
+                        ELSE rv.reservation_vehicle_vehicle_id
+                    END
                 JOIN tbl_vehicle_model              vm ON vh.vehicle_model_id = vm.vehicle_model_id
                 JOIN tbl_condition                  c  ON rcvh.condition_id = c.id
                 WHERE rcvh.condition_id != 2
@@ -7545,16 +8747,6 @@ public function fetchNoAssignedReservation() {
         switch ($type) {
             case 'venue':
             case 'vehicle':
-                // Update remarks if item is fixed
-                if ($isFixed) {
-                    $ctbl = $conditionMap[$type]['table'];
-                    $stmt = $this->conn->prepare("
-                        UPDATE {$ctbl}
-                           SET remarks = 'Fixed'
-                         WHERE id = :cid
-                    ");
-                    $stmt->execute(['cid' => $recordId]);
-                }
 
                 // 1) Update resource availability based on isFixed
                 $tbl    = $resourceMap[$type]['table'];
@@ -7599,18 +8791,12 @@ public function fetchNoAssignedReservation() {
                 ");
                 $update->execute(['status' => $status, 'uid' => $resourceId]);
 
-                // 3) Deactivate the condition record and set remarks
-                $updateFields = 'is_active = 0';
-                $params = ['cid' => $recordId];
-                if ($isFixed) {
-                    $updateFields .= ', remarks = :remarks';
-                    $params['remarks'] = 'Fixed';
-                }
+                // 3) Deactivate the condition record
                 $this->conn->prepare("
                     UPDATE tbl_reservation_condition_unit
-                       SET $updateFields
+                       SET is_active = 0
                      WHERE id = :cid
-                ")->execute($params);
+                ")->execute(['cid' => $recordId]);
                 break;
 
             case 'equipment_bulk':
@@ -7629,14 +8815,7 @@ public function fetchNoAssignedReservation() {
                 }
 
                 if ($isFixed) {
-                    // Update remarks to 'Fixed'
-                    $this->conn->prepare("
-                        UPDATE tbl_reservation_condition_equipment
-                           SET remarks = 'Fixed'
-                         WHERE id = :cid
-                    ")->execute(['cid' => $recordId]);
-
-                    // 2) if fixed, update on_hand_quantity
+                    // if fixed, update on_hand_quantity
                     if ($cond['qty_bad'] > 0) {
                         // find the row in equipment_quantity
                         $stmt2 = $this->conn->prepare("
@@ -8987,41 +10166,15 @@ public function handleRequest($reservationId, $isAccepted, $userId, $notificatio
         $this->conn->beginTransaction();
 
         if ($isAccepted) {
-            // For user ID 99, handle status ID 8
-            if ($userId == 99) {
-                $sqlUpdate = "
-                    UPDATE tbl_reservation_status 
-                    SET reservation_active = 1 
-                    WHERE reservation_reservation_id = :reservation_id 
-                    AND reservation_status_status_id = 8";
-                
-                $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                $reservation_id = $reservationId;
-                $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                $stmtUpdate->execute();
-                
-                // Insert status 6
-                $sqlInsert = "
-                    INSERT INTO tbl_reservation_status 
-                    (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
-                    VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
-                
-                $stmtInsert = $this->conn->prepare($sqlInsert);
-                $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
-                $stmtInsert->execute();
-            } else {
-                // For other users, handle status ID 1 normally
-                $sqlUpdate = "
-                    UPDATE tbl_reservation_status 
-                    SET reservation_active = 1 
-                    WHERE reservation_reservation_id = :reservation_id 
-                    AND reservation_status_status_id = 1";
-                
-                $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                $stmtUpdate->execute();
-            }
+            $sqlUpdate = "
+                UPDATE tbl_reservation_status 
+                SET reservation_active = 1 
+                WHERE reservation_reservation_id = :reservation_id 
+                AND reservation_status_status_id = 1";
+            
+            $stmtUpdate = $this->conn->prepare($sqlUpdate);
+            $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmtUpdate->execute();
         } else {
             $sqlUpdate = "
                 UPDATE tbl_reservation_status 
@@ -9408,6 +10561,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case "updateVenue":
             echo $user->updateVenue($input);
+            break;
+
+        case "updateVenueReschedule":
+            $reservation_venue_id = $input['reservation_venue_id'] ?? ($_POST['reservation_venue_id'] ?? null);
+            $reservation_change_venue_id = $input['reservation_change_venue_id'] ?? ($_POST['reservation_change_venue_id'] ?? null);
+            if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_venue_id and reservation_change_venue_id are required']);
+                break;
+            }
+            echo $user->updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id);
+            break;
+
+        case "updateVehicleReschedule":
+            $reservation_vehicle_id = $input['reservation_vehicle_id'] ?? ($_POST['reservation_vehicle_id'] ?? null);
+            $reservation_change_vehicle_id = $input['reservation_change_vehicle_id'] ?? ($_POST['reservation_change_vehicle_id'] ?? null);
+            if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_vehicle_id and reservation_change_vehicle_id are required']);
+                break;
+            }
+            echo $user->updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id);
             break;
 
         case "saveVehicle":
@@ -9842,7 +11015,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['status' => 'error', 'message' => 'Reservation ID parameter is missing.']);
             }
             break;
-        
+
+        case "updateReservationReschedule":
+            $reservation_id = $input['reservation_id'] ?? ($_POST['reservation_id'] ?? null);
+            $reschedule_start_date = $input['reschedule_start_date'] ?? ($_POST['reschedule_start_date'] ?? null);
+            $reschedule_end_date = $input['reschedule_end_date'] ?? ($_POST['reschedule_end_date'] ?? null);
+            $user_admin_id = $input['user_admin_id'] ?? ($_POST['user_admin_id'] ?? null);
+            if ($reservation_id === null || $reschedule_start_date === null || $reschedule_end_date === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_id, reschedule_start_date, and reschedule_end_date are required']);
+                break;
+            }
+            echo $user->updateReservationReschedule($reservation_id, $reschedule_start_date, $reschedule_end_date, $user_admin_id);
+            break;
+
         case "fetchVenues":
             echo $user->fetchVenues();
             break;
@@ -9864,6 +11049,145 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 echo json_encode(['status' => 'error', 'message' => 'Missing required parameters (type, resourceId, recordId)']);
             }
+            break;
+        case "hasConflictRequest":
+            // Accept multiple possible parameter names for flexibility
+            $resourceType = $input['resourceType']
+                ?? $input['itemType']
+                ?? ($_POST['resourceType'] ?? ($_POST['itemType'] ?? null));
+
+            $resourceId = $input['resourceId']
+                ?? $input['id']
+                ?? ($_POST['resourceId'] ?? ($_POST['id'] ?? null));
+
+            $startDate = $input['startDate']
+                ?? $input['start_date']
+                ?? $input['startDateTime']
+                ?? ($_POST['startDate'] ?? ($_POST['start_date'] ?? ($_POST['startDateTime'] ?? null)));
+
+            $endDate = $input['endDate']
+                ?? $input['end_date']
+                ?? $input['endDateTime']
+                ?? ($_POST['endDate'] ?? ($_POST['end_date'] ?? ($_POST['endDateTime'] ?? null)));
+
+            // Quantity only applies to equipment, but allow optional for others
+            $requestedQuantity = $input['requestedQuantity']
+                ?? $input['quantity']
+                ?? ($_POST['requestedQuantity'] ?? ($_POST['quantity'] ?? 0));
+            // Optional per-equipment quantities map or array
+            $requestedQuantitiesMap = $input['requestedQuantities']
+                ?? $input['quantitiesMap']
+                ?? ($_POST['requestedQuantities'] ?? ($_POST['quantitiesMap'] ?? null));
+
+            if (!$resourceType || !$resourceId || !$startDate || !$endDate) {
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters (resourceType, resourceId, startDate, endDate)']);
+                break;
+            }
+            
+            // Handle batch requests if arrays are provided
+            $isTypeArray = is_array($resourceType);
+            $isIdArray = is_array($resourceId);
+            $isQtyArray = is_array($requestedQuantity);
+            $isQtyMap   = is_array($requestedQuantitiesMap);
+
+            if ($isTypeArray || $isIdArray) {
+                // Normalize arrays
+                $types = $isTypeArray ? $resourceType : [];
+                $ids   = $isIdArray ? $resourceId : [];
+
+                // If one is scalar and the other is array, broadcast the scalar to match length
+                if (!$isTypeArray && $isIdArray) {
+                    $types = array_fill(0, count($ids), $resourceType);
+                }
+                if ($isTypeArray && !$isIdArray) {
+                    $ids = array_fill(0, count($types), $resourceId);
+                }
+
+                if (count($types) !== count($ids)) {
+                    echo json_encode(['status' => 'error', 'message' => 'resourceType and resourceId arrays must have the same length']);
+                    break;
+                }
+
+                $results = [];
+                foreach ($types as $i => $typeVal) {
+                    $typeVal = is_string($typeVal) ? strtolower($typeVal) : $typeVal;
+                    $idVal = (int)$ids[$i];
+
+                    // Resolve quantity for equipment
+                    $qtyForItem = 0;
+                    if ($typeVal === 'equipment') {
+                        if ($isQtyMap && isset($requestedQuantitiesMap[$idVal])) {
+                            $qtyForItem = (int)$requestedQuantitiesMap[$idVal];
+                        } elseif ($isQtyArray && isset($requestedQuantity[$i])) {
+                            $qtyForItem = (int)$requestedQuantity[$i];
+                        } elseif (!$isQtyArray && !$isQtyMap) {
+                            // Fallback to scalar requestedQuantity if present and there is only one equipment item
+                            // Otherwise, require an explicit quantity per equipment
+                            $qtyForItem = (int)$requestedQuantity;
+                        }
+
+                        if ($qtyForItem === 0) {
+                            $results[] = [
+                                'resourceType' => $typeVal,
+                                'resourceId' => $idVal,
+                                'error' => 'requestedQuantity is required for equipment'
+                            ];
+                            continue;
+                        }
+                    }
+
+                    $res = $user->hasConflictRequest($typeVal, $idVal, $startDate, $endDate, $qtyForItem);
+                    $results[] = [
+                        'resourceType' => $typeVal,
+                        'resourceId' => $idVal,
+                        'result' => $res
+                    ];
+                }
+
+                echo json_encode(['status' => 'success', 'results' => $results]);
+                break;
+            }
+
+            // Single item path (backward compatible)
+            if ($resourceType === 'equipment' && ($requestedQuantity === null || $requestedQuantity === '' || (int)$requestedQuantity === 0)) {
+                echo json_encode(['status' => 'error', 'message' => 'requestedQuantity is required for equipment']);
+                break;
+            }
+
+            $result = $user->hasConflictRequest($resourceType, (int)$resourceId, $startDate, $endDate, (int)$requestedQuantity);
+            echo json_encode($result);
+            break;
+
+        case "fetchAvailableVenues":
+            // Accept both camelCase and snake_case for flexibility
+            $startDateTime = $input['startDateTime']
+                ?? $input['start_datetime']
+                ?? ($_POST['startDateTime'] ?? ($_POST['start_datetime'] ?? null));
+            $endDateTime = $input['endDateTime']
+                ?? $input['end_datetime']
+                ?? ($_POST['endDateTime'] ?? ($_POST['end_datetime'] ?? null));
+            if ($startDateTime === null || $endDateTime === null) {
+                echo json_encode(['status' => 'error', 'message' => 'startDateTime and endDateTime are required']);
+                break;
+            }
+            // Method echoes JSON and sets headers internally
+            $user->fetchAvailableVenues($startDateTime, $endDateTime);
+            break;
+
+        case "fetchAvailableVehicles":
+            // Accept both camelCase and snake_case for flexibility
+            $startDateTime = $input['startDateTime']
+                ?? $input['start_datetime']
+                ?? ($_POST['startDateTime'] ?? ($_POST['start_datetime'] ?? null));
+            $endDateTime = $input['endDateTime']
+                ?? $input['end_datetime']
+                ?? ($_POST['endDateTime'] ?? ($_POST['end_datetime'] ?? null));
+            if ($startDateTime === null || $endDateTime === null) {
+                echo json_encode(['status' => 'error', 'message' => 'startDateTime and endDateTime are required']);
+                break;
+            }
+            // Method echoes JSON and sets headers internally
+            $user->fetchAvailableVehicles($startDateTime, $endDateTime);
             break;
         default:
             echo json_encode(['status' => 'error', 'message' => 'Invalid operation']);
