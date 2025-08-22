@@ -1577,158 +1577,501 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 'unavailable_drivers' => []
             ];
 
-            // --- Query for Reserved Users (reservation_users) ---
-            // This query fetches details of users who have reservations that overlap with the given date range
-            // and are in 'Approved' status (status_id = 6) and active.
+            // --- Query for Reserved Users (reservation_users) with latest-status and reschedule logic ---
             $userQuery = "
                 SELECT DISTINCT
                     r.reservation_user_id,
                     r.reservation_id,
-                    r.reservation_start_date,
-                    r.reservation_end_date,
                     r.reservation_title,
                     r.reservation_description,
+                    r.reservation_start_date,
+                    r.reservation_end_date,
                     CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name,
                     ul.user_level_name,
                     d.departments_name
                 FROM tbl_reservation r
                 INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                 LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
-                WHERE r.reservation_start_date <= :endDate
-                AND r.reservation_end_date >= :startDate
-                AND rs.reservation_status_status_id = 6 -- Assuming 6 is the 'Approved' status ID
-                AND rs.reservation_active = 1
+                WHERE (
+                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                    AND (
+                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
+                    )
+                )
+                AND (
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :endDateTime
+                    AND
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
+                )
             ";
             $stmt = $this->conn->prepare($userQuery);
             $stmt->execute([
-                ':startDate' => $startDateTime,
-                ':endDate' => $endDateTime
+                ':startDateTime' => $startDateTime,
+                ':endDateTime' => $endDateTime
             ]);
             $result['reservation_users'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // --- Query for Unavailable Vehicles ---
-            // This query identifies vehicles that are part of approved and active reservations
-            // overlapping with the given date range.
+            // --- Unavailable Vehicles: pick effective vehicle when rescheduled, apply latest-status and reschedule dates ---
             $vehicleQuery = "
                 SELECT DISTINCT
-                    v.vehicle_id,
-                    v.vehicle_license,
-                    vm.vehicle_model_name,
-                    vmake.vehicle_make_name
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                        THEN rv.reservation_change_vehicle_id
+                        ELSE v.vehicle_id
+                    END AS vehicle_id,
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                        THEN cv.vehicle_license
+                        ELSE v.vehicle_license
+                    END AS vehicle_license,
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                        THEN cvmk.vehicle_make_name
+                        ELSE vm.vehicle_make_name
+                    END AS vehicle_make_name,
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                        THEN cvmd.vehicle_model_name
+                        ELSE vmd.vehicle_model_name
+                    END AS vehicle_model_name
                 FROM tbl_reservation r
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
                 INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
                 INNER JOIN tbl_vehicle v ON rv.reservation_vehicle_vehicle_id = v.vehicle_id
-                INNER JOIN tbl_vehicle_model vm ON v.vehicle_model_id = vm.vehicle_model_id
-                INNER JOIN tbl_vehicle_make vmake ON vm.vehicle_model_vehicle_make_id = vmake.vehicle_make_id
-                WHERE r.reservation_start_date <= :endDate
-                AND r.reservation_end_date >= :startDate
-                AND rs.reservation_status_status_id = 6
-                AND rs.reservation_active = 1
+                INNER JOIN tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
+                INNER JOIN tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
+                LEFT JOIN tbl_vehicle cv ON rv.reservation_change_vehicle_id = cv.vehicle_id
+                LEFT JOIN tbl_vehicle_model cvmd ON cv.vehicle_model_id = cvmd.vehicle_model_id
+                LEFT JOIN tbl_vehicle_make cvmk ON cvmd.vehicle_model_vehicle_make_id = cvmk.vehicle_make_id
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                WHERE r.reservation_id NOT IN (
+                    SELECT DISTINCT reservation_reservation_id 
+                    FROM tbl_reservation_status 
+                    WHERE reservation_status_status_id IN (2, 5)
+                )
+                AND (
+                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                    AND (
+                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
+                    )
+                )
+                AND (
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :endDateTime
+                    AND
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
+                )
             ";
             $stmt = $this->conn->prepare($vehicleQuery);
             $stmt->execute([
-                ':startDate' => $startDateTime,
-                ':endDate' => $endDateTime
+                ':startDateTime' => $startDateTime,
+                ':endDateTime' => $endDateTime
             ]);
             $result['unavailable_vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // --- Query for Unavailable Venues ---
-            // This query identifies venues that are part of approved and active reservations
-            // overlapping with the given date range.
+            // --- Unavailable Venues: pick effective venue when rescheduled, apply latest-status and reschedule dates ---
             $venueQuery = "
                 SELECT DISTINCT
-                    v.ven_id,
-                    v.ven_name
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_venue_id IS NOT NULL
+                        THEN rv.reservation_change_venue_id
+                        ELSE v.ven_id
+                    END AS ven_id,
+                    CASE 
+                        WHEN (
+                            (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                            OR (
+                                latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                AND active_resched.max_reschedule_status_id IS NOT NULL
+                            )
+                        ) AND rv.reservation_change_venue_id IS NOT NULL
+                        THEN change_venue.ven_name
+                        ELSE v.ven_name
+                    END AS ven_name
                 FROM tbl_reservation r
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
                 INNER JOIN tbl_reservation_venue rv ON r.reservation_id = rv.reservation_reservation_id
                 INNER JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
-                WHERE r.reservation_start_date <= :endDate
-                AND r.reservation_end_date >= :startDate
-                AND rs.reservation_status_status_id = 6
-                AND rs.reservation_active = 1
+                LEFT JOIN tbl_venue change_venue ON rv.reservation_change_venue_id = change_venue.ven_id
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                WHERE r.reservation_id NOT IN (
+                    SELECT DISTINCT reservation_reservation_id 
+                    FROM tbl_reservation_status 
+                    WHERE reservation_status_status_id IN (2, 5)
+                )
+                AND (
+                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                    AND (
+                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
+                    )
+                )
+                AND (
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :endDateTime
+                    AND
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
+                )
             ";
             $stmt = $this->conn->prepare($venueQuery);
             $stmt->execute([
-                ':startDate' => $startDateTime,
-                ':endDate' => $endDateTime
+                ':startDateTime' => $startDateTime,
+                ':endDateTime' => $endDateTime
             ]);
             $result['unavailable_venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // --- Unavailable Equipment: block when reserved qty >= total qty with latest-status & reschedule-aware overlap ---
             $equipmentQuery = "
                 WITH EquipmentTotalQuantities AS (
                     SELECT
                         e.equip_id,
                         CASE
-                            -- If there are any units for this equipment in tbl_equipment_unit, it's considered serialized.
                             WHEN EXISTS (SELECT 1 FROM tbl_equipment_unit u WHERE u.equip_id = e.equip_id) THEN (
-                                -- For serialized equipment, count the available units.
-                                SELECT COUNT(*)
-                                FROM tbl_equipment_unit u_inner
-                                WHERE u_inner.equip_id = e.equip_id
+                                SELECT COUNT(*) FROM tbl_equipment_unit u_inner WHERE u_inner.equip_id = e.equip_id
                             )
                             ELSE (
-                                -- For non-serialized equipment, get the quantity from tbl_equipment_quantity.
-                                -- LIMIT 1 is used here assuming tbl_equipment_quantity holds a single current quantity per equip_id.
-                                -- If it's a history, you might need to order by 'last_updated' and take the latest.
-                                SELECT eq.quantity
-                                FROM tbl_equipment_quantity eq
-                                WHERE eq.equip_id = e.equip_id
-                                LIMIT 1
+                                SELECT eq.quantity FROM tbl_equipment_quantity eq WHERE eq.equip_id = e.equip_id LIMIT 1
                             )
                         END AS total_quantity
                     FROM tbl_equipments e
                 )
-                SELECT DISTINCT
+                SELECT 
                     e.equip_id,
                     e.equip_name,
-                    COALESCE(etq.total_quantity, 0) AS total_quantity, -- Ensure total_quantity is not null
+                    COALESCE(etq.total_quantity, 0) AS total_quantity,
                     COALESCE(SUM(re.reservation_equipment_quantity), 0) AS reserved_quantity
                 FROM tbl_equipments e
-                INNER JOIN EquipmentTotalQuantities etq ON e.equip_id = etq.equip_id -- Join with the calculated total quantities
+                INNER JOIN EquipmentTotalQuantities etq ON e.equip_id = etq.equip_id
                 LEFT JOIN tbl_reservation_equipment re ON e.equip_id = re.reservation_equipment_equip_id
                 LEFT JOIN tbl_reservation r ON r.reservation_id = re.reservation_reservation_id
-                LEFT JOIN tbl_reservation_status rs ON rs.reservation_reservation_id = r.reservation_id
-                WHERE
-                    (r.reservation_start_date <= :endDate AND r.reservation_end_date >= :startDate)
-                    AND rs.reservation_status_status_id = 6
-                    AND rs.reservation_active = 1
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                WHERE r.reservation_id NOT IN (
+                    SELECT DISTINCT reservation_reservation_id 
+                    FROM tbl_reservation_status 
+                    WHERE reservation_status_status_id IN (2, 5)
+                )
+                AND (
+                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                    AND (
+                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
+                    )
+                )
+                AND (
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :endDateTime
+                    AND
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
+                )
                 GROUP BY e.equip_id, e.equip_name, etq.total_quantity
-                HAVING COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0);
-
+                HAVING COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0)
             ";
             $stmt = $this->conn->prepare($equipmentQuery);
             $stmt->execute([
-                ':startDate' => $startDateTime,
-                ':endDate' => $endDateTime
+                ':startDateTime' => $startDateTime,
+                ':endDateTime' => $endDateTime
             ]);
             $result['unavailable_equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // --- Query for Unavailable Drivers ---
-            // This query identifies drivers who are assigned to approved and active reservations
-            // overlapping with the given date range.
-            $driverQuery = "
-                SELECT DISTINCT
-                    rd.reservation_driver_user_id as users_id,
-                    rd.driver_name as full_name
-                FROM tbl_reservation r
-                INNER JOIN tbl_reservation_status rs ON r.reservation_id = rs.reservation_reservation_id
-                INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
-                INNER JOIN tbl_reservation_driver rd ON rv.reservation_vehicle_id = rd.reservation_vehicle_id
-                WHERE r.reservation_start_date <= :endDate
-                AND r.reservation_end_date >= :startDate
-                AND rs.reservation_status_status_id = 6
-                AND rs.reservation_active = 1
+            // --- Unavailable Drivers: use latest-status and reschedule-aware overlap to find reserved drivers ---
+            $sqlReservedDrivers = "
+                SELECT DISTINCT rd.reservation_driver_user_id
+                FROM tbl_reservation_driver rd
+                INNER JOIN tbl_reservation_vehicle rv ON rd.reservation_vehicle_id = rv.reservation_vehicle_id
+                INNER JOIN tbl_reservation r ON rv.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT rs1.*
+                    FROM tbl_reservation_status rs1
+                    INNER JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                        FROM tbl_reservation_status
+                        GROUP BY reservation_reservation_id
+                    ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                         AND rs1.reservation_updated_at = mu.max_updated_at
+                    INNER JOIN (
+                        SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                        FROM tbl_reservation_status x
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                           AND y.max_updated_at = x.reservation_updated_at
+                        GROUP BY x.reservation_reservation_id
+                    ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                         AND rs1.reservation_status_id = mid.max_id
+                ) latest_status ON latest_status.reservation_reservation_id = r.reservation_id
+                LEFT JOIN (
+                    SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                    FROM tbl_reservation_status
+                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    GROUP BY reservation_reservation_id
+                ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                WHERE r.reservation_id NOT IN (
+                    SELECT DISTINCT reservation_reservation_id 
+                    FROM tbl_reservation_status 
+                    WHERE reservation_status_status_id IN (2, 5)
+                )
+                AND (
+                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
+                    AND (
+                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
+                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
+                    )
+                )
+                AND (
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_start_date ELSE r.reservation_start_date END) <= :endDateTime
+                    AND
+                    (CASE
+                        WHEN (
+                                (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
+                                OR (
+                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    AND active_resched.max_reschedule_status_id IS NOT NULL
+                                )
+                             )
+                             AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
+                        THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
+                )
             ";
-            $stmt = $this->conn->prepare($driverQuery);
+            $stmt = $this->conn->prepare($sqlReservedDrivers);
             $stmt->execute([
-                ':startDate' => $startDateTime,
-                ':endDate' => $endDateTime
+                ':startDateTime' => $startDateTime,
+                ':endDateTime' => $endDateTime
             ]);
-            $result['unavailable_drivers'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $reservedDriverIds = $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+
+            if (!empty($reservedDriverIds)) {
+                $placeholders = implode(',', array_fill(0, count($reservedDriverIds), '?'));
+                $driverDetailsSql = "
+                    SELECT u.users_id, CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS full_name
+                    FROM tbl_users u
+                    WHERE u.users_id IN ($placeholders)
+                ";
+                $stmt = $this->conn->prepare($driverDetailsSql);
+                $stmt->execute($reservedDriverIds);
+                $result['unavailable_drivers'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $result['unavailable_drivers'] = [];
+            }
 
             // Return the results as a JSON success response
             return json_encode(['status' => 'success', 'data' => $result]);
