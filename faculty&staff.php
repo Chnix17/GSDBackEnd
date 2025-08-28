@@ -678,17 +678,45 @@ class FacultyStaff {
             $upd->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
             $upd->execute();
 
-            // 2) Insert a new status row (status 10) for history/audit
-            $insSql = "
-                INSERT INTO tbl_reservation_status
-                    (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
-                VALUES (6, :rid, :active, NOW(), :user_id)
-            ";
-            $ins = $this->conn->prepare($insSql);
-            $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
-            $ins->bindValue(':active', $active, PDO::PARAM_INT);
-            $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
-            $ins->execute();
+            // 2) Handle status insertion based on active value
+            if ($active == 1) {
+                // For confirmed reschedule (active = 1), check if status 6 already exists
+                $checkSql = "
+                    SELECT COUNT(*) as count 
+                    FROM tbl_reservation_status 
+                    WHERE reservation_reservation_id = :rid 
+                    AND reservation_status_status_id = 6
+                    AND reservation_active = 1
+                ";
+                $check = $this->conn->prepare($checkSql);
+                $check->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                $check->execute();
+                $result = $check->fetch(PDO::FETCH_ASSOC);
+
+                // Only insert status 6 if it doesn't already exist
+                if ($result['count'] == 0) {
+                    $insSql = "
+                        INSERT INTO tbl_reservation_status
+                            (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                        VALUES (6, :rid, 1, NOW(), :user_id)
+                    ";
+                    $ins = $this->conn->prepare($insSql);
+                    $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                    $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+                    $ins->execute();
+                }
+            } else {
+                // For declined reschedule (active = -1), insert status 5
+                $insSql = "
+                    INSERT INTO tbl_reservation_status
+                        (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                    VALUES (5, :rid, -1, NOW(), :user_id)
+                ";
+                $ins = $this->conn->prepare($insSql);
+                $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+                $ins->execute();
+            }
 
             $this->conn->commit();
 

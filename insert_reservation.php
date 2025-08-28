@@ -963,8 +963,8 @@ class Reservation {
                             if (in_array($userLevelId, [3, 6])) {
                                 // For Big Event in Open Area - include all academic departments
                                 if ($hasBigEvent && $hasOpenArea) {
-                                    // Get all academic departments
-                                    $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                    // Get all academic departments (excluding 48 and 54)
+                                    $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic' AND departments_id NOT IN (48, 54)";
                                     $deptStmt = $this->conn->query($deptQuery);
                                     
                                     if ($deptStmt) {
@@ -985,8 +985,8 @@ class Reservation {
                             }
                             // For user levels 16 and 17 with Big Event in Open Area - include all academic departments + department 29
                             else if (in_array($userLevelId, [16, 17]) && $hasBigEvent && $hasOpenArea) {
-                                // Get all academic departments
-                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                // Get all academic departments (excluding 48 and 54)
+                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic' AND departments_id NOT IN (48, 54)";
                                 $deptStmt = $this->conn->query($deptQuery);
                                 
                                 if ($deptStmt) {
@@ -1052,9 +1052,24 @@ class Reservation {
                                 $departmentsToApprove = array_values(array_unique(array_map('intval', $departmentsToApprove)));
                                 error_log(sprintf("Adding departments for level 17 (Small Event, Close Area): %s", json_encode($departmentsToApprove)));
                             }
-                            // Fallback: no department approvals needed
                             else if ($hasCloseArea) {
                                 $departmentsToApprove = [];
+                            }
+                            
+                            // Skip departments 48 and 54 for all venues (they will be added back only for venue 92)
+                            $departmentsToApprove = array_filter($departmentsToApprove, function($deptId) {
+                                return !in_array($deptId, [48, 54]);
+                            });
+                            
+                            // Check if venue ID 92 is in the reservation and add additional departments
+                            if (in_array(92, $data['venues'])) {
+                                $additionalDepts = [48, 54];
+                                foreach ($additionalDepts as $additionalDept) {
+                                    if (!in_array($additionalDept, $departmentsToApprove)) {
+                                        $departmentsToApprove[] = $additionalDept;
+                                        error_log(sprintf("Added additional department %d for venue ID 92", $additionalDept));
+                                    }
+                                }
                             }
                             
                             foreach ($departmentsToApprove as $deptId) {
@@ -1376,8 +1391,8 @@ class Reservation {
                             // For Big Event in Open Area - include all academic departments
                             // For user levels 5 and 18, exclude department 29 as they are department heads/deans
                             if ($hasBigEvent && $hasOpenArea) {
-                                // Get all academic departments
-                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic'";
+                                // Get all academic departments (excluding 48 and 54)
+                                $deptQuery = "SELECT departments_id FROM tbl_departments WHERE department_type = 'Academic' AND departments_id NOT IN (48, 54)";
                                 $deptStmt = $this->conn->query($deptQuery);
                                 
                                 if ($deptStmt) {

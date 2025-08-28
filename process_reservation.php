@@ -1622,11 +1622,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                 LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                 WHERE (
-                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
-                    AND (
-                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
-                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
-                    )
+                    latest_status.reservation_status_status_id = 6
+                    AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
                     (CASE
@@ -1748,11 +1745,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
-                    AND (
-                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
-                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
-                    )
+                    latest_status.reservation_status_status_id = 6
+                    AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
                     (CASE
@@ -1848,11 +1842,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
-                    AND (
-                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
-                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
-                    )
+                    latest_status.reservation_status_status_id = 6
+                    AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
                     (CASE
@@ -1943,11 +1934,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
-                    AND (
-                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
-                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
-                    )
+                    latest_status.reservation_status_status_id = 6
+                    AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
                     (CASE
@@ -2022,11 +2010,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (1, 6, 8, 10)
-                    AND (
-                        (latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1)
-                        OR (latest_status.reservation_status_status_id IN (1, 8, 10) AND (latest_status.reservation_active IN (0, 1)))
-                    )
+                    latest_status.reservation_status_status_id = 6
+                    AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
                     (CASE
