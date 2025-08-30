@@ -606,14 +606,14 @@ public function fetchEquipmentsWithStatus() {
                 SELECT 1
                 FROM tbl_reservation_status
                 WHERE reservation_reservation_id = :reservation_id
-                  AND reservation_status_status_id = 10
+                  AND reservation_status_status_id IN (6, 10)
                   AND reservation_active = 1
                 LIMIT 1
             ";
             $stmtStatus = $this->conn->prepare($statusSql);
             $stmtStatus->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
             $stmtStatus->execute();
-            $useChangeVenue = (bool)$stmtStatus->fetchColumn();
+            $hasRescheduleStatus = (bool)$stmtStatus->fetchColumn();
 
             // 2. Fetch venues
             $venueSql = "
@@ -634,7 +634,8 @@ public function fetchEquipmentsWithStatus() {
             $venues = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
             foreach ($venues as $venueRow) {
-                $venueIdToUse = ($useChangeVenue && !empty($venueRow['reservation_change_venue_id'])) ? (int)$venueRow['reservation_change_venue_id'] : (int)$venueRow['original_venue_id'];
+                // If has reschedule status but change_venue_id is null, use original venue_id
+                $venueIdToUse = ($hasRescheduleStatus && !empty($venueRow['reservation_change_venue_id'])) ? (int)$venueRow['reservation_change_venue_id'] : (int)$venueRow['original_venue_id'];
     
                 $venueDetail = [
                     'reservation_venue_id' => $venueRow['reservation_venue_id'],
@@ -684,7 +685,8 @@ public function fetchEquipmentsWithStatus() {
             $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
             foreach ($vehicles as $vehicleRow) {
-                $vehicleIdToUse = ($useChangeVenue && !empty($vehicleRow['reservation_change_vehicle_id']))
+                // If has reschedule status but change_vehicle_id is null, use original vehicle_id
+                $vehicleIdToUse = ($hasRescheduleStatus && !empty($vehicleRow['reservation_change_vehicle_id']))
                     ? (int)$vehicleRow['reservation_change_vehicle_id']
                     : (int)$vehicleRow['vehicle_id'];
 
@@ -896,6 +898,7 @@ public function fetchEquipmentsWithStatus() {
                         latest_status.reservation_status_status_id AS reservation_status_status_id,
                         latest_status.reservation_active AS reservation_active,
                         CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_venue_id,
                         'original' AS venue_type
                     FROM tbl_venue v
                     INNER JOIN tbl_reservation_venue rv
@@ -945,6 +948,74 @@ public function fetchEquipmentsWithStatus() {
                     UNION ALL
                     
                     SELECT
+                        v.ven_id,
+                        v.ven_name,
+                        v.ven_occupancy,
+                        r.reservation_id,
+                        r.reservation_title,
+                        r.reservation_user_id,
+                        ul.user_level_name AS user_level_name,
+                        d.departments_name AS department_name,
+                        r.reschedule_start_date AS reservation_start_date,
+                        r.reschedule_end_date AS reservation_end_date,
+                        r.reschedule_start_date,
+                        r.reschedule_end_date,
+                        latest_status.reservation_status_status_id AS reservation_status_status_id,
+                        latest_status.reservation_active AS reservation_active,
+                        CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_venue_id,
+                        'reschedule_original' AS venue_type
+                    FROM tbl_venue v
+                    INNER JOIN tbl_reservation_venue rv
+                        ON v.ven_id = rv.reservation_venue_venue_id
+                    INNER JOIN tbl_reservation r
+                        ON rv.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) latest_status
+                        ON latest_status.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                    LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+                    LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+                    WHERE v.ven_id IN ($placeholders)
+                      AND latest_status.reservation_status_status_id IN (6, 10)
+                      AND rv.reservation_change_venue_id IS NULL
+                      AND r.reschedule_start_date IS NOT NULL
+                      AND r.reschedule_end_date IS NOT NULL
+                      AND r.reservation_id NOT IN (
+                          SELECT DISTINCT reservation_reservation_id 
+                          FROM tbl_reservation_status 
+                          WHERE reservation_status_status_id IN (2, 5)
+                      )
+                    
+                    UNION ALL
+                    
+                    SELECT
                         cv.ven_id,
                         cv.ven_name,
                         cv.ven_occupancy,
@@ -960,6 +1031,7 @@ public function fetchEquipmentsWithStatus() {
                         latest_status.reservation_status_status_id AS reservation_status_status_id,
                         latest_status.reservation_active AS reservation_active,
                         CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_venue_id,
                         'change' AS venue_type
                     FROM tbl_venue cv
                     INNER JOIN tbl_reservation_venue rv
@@ -1059,10 +1131,11 @@ public function fetchEquipmentsWithStatus() {
                 
                 if ($startDateTime && $endDateTime) {
                     $params = array_merge($itemIds, [$startDateTime, $endDateTime, $startDateTime, $endDateTime], 
+                                         $itemIds, [$startDateTime, $endDateTime, $startDateTime, $endDateTime],
                                          $itemIds, [$startDateTime, $endDateTime, $startDateTime, $endDateTime]);
                     $stmt->execute($params);
                 } else {
-                    $params = array_merge($itemIds, $itemIds);
+                    $params = array_merge($itemIds, $itemIds, $itemIds);
                     $stmt->execute($params);
                 }
     
@@ -1086,6 +1159,7 @@ public function fetchEquipmentsWithStatus() {
                     unset($result['reschedule_end_date']);
                     unset($result['venue_type']);
                     unset($result['has_active_reschedule']);
+                    unset($result['reservation_change_venue_id']);
                     
                     // Set availability based on status
                     $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
@@ -1129,6 +1203,7 @@ public function fetchEquipmentsWithStatus() {
                         latest_status.reservation_status_status_id,
                         latest_status.reservation_active,
                         CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_vehicle_id,
                         'original' AS vehicle_type,
                         (
                             SELECT COUNT(DISTINCT u2.users_id)
@@ -1188,6 +1263,85 @@ public function fetchEquipmentsWithStatus() {
                     UNION ALL
                     
                     SELECT
+                        v.vehicle_id,
+                        v.vehicle_license,
+                        vm.vehicle_make_name,
+                        vmd.vehicle_model_name,
+                        r.reservation_id,
+                        r.reservation_title,
+                        r.reservation_user_id,
+                        ul.user_level_name AS user_level_name,
+                        d.departments_name AS department_name,
+                        r.reschedule_start_date AS reservation_start_date,
+                        r.reschedule_end_date AS reservation_end_date,
+                        r.reschedule_start_date,
+                        r.reschedule_end_date,
+                        latest_status.reservation_status_status_id,
+                        latest_status.reservation_active,
+                        CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_vehicle_id,
+                        'reschedule_original' AS vehicle_type,
+                        (
+                            SELECT COUNT(DISTINCT u2.users_id)
+                            FROM tbl_users u2
+                            WHERE u2.users_user_level_id = 19
+                                AND u2.is_active = 1
+                        ) AS available_drivers_count
+                    FROM tbl_vehicle v
+                    LEFT JOIN tbl_vehicle_model vmd
+                        ON v.vehicle_model_id = vmd.vehicle_model_id
+                    LEFT JOIN tbl_vehicle_make vm
+                        ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
+                    INNER JOIN tbl_reservation_vehicle rv
+                        ON v.vehicle_id = rv.reservation_vehicle_vehicle_id
+                    INNER JOIN tbl_reservation r
+                        ON rv.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT rs1.*
+                        FROM tbl_reservation_status rs1
+                        INNER JOIN (
+                            SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                            FROM tbl_reservation_status
+                            GROUP BY reservation_reservation_id
+                        ) mu ON rs1.reservation_reservation_id = mu.reservation_reservation_id
+                             AND rs1.reservation_updated_at = mu.max_updated_at
+                        INNER JOIN (
+                            SELECT x.reservation_reservation_id, MAX(x.reservation_status_id) AS max_id
+                            FROM tbl_reservation_status x
+                            INNER JOIN (
+                                SELECT reservation_reservation_id, MAX(reservation_updated_at) AS max_updated_at
+                                FROM tbl_reservation_status
+                                GROUP BY reservation_reservation_id
+                            ) y ON y.reservation_reservation_id = x.reservation_reservation_id
+                               AND y.max_updated_at = x.reservation_updated_at
+                            GROUP BY x.reservation_reservation_id
+                        ) mid ON rs1.reservation_reservation_id = mid.reservation_reservation_id
+                             AND rs1.reservation_status_id = mid.max_id
+                    ) latest_status
+                        ON latest_status.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN (
+                        SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
+                        FROM tbl_reservation_status
+                        WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                        GROUP BY reservation_reservation_id
+                    ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
+                    LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
+                    LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+                    LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+                    WHERE v.vehicle_id IN ($placeholders)
+                      AND latest_status.reservation_status_status_id IN (6, 10)
+                      AND rv.reservation_change_vehicle_id IS NULL
+                      AND r.reschedule_start_date IS NOT NULL
+                      AND r.reschedule_end_date IS NOT NULL
+                      AND r.reservation_id NOT IN (
+                          SELECT DISTINCT reservation_reservation_id 
+                          FROM tbl_reservation_status 
+                          WHERE reservation_status_status_id IN (2, 5)
+                      )
+                    
+                    UNION ALL
+                    
+                    SELECT
                         cv.vehicle_id,
                         cv.vehicle_license,
                         cvmk.vehicle_make_name,
@@ -1204,6 +1358,7 @@ public function fetchEquipmentsWithStatus() {
                         latest_status.reservation_status_status_id,
                         latest_status.reservation_active,
                         CASE WHEN active_resched.max_reschedule_status_id IS NULL THEN 0 ELSE 1 END AS has_active_reschedule,
+                        rv.reservation_change_vehicle_id,
                         'change' AS vehicle_type,
                         (
                             SELECT COUNT(DISTINCT u2.users_id)
@@ -1262,7 +1417,7 @@ public function fetchEquipmentsWithStatus() {
                 ";
                 
                 $stmt = $this->conn->prepare($sql2);
-                $params = array_merge($itemIds, $itemIds);
+                $params = array_merge($itemIds, $itemIds, $itemIds);
                 $stmt->execute($params);
     
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1285,6 +1440,7 @@ public function fetchEquipmentsWithStatus() {
                     unset($result['reschedule_end_date']);
                     unset($result['vehicle_type']);
                     unset($result['has_active_reschedule']);
+                    unset($result['reservation_change_vehicle_id']);
                     
                     // Set availability based on status
                     $result['is_available'] = ($result['reservation_status_status_id'] !== 6);
@@ -2251,7 +2407,7 @@ public function fetchEquipmentsWithStatus() {
                         SELECT 1
                           FROM tbl_reservation_status rs2
                          WHERE rs2.reservation_reservation_id = r.reservation_id
-                           AND rs2.reservation_status_status_id = 10
+                           AND rs2.reservation_status_status_id IN (6, 10)
                            AND rs2.reservation_active = 1
                     )
                      AND rv.reservation_change_vehicle_id IS NOT NULL
@@ -8413,7 +8569,7 @@ public function fetchNoAssignedReservation() {
                             WHEN (
                                 (ls.reservation_status_status_id = 10 AND ls.reservation_active = 1)
                                 OR (active_resched.max_reschedule_status_id IS NOT NULL AND ls.reservation_status_status_id = 6 AND ls.reservation_active = 1)
-                            ) AND rv.reservation_change_vehicle_id IS NOT NULL
+                            ) AND rv.reservation_change_vehicle_id IS NOT NULL AND rv.reservation_change_vehicle_id > 0
                             THEN rv.reservation_change_vehicle_id
                             ELSE rv.reservation_vehicle_vehicle_id
                         END AS vehicle_id_in_use
@@ -8704,7 +8860,7 @@ public function fetchNoAssignedReservation() {
                             SELECT 1 
                               FROM tbl_reservation_status rs 
                              WHERE rs.reservation_reservation_id = r.reservation_id 
-                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_status_status_id IN (6, 10) 
                                AND rs.reservation_active = 1
                         )
                          AND rv.reservation_change_vehicle_id IS NOT NULL
@@ -8737,7 +8893,7 @@ public function fetchNoAssignedReservation() {
                             SELECT 1 
                               FROM tbl_reservation_status rs 
                              WHERE rs.reservation_reservation_id = r.reservation_id 
-                               AND rs.reservation_status_status_id = 10 
+                               AND rs.reservation_status_status_id IN (6, 10) 
                                AND rs.reservation_active = 1
                         )
                          AND rv.reservation_change_vehicle_id IS NOT NULL
@@ -10331,33 +10487,398 @@ public function handleRequest($reservationId, $isAccepted, $userId, $notificatio
 }
 
 
+public function archiveUser($userType, $userId) {
+    try {
+        // Validate inputs
+        if (empty($userType) || empty($userId)) {
+            return json_encode(array('status' => 'error', 'message' => 'User type and ID are required.'));
+        }
 
+        // Convert single ID to array for consistent handling
+        if (!is_array($userId)) {
+            $userId = [$userId];
+        }
+
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($userId), '?'));
+        
+        switch ($userType) {
+            case 'user':
+                $query = "UPDATE tbl_users SET is_active = 0 WHERE users_id IN ($placeholders)";
+                break;
+            case 'driver':
+                $query = "UPDATE tbl_driver SET is_active = 0 WHERE driver_id IN ($placeholders)";
+                break;
+            default:
+                return json_encode(array('status' => 'error', 'message' => 'Invalid user type. Only user and driver types are supported.'));
+        }
+
+        $stmt = $this->conn->prepare($query);
+        
+        if ($stmt->execute($userId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' user(s) archived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No users found with the given IDs.'
+                ]);
+            }
+        }
+
+        return json_encode(array('status' => 'error', 'message' => 'Error archiving user(s).'));
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+public function unArchive($userType, $userId) {
+    try {
+        // Validate inputs
+        if (empty($userType) || empty($userId)) {
+            return json_encode(array('status' => 'error', 'message' => 'User type and ID are required.'));
+        }
+
+        // Convert single ID to array for consistent handling
+        if (!is_array($userId)) {
+            $userId = [$userId];
+        }
+
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($userId), '?'));
+        
+        switch ($userType) {
+            case 'user':
+                $query = "UPDATE tbl_users SET is_active = 1 WHERE users_id IN ($placeholders)";
+                break;
+            case 'driver':
+                $query = "UPDATE tbl_driver SET is_active = 1 WHERE driver_id IN ($placeholders)";
+                break;
+            default:
+                return json_encode(array('status' => 'error', 'message' => 'Invalid user type. Only user and driver types are supported.'));
+        }
+
+        $stmt = $this->conn->prepare($query);
+        
+        if ($stmt->execute($userId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' user(s) unarchived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No users found with the given IDs.'
+                ]);
+            }
+        }
+
+        return json_encode(array('status' => 'error', 'message' => 'Error unarchiving user(s).'));
+    } catch (PDOException $e) {
+        return json_encode(array('status' => 'error', 'message' => 'Database error: ' . $e->getMessage()));
+    }
+}
+
+public function archiveResource($resourceType, $resourceId, $is_serialize = false, $userId = null) {
+    try {
+        // Debug: log context
+        error_log("archiveResource userId=" . var_export($userId, true) . ", type=" . var_export($resourceType, true));
+        if (empty($resourceType) || empty($resourceId)) {
+            return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
+        }
+
+        $query = "";
+
+        // Convert single ID to array for consistent handling
+        if (!is_array($resourceId)) {
+            $resourceId = [$resourceId];
+        }
+
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
+
+        switch ($resourceType) {
+            case 'vehicle':
+                $query = "UPDATE tbl_vehicle SET is_active = 0 WHERE vehicle_id IN ($placeholders)";
+                break;
+
+            case 'venue':
+                $query = "UPDATE tbl_venue SET is_active = 0 WHERE ven_id IN ($placeholders)";
+                break;
+
+            case 'equipment':
+                $query = "UPDATE tbl_equipment_unit SET is_active = 0 WHERE unit_id IN ($placeholders)";
+                break;
+
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid resource type.']);
+        }
+
+        $stmt = $this->conn->prepare($query);
+        
+        // Execute with array of IDs
+        if ($stmt->execute($resourceId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                // Non-blocking audit log insert without IDs
+                try {
+                    $typeLabel = ucfirst((string)$resourceType);
+                    $desc = "Archived " . $typeLabel . " resource(s): " . $count;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $action = 'ARCHIVE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    if (!$audit->execute()) {
+                        error_log("Audit log insert failed (archiveResource): " . print_r($audit->errorInfo(), true));
+                    } else {
+                        try {
+                            $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (archiveResource): " . json_encode($latest));
+                        } catch (Throwable $te) {
+                            error_log("Failed to read latest audit_log (archiveResource): " . $te->getMessage());
+                        }
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit logging error (archiveResource): " . $te->getMessage());
+                }
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' resource(s) archived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No resources found with the given IDs.'
+                ]);
+            }
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Error archiving resource(s).']);
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+
+    public function unarchiveResource($resourceType, $resourceId, $is_serialize = false, $userId = null) {
+    try {
+        // Debug: log context
+        error_log("unarchiveResource userId=" . var_export($userId, true) . ", type=" . var_export($resourceType, true));
+        if (empty($resourceType) || empty($resourceId)) {
+            return json_encode(['status' => 'error', 'message' => 'Resource type and ID are required.']);
+        }
+
+        // Convert single ID to array for consistent handling
+        if (!is_array($resourceId)) {
+            $resourceId = [$resourceId];
+        }
+
+        // Create placeholders for IN clause
+        $placeholders = implode(',', array_fill(0, count($resourceId), '?'));
+
+        $query = "";
+        switch ($resourceType) {
+            case 'vehicle':
+                $query = "UPDATE tbl_vehicle SET is_active = 1 WHERE vehicle_id IN ($placeholders)";
+                break;
+
+            case 'venue':
+                $query = "UPDATE tbl_venue SET is_active = 1 WHERE ven_id IN ($placeholders)";
+                break;
+
+            case 'equipment':
+                $query = "UPDATE tbl_equipment_unit SET is_active = 1 WHERE unit_id IN ($placeholders)";
+                break;
+
+            default:
+                return json_encode(['status' => 'error', 'message' => 'Invalid resource type.']);
+        }
+
+        $stmt = $this->conn->prepare($query);
+        
+        // Execute with array of IDs
+        if ($stmt->execute($resourceId)) {
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                // Non-blocking audit log insert without IDs
+                try {
+                    $typeLabel = ucfirst((string)$resourceType);
+                    $desc = "Unarchived " . $typeLabel . " resource(s): " . $count;
+                    $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                    $audit = $this->conn->prepare($auditSql);
+                    $action = 'UNARCHIVE';
+                    $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                    $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                    if ($userId !== null) {
+                        $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                    } else {
+                        $audit->bindValue(':created_by', null, PDO::PARAM_NULL);
+                    }
+                    if (!$audit->execute()) {
+                        error_log("Audit log insert failed (unarchiveResource): " . print_r($audit->errorInfo(), true));
+                    } else {
+                        try {
+                            $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                            error_log("audit_log latest (unarchiveResource): " . json_encode($latest));
+                        } catch (Throwable $te) {
+                            error_log("Failed to read latest audit_log (unarchiveResource): " . $te->getMessage());
+                        }
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit logging error (unarchiveResource): " . $te->getMessage());
+                }
+                return json_encode([
+                    'status' => 'success', 
+                    'message' => $count . ' resource(s) unarchived successfully.'
+                ]);
+            } else {
+                return json_encode([
+                    'status' => 'error', 
+                    'message' => 'No resources found with the given IDs.'
+                ]);
+            }
+        }
+
+        return json_encode(['status' => 'error', 'message' => 'Error unarchiving resource(s).']);
+
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+public function fetchInactiveUser() {
+    try {
+        $usersSql = "SELECT 
+                'user' as type,
+                u.users_id as id,
+                u.users_fname as fname,
+                u.users_mname as mname,
+                u.users_lname as lname,
+                u.users_email as email,
+                u.users_school_id as school_id,
+                u.users_contact_number as contact_number,
+                u.users_department_id as department_id,
+                u.users_pic as pic,
+                u.users_created_at as created_at,
+                u.users_updated_at as updated_at,
+                u.is_active,
+                d.departments_name,
+                ul.user_level_name,
+                ul.user_level_desc
+            FROM 
+                tbl_users u
+            LEFT JOIN 
+                tbl_departments d ON u.users_department_id = d.departments_id
+            LEFT JOIN 
+                tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
+            WHERE u.is_active = 0";
+
+        
+
+        // Combine all results and execute
+        $sql = "($usersSql) ORDER BY type, lname";
+        return $this->executeQuery($sql);
+    } catch (PDOException $e) {
+        return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+
+public function fetchEquipmentAndInactiveUnits() {
+    // Fetch only inactive units, but include their equipment name
+    $unitSql = "SELECT 
+                    eu.unit_id, 
+                    eu.equip_id, 
+                    eu.serial_number,
+                    e.equip_name
+                FROM 
+                    tbl_equipment_unit eu
+                INNER JOIN 
+                    tbl_equipments e ON e.equip_id = eu.equip_id
+                WHERE 
+                    eu.is_active = 0";
+
+    $stmt = $this->conn->prepare($unitSql);
+    $stmt->execute();
+    $inactiveUnits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $response = [];
+
+    foreach ($inactiveUnits as $unit) {
+        $response[] = [
+            'equip_id' => (int)$unit['equip_id'],
+            'equip_name' => $unit['equip_name'],
+            'unit_id' => (int)$unit['unit_id'],
+            'serial_number' => $unit['serial_number'] ?? null,
+            'quantity' => isset($unit['quantity']) ? (int)$unit['quantity'] : null
+        ];
+    }
+
+    return json_encode(['status' => 'success', 'data' => $response]);
+}
+
+
+
+
+
+    public function fetchInactiveVenue() {
+        $sql = "SELECT 
+                ven_id, 
+                ven_name, 
+                ven_occupancy, 
+                ven_created_at, 
+                ven_updated_at, 
+                status_availability_id, 
+                ven_pic, 
+                ven_operating_hours,
+                is_active
+                FROM tbl_venue
+                WHERE is_active = 0";
+        return $this->executeQuery($sql);
+    }
+
+    public function fetchInactiveVehicle() {
+        $sql = "SELECT  
+                    v.vehicle_id,
+                    v.vehicle_license,
+                    v.year,
+                    v.vehicle_pic,
+                    v.status_availability_id,
+                    vmk.vehicle_make_name, 
+                    vc.vehicle_category_name,
+                    vmd.vehicle_model_name,
+                    sa.status_availability_name,
+                    v.is_active
+                FROM 
+                    tbl_vehicle v
+                INNER JOIN
+                    tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
+                INNER JOIN
+                    tbl_vehicle_make vmk ON vmd.vehicle_model_vehicle_make_id = vmk.vehicle_make_id
+                INNER JOIN
+                    tbl_vehicle_category vc ON vmd.vehicle_category_id = vc.vehicle_category_id
+                INNER JOIN
+                    tbl_status_availability sa ON v.status_availability_id = sa.status_availability_id
+                WHERE 
+                    v.is_active = 0";
     
-
-
-
+        return $this->executeQuery($sql);
+    }
     
-    
-
-
-    
-
-
-    
-
-    
-
-
-    
-
-
-    
-
-    
-
-
-    
-
+ 
 
 }
 
@@ -10378,6 +10899,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new User();
     
     switch ($operation) {
+
+        case 'fetchInactiveUser':
+            echo $user->fetchInactiveUser();
+            break;
+
+        case 'fetchInactiveVehicle':
+            echo $user->fetchInactiveVehicle();
+            break;
+
+        case 'fetchInactiveVenue':
+            echo $user->fetchInactiveVenue();
+            break;
+
+        case 'fetchEquipmentAndInactiveUnits':
+            echo $user->fetchEquipmentAndInactiveUnits();
+            break;
+
+        case 'archiveResource':
+            // Get data from JSON input or fall back to $_POST
+            $resourceType = $input['resourceType'] ?? ($_POST['resourceType'] ?? null);
+            $resourceId = $input['resourceId'] ?? ($_POST['resourceId'] ?? null);
+            $is_serialize = $input['is_serialize'] ?? ($_POST['is_serialize'] ?? false);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            
+            if ($resourceType && $resourceId) {
+                error_log("route archiveResource - Type: $resourceType, ID: " . print_r($resourceId, true) . ", User: " . ($userId ?? 'null'));
+                echo $user->archiveResource($resourceType, $resourceId, $is_serialize, $userId);
+            } else {
+                error_log('Archive resource failed - Missing parameters. Input: ' . print_r($input, true));
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters. resourceType and resourceId are required.']);
+            }
+            break;
+            
+        case 'unarchiveResource':
+            // Get data from JSON input or fall back to $_POST
+            $resourceType = $input['resourceType'] ?? ($_POST['resourceType'] ?? null);
+            $resourceId = $input['resourceId'] ?? ($_POST['resourceId'] ?? null);
+            $is_serialize = $input['is_serialize'] ?? ($_POST['is_serialize'] ?? false);
+            $userId = $input['userid'] ?? ($_POST['userid'] ?? null);
+            
+            if ($resourceType && $resourceId) {
+                error_log("route unarchiveResource - Type: $resourceType, ID: " . print_r($resourceId, true) . ", User: " . ($userId ?? 'null'));
+                echo $user->unarchiveResource($resourceType, $resourceId, $is_serialize, $userId);
+            } else {
+                error_log('Unarchive resource failed - Missing parameters. Input: ' . print_r($input, true));
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters. resourceType and resourceId are required.']);
+            }
+            break;
+
+        case 'archiveUser':
+            // Get data from JSON input or fall back to $_POST
+            $userType = $input['userType'] ?? ($_POST['userType'] ?? null);
+            $userId = $input['userId'] ?? ($_POST['userId'] ?? null);
+            
+            if ($userType && $userId) {
+                echo $user->archiveUser($userType, $userId);
+            } else {
+                error_log('Archive user failed - Missing parameters. Input: ' . print_r($input, true));
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters. userType and userId are required.']);
+            }
+            break;
+        case 'unarchiveUser':
+            // Get data from JSON input or fall back to $_POST
+            $userType = $input['userType'] ?? ($_POST['userType'] ?? null);
+            $userId = $input['userId'] ?? ($_POST['userId'] ?? null);
+            
+            if ($userType && $userId) {
+                echo $user->unArchive($userType, $userId);
+            } else {
+                error_log('Unarchive user failed - Missing parameters. Input: ' . print_r($input, true));
+                echo json_encode(['status' => 'error', 'message' => 'Missing required parameters. userType and userId are required.']);
+            }
+            break;
 
         case 'updateEquipmentUnit':
             // Accept payload from various shapes: input.json, input.unitData, input.data, or top-level fields/POST
