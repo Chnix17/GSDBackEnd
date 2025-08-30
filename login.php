@@ -1149,6 +1149,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $result = $login->updateAuthenticationPeriod($user_id);
             echo json_encode($result);
             break;
+        case 'sendEmailVerification':
+            $user_id = isset($input['json']['user_id']) ? $input['json']['user_id'] : '';
+            
+            if ($user_id === '') {
+                echo json_encode(["status" => "error", "message" => "User ID is required"]);
+                exit;
+            }
+            $result = $login->sendEmailVerification($user_id);
+            echo json_encode($result);
+            break;
+        case 'validateEmailVerification':
+            $user_id = isset($input['json']['user_id']) ? $input['json']['user_id'] : '';
+            $token = isset($input['json']['token']) ? $input['json']['token'] : '';
+            $duration = isset($input['json']['duration']) ? intval($input['json']['duration']) : 30;
+            
+            if ($user_id === '' || $token === '') {
+                echo json_encode(["status" => "error", "message" => "User ID and token are required"]);
+                exit;
+            }
+            $result = $login->validateEmailVerification($user_id, $token, $duration);
+            echo json_encode($result);
+            break;
+        case 'fetch2FA':
+            $user_id = isset($input['json']['user_id']) ? $input['json']['user_id'] : '';
+            
+            if ($user_id === '') {
+                echo json_encode(["status" => "error", "message" => "User ID is required"]);
+                exit;
+            }
+            $result = $login->fetch2FA($user_id);
+            echo json_encode($result);
+            break;
         case "admin":
         case "user":
         case "login":
