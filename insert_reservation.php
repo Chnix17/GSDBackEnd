@@ -470,11 +470,12 @@ class Reservation {
             $dept = strtolower(trim($row['dept_name'] ?? ''));
             $level = strtolower(trim($row['level_name'] ?? ''));
             $bypass = ($dept === 'coo' && $level === 'department head');
+            $bypass1 = ($dept === 'gsd' && $level === 'secretary');
                     
-            if ($bypass) {
+            if ($bypass || $bypass1) {
                 error_log(sprintf('Bypassing conflict checks for user_id=%d (dept=%s, level=%s)', (int)$userId, $row['dept_name'], $row['level_name']));
             }
-            return $bypass;
+            return $bypass || $bypass1;
         } catch (PDOException $e) {
             error_log('shouldBypassConflict error: ' . $e->getMessage());
             return false;

@@ -1659,6 +1659,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             // --- Unavailable Vehicles: pick effective vehicle when rescheduled, apply latest-status and reschedule dates ---
             $vehicleQuery = "
                 SELECT DISTINCT
+                    rv.reservation_vehicle_id,
                     CASE 
                         WHEN (
                             (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
@@ -1782,6 +1783,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             // --- Unavailable Venues: pick effective venue when rescheduled, apply latest-status and reschedule dates ---
             $venueQuery = "
                 SELECT DISTINCT
+                    rv.reservation_venue_id,
                     CASE 
                         WHEN (
                             (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
