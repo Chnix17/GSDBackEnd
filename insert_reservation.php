@@ -825,13 +825,30 @@ class Reservation {
                     if ($isGsdSecretary) {
                     // Insert notification for Admins (Dept 27, Level 1)
                     try {
-                        $gsdSecNotifSql = "INSERT INTO notification_requests 
-                                          (notification_message, notification_department_id, notification_user_level_id, notification_create)
-                                          VALUES ('New Reservation Request', 27, 1, NOW())";
-                        $gsdSecNotifStmt = $this->conn->prepare($gsdSecNotifSql);
-                        if (!$gsdSecNotifStmt->execute()) {
-                            $err = $gsdSecNotifStmt->errorInfo();
-                            error_log('Failed to insert GSD Secretary admin notification: ' . json_encode($err));
+                        // Get all users in department 27 (GSD) for notifications
+                        $gsdUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = 27 AND is_active = 1";
+                        $gsdUsersStmt = $this->conn->prepare($gsdUsersSql);
+                        
+                        if ($gsdUsersStmt->execute()) {
+                            $gsdUsers = $gsdUsersStmt->fetchAll(PDO::FETCH_ASSOC);
+                            
+                            // Insert notification for each user in GSD department
+                            $gsdNotifSql = "INSERT INTO tbl_notification_reservation 
+                                          (notification_message, notification_reservation_reservation_id, 
+                                           notification_user_id, notification_created_at, is_read) 
+                                          VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                            
+                            foreach ($gsdUsers as $user) {
+                                $gsdNotifStmt = $this->conn->prepare($gsdNotifSql);
+                                $gsdNotifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                                $gsdNotifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                                
+                                if (!$gsdNotifStmt->execute()) {
+                                    error_log('Failed to insert GSD notification for user ID: ' . $user['users_id']);
+                                }
+                            }
+                        } else {
+                            error_log('Failed to fetch GSD users for notifications');
                         }
                     } catch (Exception $e) {
                         error_log('Exception inserting GSD Secretary admin notification: ' . $e->getMessage());
@@ -1166,32 +1183,61 @@ class Reservation {
                     error_log('Audit log insert failed: ' . $e->getMessage());
                 }
     
-                // Insert notifications in notification_requests for user levels 5 and 6
+                // Insert notifications directly to tbl_notification_reservation for all department users
                 if (!$isGsdSecretary) {
-                    $requestNotifSql = "INSERT INTO notification_requests 
-                                      (notification_message, notification_department_id, 
-                                       notification_user_level_id, notification_create) 
-                                      VALUES ('New Reservation Request', :dept_id, :user_level_id, NOW())";
-        
-                    // Insert for user level 5
-                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
-                    $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                    $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
+                    // Get all users in the department
+                    $deptUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = :dept_id AND is_active = 1";
+                    $deptUsersStmt = $this->conn->prepare($deptUsersSql);
+                    $deptUsersStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
                     
-                    if (!$requestNotifStmt->execute()) {
-                        $this->conn->rollBack();
-                        return ['status' => 'error', 'message' => 'Failed to create notification request for level 5'];
+                    if ($deptUsersStmt->execute()) {
+                        $deptUsers = $deptUsersStmt->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        // Insert notification for each user in the department
+                        $notifSql = "INSERT INTO tbl_notification_reservation 
+                                   (notification_message, notification_reservation_reservation_id, 
+                                    notification_user_id, notification_created_at, is_read) 
+                                   VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                        
+                        foreach ($deptUsers as $user) {
+                            $notifStmt = $this->conn->prepare($notifSql);
+                            $notifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                            $notifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                            
+                            if (!$notifStmt->execute()) {
+                                error_log('Failed to insert notification for user ID: ' . $user['users_id']);
+                            }
+                        }
+                    } else {
+                        error_log('Failed to fetch department users for notifications');
                     }
-        
-                    // Insert for user level 6
-                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
-                    $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                    $requestNotifStmt->bindValue(':user_level_id', 6, PDO::PARAM_INT);
+                }
+    
+                // --- SPECIAL NOTIFICATION FOR DEPARTMENT 27, USER LEVEL 1 (ALWAYS) ---
+                // Get all users in department 27 with user level 1
+                $specialDeptUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = 27 AND users_user_level_id = 1 AND is_active = 1";
+                $specialDeptUsersStmt = $this->conn->prepare($specialDeptUsersSql);
+                
+                if ($specialDeptUsersStmt->execute()) {
+                    $specialDeptUsers = $specialDeptUsersStmt->fetchAll(PDO::FETCH_ASSOC);
                     
-                    if (!$requestNotifStmt->execute()) {
-                        $this->conn->rollBack();
-                        return ['status' => 'error', 'message' => 'Failed to create notification request for level 6'];
+                    // Insert notification for each user in department 27 with level 1
+                    $specialNotifSql = "INSERT INTO tbl_notification_reservation 
+                                      (notification_message, notification_reservation_reservation_id, 
+                                       notification_user_id, notification_created_at, is_read) 
+                                      VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                    
+                    foreach ($specialDeptUsers as $user) {
+                        $specialNotifStmt = $this->conn->prepare($specialNotifSql);
+                        $specialNotifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                        $specialNotifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                        
+                        if (!$specialNotifStmt->execute()) {
+                            error_log('Failed to insert special notification for department 27, level 1 user ID: ' . $user['users_id']);
+                        }
                     }
+                } else {
+                    error_log('Failed to fetch department 27, level 1 users for special notifications');
                 }
     
                 // --- PUSH NOTIFICATION LOGIC (for user levels 3, 6, 16, 17) ---
@@ -1550,28 +1596,63 @@ class Reservation {
                     error_log('Audit log insert failed: ' . $e->getMessage());
                 }
                 
-                // Insert notification in notification_requests based on user level
+                // Insert notifications directly to tbl_notification_reservation for all department users
                 if (!$isGsdSecretary) {
-                    $requestNotifSql = "INSERT INTO notification_requests 
-                                      (notification_message, notification_department_id, 
-                                      notification_user_level_id, notification_create) 
-                                      VALUES ('New Reservation Request', :dept_id, :user_level_id, NOW())";
-        
-                    $requestNotifStmt = $this->conn->prepare($requestNotifSql);
-                
-                    // If user level is 18, use department 27 and user level 1, else use department from user and level 5
-                    if ($userLevelId == 18) {
-                        $requestNotifStmt->bindValue(':dept_id', 27, PDO::PARAM_INT);
-                        $requestNotifStmt->bindValue(':user_level_id', 1, PDO::PARAM_INT);
-                    } else {
-                        $requestNotifStmt->bindValue(':dept_id', $userLevel['users_department_id'], PDO::PARAM_INT);
-                        $requestNotifStmt->bindValue(':user_level_id', 5, PDO::PARAM_INT);
-                    }
+                    $targetDeptId = ($userLevelId == 18) ? 27 : $userLevel['users_department_id'];
                     
-                    if (!$requestNotifStmt->execute()) {
-                        $this->conn->rollBack();
-                        return ['status' => 'error', 'message' => 'Failed to create notification request'];
+                    // Get all users in the target department
+                    $deptUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = :dept_id AND is_active = 1";
+                    $deptUsersStmt = $this->conn->prepare($deptUsersSql);
+                    $deptUsersStmt->bindValue(':dept_id', $targetDeptId, PDO::PARAM_INT);
+                    
+                    if ($deptUsersStmt->execute()) {
+                        $deptUsers = $deptUsersStmt->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        // Insert notification for each user in the department
+                        $notifSql = "INSERT INTO tbl_notification_reservation 
+                                   (notification_message, notification_reservation_reservation_id, 
+                                    notification_user_id, notification_created_at, is_read) 
+                                   VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                        
+                        foreach ($deptUsers as $user) {
+                            $notifStmt = $this->conn->prepare($notifSql);
+                            $notifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                            $notifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                            
+                            if (!$notifStmt->execute()) {
+                                error_log('Failed to insert notification for user ID: ' . $user['users_id']);
+                            }
+                        }
+                    } else {
+                        error_log('Failed to fetch department users for notifications');
                     }
+                }
+    
+                // --- SPECIAL NOTIFICATION FOR DEPARTMENT 27, USER LEVEL 1 (ALWAYS) ---
+                // Get all users in department 27 with user level 1
+                $specialDeptUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = 27 AND users_user_level_id = 1 AND is_active = 1";
+                $specialDeptUsersStmt = $this->conn->prepare($specialDeptUsersSql);
+                
+                if ($specialDeptUsersStmt->execute()) {
+                    $specialDeptUsers = $specialDeptUsersStmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    // Insert notification for each user in department 27 with level 1
+                    $specialNotifSql = "INSERT INTO tbl_notification_reservation 
+                                      (notification_message, notification_reservation_reservation_id, 
+                                       notification_user_id, notification_created_at, is_read) 
+                                      VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                    
+                    foreach ($specialDeptUsers as $user) {
+                        $specialNotifStmt = $this->conn->prepare($specialNotifSql);
+                        $specialNotifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                        $specialNotifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                        
+                        if (!$specialNotifStmt->execute()) {
+                            error_log('Failed to insert special notification for department 27, level 1 user ID: ' . $user['users_id']);
+                        }
+                    }
+                } else {
+                    error_log('Failed to fetch department 27, level 1 users for special notifications');
                 }
     
                 // --- PUSH NOTIFICATION TO ADMIN LOGIC (for user levels 5, 18) ---
@@ -1677,6 +1758,33 @@ class Reservation {
                 if (!$statusStmt->execute()) {
                     $this->conn->rollBack();
                     return ['status' => 'error', 'message' => 'Failed to create reservation status'];
+                }
+                
+                // --- SPECIAL NOTIFICATION FOR DEPARTMENT 27, USER LEVEL 1 (ALWAYS) ---
+                // Get all users in department 27 with user level 1
+                $specialDeptUsersSql = "SELECT users_id FROM tbl_users WHERE users_department_id = 27 AND users_user_level_id = 1 AND is_active = 1";
+                $specialDeptUsersStmt = $this->conn->prepare($specialDeptUsersSql);
+                
+                if ($specialDeptUsersStmt->execute()) {
+                    $specialDeptUsers = $specialDeptUsersStmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    // Insert notification for each user in department 27 with level 1
+                    $specialNotifSql = "INSERT INTO tbl_notification_reservation 
+                                      (notification_message, notification_reservation_reservation_id, 
+                                       notification_user_id, notification_created_at, is_read) 
+                                      VALUES ('New Reservation Request', :reservation_id, :user_id, NOW(), 0)";
+                    
+                    foreach ($specialDeptUsers as $user) {
+                        $specialNotifStmt = $this->conn->prepare($specialNotifSql);
+                        $specialNotifStmt->bindValue(':reservation_id', $reservationId, PDO::PARAM_INT);
+                        $specialNotifStmt->bindValue(':user_id', $user['users_id'], PDO::PARAM_INT);
+                        
+                        if (!$specialNotifStmt->execute()) {
+                            error_log('Failed to insert special notification for department 27, level 1 user ID: ' . $user['users_id']);
+                        }
+                    }
+                } else {
+                    error_log('Failed to fetch department 27, level 1 users for special notifications');
                 }
             }
     

@@ -1,13 +1,60 @@
 <?php
-// Fix OpenSSL configuration issue
+// Fix OpenSSL configuration issue for Windows/XAMPP
 if (function_exists('openssl_get_cipher_methods')) {
-    // Try to create a more comprehensive OpenSSL config
-    $configContent = "openssl_conf = default_conf\n[default_conf]\nssl_conf = ssl_sect\n[ssl_sect]\nsystem_default = system_default_sect\n[system_default_sect]\nMinProtocol = TLSv1.2\nCipherString = DEFAULT@SECLEVEL=1\n\n[req]\ndefault_bits = 2048\ndefault_keyfile = server-key.pem\ndistinguished_name = req_distinguished_name\nreq_extensions = v3_req\n\n[req_distinguished_name]\ncountryName = Country Name (2 letter code)\ncountryName_default = US\nstateOrProvinceName = State or Province Name (full name)\nstateOrProvinceName_default = NY\nlocalityName = Locality Name (eg, city)\nlocalityName_default = New York\norganizationName = Organization Name (eg, company)\norganizationName_default = Internet Widgits Pty Ltd\ncommonName = Common Name (e.g. server FQDN or YOUR name)\ncommonName_default = localhost\n\n[v3_req]\nbasicConstraints = CA:FALSE\nkeyUsage = nonRepudiation, digitalSignature, keyEncipherment\n\n[ec]\nelliptic_curve = prime256v1\n";
+    // Create a comprehensive OpenSSL config for Windows compatibility
+    $configContent = "
+# OpenSSL Configuration for Windows/XAMPP Push Notifications
+openssl_conf = default_conf
+
+[default_conf]
+ssl_conf = ssl_sect
+
+[ssl_sect]
+system_default = system_default_sect
+
+[system_default_sect]
+MinProtocol = TLSv1.2
+CipherString = DEFAULT@SECLEVEL=0
+
+[req]
+default_bits = 2048
+default_keyfile = server-key.pem
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+
+[req_distinguished_name]
+countryName = Country Name (2 letter code)
+countryName_default = US
+stateOrProvinceName = State or Province Name (full name)
+stateOrProvinceName_default = NY
+localityName = Locality Name (eg, city)
+localityName_default = New York
+organizationName = Organization Name (eg, company)
+organizationName_default = Internet Widgits Pty Ltd
+commonName = Common Name (e.g. server FQDN or YOUR name)
+commonName_default = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+
+[ec_params]
+curve_name = prime256v1
+
+[ec]
+default_ec_params = ec_params
+";
     
-    $configPath = __DIR__ . '/temp_openssl.cnf';
+    $configPath = __DIR__ . '/openssl_xampp.cnf';
     file_put_contents($configPath, $configContent);
+    
+    // Set OpenSSL configuration
     putenv('OPENSSL_CONF=' . $configPath);
-    define('OPENSSL_CONF_PATH', $configPath);
+    
+    // Also try setting the path for Windows
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        putenv('OPENSSL_CONF=' . str_replace('/', '\\', $configPath));
+    }
     
     // Register shutdown function to clean up
     register_shutdown_function(function() use ($configPath) {
@@ -33,20 +80,49 @@ if (function_exists('openssl_get_cipher_methods')) {
         }
     }
     
-    // Test EC key creation specifically
-    try {
-        $testKey = openssl_pkey_new([
-            'curve_name' => 'prime256v1',
-            'private_key_type' => OPENSSL_KEYTYPE_EC,
-        ]);
-        if ($testKey) {
-            error_log("OpenSSL EC key creation test successful");
-            openssl_free_key($testKey);
-        } else {
-            error_log("OpenSSL EC key creation test failed");
+    // Test EC key creation with multiple approaches
+    $testPassed = false;
+    $testConfigs = [
+        [
+            'name' => 'Prime256v1 with config',
+            'config' => [
+                'curve_name' => 'prime256v1',
+                'private_key_type' => OPENSSL_KEYTYPE_EC,
+                'config' => $configPath
+            ]
+        ],
+        [
+            'name' => 'Prime256v1 basic',
+            'config' => [
+                'curve_name' => 'prime256v1',
+                'private_key_type' => OPENSSL_KEYTYPE_EC,
+            ]
+        ],
+        [
+            'name' => 'Secp256r1',
+            'config' => [
+                'curve_name' => 'secp256r1',
+                'private_key_type' => OPENSSL_KEYTYPE_EC,
+            ]
+        ]
+    ];
+    
+    foreach ($testConfigs as $test) {
+        try {
+            $testKey = openssl_pkey_new($test['config']);
+            if ($testKey) {
+                error_log("OpenSSL EC key creation test successful with: " . $test['name']);
+                openssl_free_key($testKey);
+                $testPassed = true;
+                break;
+            }
+        } catch (Exception $e) {
+            error_log("OpenSSL EC key creation test failed with " . $test['name'] . ": " . $e->getMessage());
         }
-    } catch (Exception $e) {
-        error_log("OpenSSL EC key creation test exception: " . $e->getMessage());
+    }
+    
+    if (!$testPassed) {
+        error_log("All OpenSSL EC key creation tests failed - WebPush may not work properly");
     }
 }
 
@@ -69,9 +145,8 @@ use Minishlink\WebPush\Subscription;
 
 // VAPID Configuration
 const VAPID_SUBJECT = 'mailto:your-email@example.com';
-const VAPID_PUBLIC_KEY = 'BELqHYNGLPs3EIxn6y7lMopZIpyXAKWY84Kci2FvTIW_bBSBj2l7d6e8Hp1kFKYhwF2miGYrjj9kDSX_oUfa070';
-const VAPID_PRIVATE_KEY = '68XR8t32_vFeVU3l6PMqCcoJbjjOHAkj0qqtVbjHL1w';
-
+const VAPID_PUBLIC_KEY = 'BNJzMVgF6ddVcZwqoQWEFEP2qRkxaLJAOBhfr9E8oo8HkS8w-2anVQ1O4rJQbdPpnlrRxwHb6UkrZJQrpRyFfVg';
+const VAPID_PRIVATE_KEY = 'aMGb2U9FihKO0d2ura2YMnB8FJhXOqpa5cVa0lVgUm4';
 
 class PushNotificationHandler {
     private $conn;
@@ -100,12 +175,31 @@ class PushNotificationHandler {
             error_log("VAPID private key: " . $auth['VAPID']['privateKey']);
             error_log("VAPID public key: " . $auth['VAPID']['publicKey']);
             
-            $this->webPush = new WebPush($auth);
+            // Try to initialize WebPush with additional options for Windows/XAMPP compatibility
+            $options = [
+                'timeout' => 30,
+                'TTL' => 2419200, // 4 weeks
+                'urgency' => 'normal',
+                'topic' => null,
+                'batchSize' => 1000,
+            ];
+            
+            $this->webPush = new WebPush($auth, $options);
             error_log("WebPush initialized successfully");
             
         } catch (Exception $e) {
             error_log("WebPush initialization error: " . $e->getMessage());
-            throw $e;
+            error_log("Error trace: " . $e->getTraceAsString());
+            
+            // Try alternative initialization without some options
+            try {
+                error_log("Attempting fallback WebPush initialization...");
+                $this->webPush = new WebPush($auth);
+                error_log("Fallback WebPush initialization successful");
+            } catch (Exception $e2) {
+                error_log("Fallback WebPush initialization also failed: " . $e2->getMessage());
+                throw new Exception("WebPush initialization failed: " . $e->getMessage() . " | Fallback: " . $e2->getMessage());
+            }
         }
     }
 
