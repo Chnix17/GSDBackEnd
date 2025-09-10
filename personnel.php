@@ -97,7 +97,7 @@ class User {
         try {
             $reservations = [];
 
-            // 1) Venue checklist items with availability status name
+            // 1) Venue checklist items with availability status name (aligned with fetchAllAssignedReleases)
             $sqlVenue = "
                 SELECT
                     rc_venue.checklist_venue_id,
@@ -105,20 +105,20 @@ class User {
                     rc_venue.isChecked AS venue_isChecked,
                     rv.reservation_reservation_id,
                     rv.reservation_venue_id,
-                    CASE 
-                        WHEN rv.reservation_change_venue_id IS NOT NULL AND EXISTS (
-                            SELECT 1 FROM tbl_reservation_status s
-                            WHERE s.reservation_reservation_id = rv.reservation_reservation_id
-                              AND s.reservation_status_status_id = 10
-                              AND s.reservation_active = 1
-                        ) THEN rv.reservation_change_venue_id
-                        ELSE rv.reservation_venue_venue_id
-                    END AS reservation_venue_venue_id,
+                    rv.reservation_venue_venue_id,
                     rv.reservation_change_venue_id,
                     rv.active AS venue_active,
-                    v.ven_name AS venue_name,
+                    CASE 
+                        WHEN rs.reservation_status_status_id IN (6, 10, 14) AND rv.reservation_change_venue_id IS NOT NULL 
+                        THEN cv.ven_name 
+                        ELSE v.ven_name 
+                    END AS venue_name,
                     cvc.checklist_name AS checklist_venue_name,
-                    tsa.status_availability_name AS venue_availability_status_name,
+                    CASE 
+                        WHEN rs.reservation_status_status_id IN (6, 10, 14) AND rv.reservation_change_venue_id IS NOT NULL 
+                        THEN ctsa.status_availability_name 
+                        ELSE tsa.status_availability_name 
+                    END AS venue_availability_status_name,
                     rc_venue.admin_id AS assigned_by_id,
                     TRIM(CONCAT_WS(' ',
                         NULLIF(t.abbreviation, ''),
@@ -131,15 +131,9 @@ class User {
                 INNER JOIN tbl_reservation_venue rv
                     ON rc_venue.reservation_venue_id = rv.reservation_venue_id
                 LEFT JOIN tbl_venue v
-                    ON v.ven_id = CASE 
-                        WHEN rv.reservation_change_venue_id IS NOT NULL AND EXISTS (
-                            SELECT 1 FROM tbl_reservation_status s
-                            WHERE s.reservation_reservation_id = rv.reservation_reservation_id
-                              AND s.reservation_status_status_id = 10
-                              AND s.reservation_active = 1
-                        ) THEN rv.reservation_change_venue_id
-                        ELSE rv.reservation_venue_venue_id
-                    END
+                    ON rv.reservation_venue_venue_id = v.ven_id
+                LEFT JOIN tbl_venue cv
+                    ON rv.reservation_change_venue_id = cv.ven_id
                 LEFT JOIN tbl_checklist_venue_master cvc
                     ON rc_venue.checklist_venue_id = cvc.checklist_venue_id
                 INNER JOIN tbl_reservation r
@@ -149,14 +143,19 @@ class User {
                 -- JOIN to get venue availability status name
                 LEFT JOIN tbl_status_availability tsa
                     ON v.status_availability_id = tsa.status_availability_id
+                LEFT JOIN tbl_status_availability ctsa
+                    ON cv.status_availability_id = ctsa.status_availability_id
                 -- JOIN to get assigned admin full name (with title and suffix)
                 LEFT JOIN tbl_users ua
                     ON rc_venue.admin_id = ua.users_id
                 LEFT JOIN titles t
                     ON ua.title_id = t.id
                 WHERE rc_venue.personnel_id = :personnel_id
-                  AND rs.reservation_status_status_id = 6
-                  AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
+                  AND (
+                        rs.reservation_status_status_id = 6
+                     OR (rs.reservation_status_status_id = 14 AND rs.reservation_active = 1)
+                  )
+                  AND rs.reservation_active IN (0, 1)
                 GROUP BY rc_venue.reservation_checklist_venue_id
             ";
             $stmtVenue = $this->conn->prepare($sqlVenue);
@@ -172,11 +171,24 @@ class User {
                     rv.reservation_reservation_id,
                     rv.reservation_vehicle_id,
                     rv.reservation_vehicle_vehicle_id,
+                    rv.reservation_change_vehicle_id,
                     rv.active AS vehicle_active,
-                    vm.vehicle_license,
-                    vm.vehicle_model_id,
+                    CASE 
+                        WHEN rs.reservation_status_status_id IN (6, 10, 14) AND rv.reservation_change_vehicle_id IS NOT NULL 
+                        THEN cv.vehicle_license 
+                        ELSE vm.vehicle_license 
+                    END AS vehicle_license,
+                    CASE 
+                        WHEN rs.reservation_status_status_id IN (6, 10, 14) AND rv.reservation_change_vehicle_id IS NOT NULL 
+                        THEN cv.vehicle_model_id 
+                        ELSE vm.vehicle_model_id 
+                    END AS vehicle_model_id,
                     cvcv.checklist_name AS checklist_vehicle_name,
-                    tsa.status_availability_name AS vehicle_availability_status_name,
+                    CASE 
+                        WHEN rs.reservation_status_status_id IN (6, 10, 14) AND rv.reservation_change_vehicle_id IS NOT NULL 
+                        THEN ctsa.status_availability_name 
+                        ELSE tsa.status_availability_name 
+                    END AS vehicle_availability_status_name,
                     rc_vehicle.admin_id AS assigned_by_id,
                     TRIM(CONCAT_WS(' ',
                         NULLIF(t.abbreviation, ''),
@@ -190,6 +202,8 @@ class User {
                     ON rc_vehicle.reservation_vehicle_id = rv.reservation_vehicle_id
                 LEFT JOIN tbl_vehicle vm
                     ON rv.reservation_vehicle_vehicle_id = vm.vehicle_id
+                LEFT JOIN tbl_vehicle cv
+                    ON rv.reservation_change_vehicle_id = cv.vehicle_id
                 LEFT JOIN tbl_checklist_vehicle_master cvcv
                     ON rc_vehicle.checklist_vehicle_id = cvcv.checklist_vehicle_id
                 INNER JOIN tbl_reservation r
@@ -199,13 +213,18 @@ class User {
                 -- JOIN to get vehicle availability status name
                 LEFT JOIN tbl_status_availability tsa
                     ON vm.status_availability_id = tsa.status_availability_id
+                LEFT JOIN tbl_status_availability ctsa
+                    ON cv.status_availability_id = ctsa.status_availability_id
                 -- JOIN to get assigned admin full name (with title and suffix)
                 LEFT JOIN tbl_users ua
                     ON rc_vehicle.admin_id = ua.users_id
                 LEFT JOIN titles t
                     ON ua.title_id = t.id
                 WHERE rc_vehicle.personnel_id = :personnel_id
-                  AND rs.reservation_status_status_id = 6
+                  AND (
+                        rs.reservation_status_status_id = 6
+                     OR (rs.reservation_status_status_id = 14 AND rs.reservation_active = 1)
+                  )
                   AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
                 GROUP BY rc_vehicle.reservation_checklist_vehicle_id
             ";
@@ -257,7 +276,10 @@ class User {
                 LEFT JOIN titles t
                     ON ua.title_id = t.id
                 WHERE rc_equipment.personnel_id = :personnel_id
-                  AND rs.reservation_status_status_id = 6
+                  AND (
+                        rs.reservation_status_status_id = 6
+                     OR (rs.reservation_status_status_id = 14 AND rs.reservation_active = 1)
+                  )
                   AND (rs.reservation_active = 1 OR rs.reservation_active = 0)
                 GROUP BY rc_equipment.reservation_checklist_equipment_id
             ";
@@ -492,7 +514,7 @@ foreach ($reservations as $rid => &$res) {
             (EXISTS (
                 SELECT 1 FROM tbl_reservation_status s
                 WHERE s.reservation_reservation_id = r.reservation_id
-                  AND s.reservation_status_status_id = 10
+                  AND s.reservation_status_status_id IN (10, 14)
                   AND s.reservation_active = 1
             )) AS has_active_reschedule,
             sm.status_master_name AS reservation_status
@@ -527,7 +549,7 @@ foreach ($reservations as $rid => &$res) {
     if ($hdr) {
         $res['reservation_title']        = $hdr['reservation_title'];
         $res['reservation_description']  = $hdr['reservation_description'];
-        // Only display two date fields, decided by active reschedule (status_id = 10 and active = 1)
+        // Only display two date fields, decided by active reschedule (status_id IN (10,14) and active = 1)
         if (!empty($hdr['has_active_reschedule'])) {
             $res['reschedule_start_date'] = $hdr['reschedule_start_date'];
             $res['reschedule_end_date']   = $hdr['reschedule_end_date'];

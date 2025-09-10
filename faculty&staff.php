@@ -22,6 +22,8 @@ class FacultyStaff {
                 r.reservation_description,
                 r.reservation_start_date,
                 r.reservation_end_date,
+                r.reschedule_start_date,
+                r.reschedule_end_date,
                 r.reservation_participants,
                 r.reservation_user_id,
                 r.reservation_created_at,
@@ -56,6 +58,19 @@ class FacultyStaff {
         $stmt->execute();
 
         $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Process each reservation to apply reschedule date logic
+        foreach ($reservations as &$reservation) {
+            $statusId = $reservation['reservation_status_status_id'];
+            $active = $reservation['reservation_active'];
+            
+            // Only show reschedule dates when status is 14 and active is 1
+            // Otherwise, set reschedule dates to null
+            if (!($statusId == 14 && $active == 1)) {
+                $reservation['reschedule_start_date'] = null;
+                $reservation['reschedule_end_date'] = null;
+            }
+        }
 
         return json_encode([
             'status' => 'success',
@@ -758,16 +773,22 @@ class FacultyStaff {
 
     public function updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id) {
         try {
-            if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
-                return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+            if ($reservation_venue_id === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required reservation_venue_id parameter']);
             }
     
             $sql = "UPDATE tbl_reservation_venue
                     SET reservation_change_venue_id = :reservation_change_venue_id
                     WHERE reservation_venue_id = :reservation_venue_id";
             $stmt = $this->conn->prepare($sql);
-            $stmt->bindValue(':reservation_change_venue_id', (int)$reservation_change_venue_id, PDO::PARAM_INT);
             $stmt->bindValue(':reservation_venue_id', (int)$reservation_venue_id, PDO::PARAM_INT);
+            
+            // Handle null case properly
+            if ($reservation_change_venue_id === null) {
+                $stmt->bindValue(':reservation_change_venue_id', null, PDO::PARAM_NULL);
+            } else {
+                $stmt->bindValue(':reservation_change_venue_id', (int)$reservation_change_venue_id, PDO::PARAM_INT);
+            }
     
             $ok = $stmt->execute();
             if ($ok) {
@@ -782,16 +803,22 @@ class FacultyStaff {
     
     public function updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id) {
         try {
-            if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
-                return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+            if ($reservation_vehicle_id === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required reservation_vehicle_id parameter']);
             }
     
             $sql = "UPDATE tbl_reservation_vehicle
                     SET reservation_change_vehicle_id = :reservation_change_vehicle_id
                     WHERE reservation_vehicle_id = :reservation_vehicle_id";
             $stmt = $this->conn->prepare($sql);
-            $stmt->bindValue(':reservation_change_vehicle_id', (int)$reservation_change_vehicle_id, PDO::PARAM_INT);
             $stmt->bindValue(':reservation_vehicle_id', (int)$reservation_vehicle_id, PDO::PARAM_INT);
+            
+            // Handle null case properly
+            if ($reservation_change_vehicle_id === null) {
+                $stmt->bindValue(':reservation_change_vehicle_id', null, PDO::PARAM_NULL);
+            } else {
+                $stmt->bindValue(':reservation_change_vehicle_id', (int)$reservation_change_vehicle_id, PDO::PARAM_INT);
+            }
     
             $ok = $stmt->execute();
             if ($ok) {
@@ -896,8 +923,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "updateVenueReschedule":
             $reservation_venue_id = $input['reservation_venue_id'] ?? ($_POST['reservation_venue_id'] ?? null);
             $reservation_change_venue_id = $input['reservation_change_venue_id'] ?? ($_POST['reservation_change_venue_id'] ?? null);
-            if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
-                echo json_encode(['status' => 'error', 'message' => 'reservation_venue_id and reservation_change_venue_id are required']);
+            if ($reservation_venue_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_venue_id is required']);
                 break;
             }
             echo $facultyStaff->updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id);
@@ -906,8 +933,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case "updateVehicleReschedule":
             $reservation_vehicle_id = $input['reservation_vehicle_id'] ?? ($_POST['reservation_vehicle_id'] ?? null);
             $reservation_change_vehicle_id = $input['reservation_change_vehicle_id'] ?? ($_POST['reservation_change_vehicle_id'] ?? null);
-            if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
-                echo json_encode(['status' => 'error', 'message' => 'reservation_vehicle_id and reservation_change_vehicle_id are required']);
+            if ($reservation_vehicle_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_vehicle_id is required']);
                 break;
             }
             echo $facultyStaff->updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id);

@@ -931,7 +931,7 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
@@ -941,7 +941,7 @@ public function fetchEquipmentsWithStatus() {
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                       AND NOT (latest_status.reservation_status_status_id = 6 AND active_resched.max_reschedule_status_id IS NOT NULL)
                     
@@ -996,21 +996,21 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
                     LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                     LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                     WHERE v.ven_id IN ($placeholders)
-                      AND latest_status.reservation_status_status_id IN (6, 10, 14)
+                      AND latest_status.reservation_status_status_id IN (6, 10, 11, 14)
                       AND rv.reservation_change_venue_id IS NULL
                       AND r.reschedule_start_date IS NOT NULL
                       AND r.reschedule_end_date IS NOT NULL
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                     
                     UNION ALL
@@ -1024,8 +1024,18 @@ public function fetchEquipmentsWithStatus() {
                         r.reservation_user_id,
                         ul.user_level_name AS user_level_name,
                         d.departments_name AS department_name,
-                        r.reservation_start_date,
-                        r.reservation_end_date,
+                        CASE 
+                            WHEN latest_status.reservation_status_status_id = 14 
+                                 AND r.reschedule_start_date IS NOT NULL 
+                            THEN r.reschedule_start_date 
+                            ELSE r.reservation_start_date 
+                        END AS reservation_start_date,
+                        CASE 
+                            WHEN latest_status.reservation_status_status_id = 14 
+                                 AND r.reschedule_end_date IS NOT NULL 
+                            THEN r.reschedule_end_date 
+                            ELSE r.reservation_end_date 
+                        END AS reservation_end_date,
                         r.reschedule_start_date,
                         r.reschedule_end_date,
                         latest_status.reservation_status_status_id AS reservation_status_status_id,
@@ -1064,7 +1074,7 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
@@ -1072,10 +1082,11 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                     WHERE cv.ven_id IN ($placeholders)
                       AND rv.reservation_change_venue_id IS NOT NULL
+                      AND latest_status.reservation_status_status_id IN (6, 10, 11, 14)
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                 ";
                 
@@ -1084,14 +1095,14 @@ public function fetchEquipmentsWithStatus() {
                     $dateFilter = " AND (
                         (
                             (CASE
-                                WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                 THEN r.reschedule_start_date ELSE r.reservation_start_date END)
                             BETWEEN :startDateTime AND :endDateTime
                         )
                         OR (
                             (CASE
-                                WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                      AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                 THEN r.reschedule_end_date ELSE r.reservation_end_date END)
                             BETWEEN :startDateTime AND :endDateTime
@@ -1099,24 +1110,24 @@ public function fetchEquipmentsWithStatus() {
                         OR (
                             :startDateTime BETWEEN 
                                 (CASE
-                                    WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                    WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                          AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                     THEN r.reschedule_start_date ELSE r.reservation_start_date END)
                                 AND 
                                 (CASE
-                                    WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                    WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                          AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                     THEN r.reschedule_end_date ELSE r.reservation_end_date END)
                         )
                         OR (
                             :endDateTime BETWEEN 
                                 (CASE
-                                    WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                    WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                          AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                     THEN r.reschedule_start_date ELSE r.reservation_start_date END)
                                 AND 
                                 (CASE
-                                    WHEN latest_status.reservation_status_status_id IN (10, 14)
+                                    WHEN latest_status.reservation_status_status_id IN (10, 11, 14)
                                          AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                                     THEN r.reschedule_end_date ELSE r.reservation_end_date END)
                         )
@@ -1152,14 +1163,32 @@ public function fetchEquipmentsWithStatus() {
                     $venueType = $result['venue_type'];
                     
                     // Handle the logic for displaying reservations based on status and venue type
-                    if ($statusId === 10 || $statusId === 14) {
-                        // Special handling for status 14 with active=1
-                        if ($statusId === 14 && $reservationActive === 1) {
+                    if ($statusId === 10 || $statusId === 11 || $statusId === 14) {
+                        // Special handling for status 11 - always display 2 entries
+                        if ($statusId === 11) {
                             // Check if change_venue_id exists
                             if (!empty($result['reservation_change_venue_id'])) {
-                                // Only display one entry (prioritize change venue)
-                                if ($venueType === 'change' && !in_array($reservationId, $processedReservations)) {
-                                    // For change venues, use rescheduled dates
+                                // Display both original and change venues
+                                if ($venueType === 'original') {
+                                    // Original venue uses original dates
+                                    // Keep original dates as they are
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['venue_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_venue_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                } else if ($venueType === 'change') {
+                                    // Change venue uses reschedule dates
                                     if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                         $result['reservation_start_date'] = $result['reschedule_start_date'];
                                         $result['reservation_end_date'] = $result['reschedule_end_date'];
@@ -1179,23 +1208,85 @@ public function fetchEquipmentsWithStatus() {
                                     $result['reservation_status'] = 'Rescheduled';
                                     
                                     $filteredResults[] = $result;
+                                }
+                            } else {
+                                // No change venue - display both original and reschedule dates
+                                if ($venueType === 'original') {
+                                    // Original venue with original dates
+                                    // Keep original dates as they are
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['venue_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_venue_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                } else if ($venueType === 'reschedule_original') {
+                                    // Same venue with reschedule dates (already set in query)
+                                    // Reschedule dates are already set as reservation dates
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['venue_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_venue_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                }
+                            }
+                        }
+                        // Special handling for status 14 with active=1
+                        else if ($statusId === 14 && $reservationActive === 1) {
+                            // Check if change_venue_id exists
+                            if (!empty($result['reservation_change_venue_id'])) {
+                                // Only display one entry (prioritize change venue)
+                                if ($venueType === 'change' && !in_array($reservationId, $processedReservations)) {
+                                    // For status 14 change venues, reschedule dates are already set in the query
+                                    // No need to modify dates as they're already correct
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['venue_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_venue_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
                                     $processedReservations[] = $reservationId;
                                 }
                             } else {
-                                // Display both original and reschedule dates when change_venue_id is null
+                                // Display reschedule dates when change_venue_id is null
                                 if (!in_array($reservationId, $processedReservations)) {
-                                    if ($venueType === 'change') {
-                                        // For change venues, use rescheduled dates
+                                    if ($venueType === 'reschedule_original') {
+                                        // For status 14 original venues, reschedule dates are already set as reservation dates
+                                        // No need to modify dates
+                                    } else if ($venueType === 'original') {
+                                        // For status 14 original venues, use reschedule dates
                                         if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                             $result['reservation_start_date'] = $result['reschedule_start_date'];
                                             $result['reservation_end_date'] = $result['reschedule_end_date'];
                                         }
-                                    } else if ($venueType === 'original') {
-                                        // For original venues, keep original dates
-                                        // Original dates are already in reservation_start_date and reservation_end_date
-                                    } else if ($venueType === 'reschedule_original') {
-                                        // This venue type already has reschedule dates as reservation dates
-                                        // No need to modify dates
                                     }
                                     
                                     // Clean up helper fields
@@ -1220,16 +1311,21 @@ public function fetchEquipmentsWithStatus() {
                                 }
                             }
                         } else {
-                            // For other statuses (10 or 14 with active=0), handle based on venue type
+                            // For other statuses (10, 11, or 14 with active=0), handle based on venue type
                             if ($venueType === 'change') {
-                                // For change venues, use rescheduled dates
-                                if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                                // For status 14 change venues, reschedule dates are already set in the query
+                                // For status 10 and 11 change venues, use rescheduled dates
+                                if (($statusId === 10 || $statusId === 11) && !empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                     $result['reservation_start_date'] = $result['reschedule_start_date'];
                                     $result['reservation_end_date'] = $result['reschedule_end_date'];
                                 }
                             } else if ($venueType === 'original') {
-                                // For original venues, keep original dates (don't use reschedule dates)
-                                // Original dates are already in reservation_start_date and reservation_end_date
+                                // For status 14 and 11 original venues, use reschedule dates
+                                if (($statusId === 14 || $statusId === 11) && !empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                                    $result['reservation_start_date'] = $result['reschedule_start_date'];
+                                    $result['reservation_end_date'] = $result['reschedule_end_date'];
+                                }
+                                // For status 10 original venues, keep original dates (don't use reschedule dates)
                             } else if ($venueType === 'reschedule_original') {
                                 // This venue type already has reschedule dates as reservation dates
                                 // No need to modify dates
@@ -1274,6 +1370,7 @@ public function fetchEquipmentsWithStatus() {
                                 $result['reservation_status'] = 'Pending Department Approval';
                                 break;
                             case 10:
+                            case 11:
                             case 14:
                                 $result['reservation_status'] = 'Rescheduled';
                                 break;
@@ -1350,7 +1447,7 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
@@ -1360,7 +1457,7 @@ public function fetchEquipmentsWithStatus() {
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                       AND NOT (latest_status.reservation_status_status_id = 6 AND active_resched.max_reschedule_status_id IS NOT NULL)
                     
@@ -1426,21 +1523,21 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
                     LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                     LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                     WHERE v.vehicle_id IN ($placeholders)
-                      AND latest_status.reservation_status_status_id IN (6, 10, 14)
+                      AND latest_status.reservation_status_status_id IN (6, 10, 11, 14)
                       AND rv.reservation_change_vehicle_id IS NULL
                       AND r.reschedule_start_date IS NOT NULL
                       AND r.reschedule_end_date IS NOT NULL
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                     
                     UNION ALL
@@ -1455,8 +1552,18 @@ public function fetchEquipmentsWithStatus() {
                         r.reservation_user_id,
                         ul.user_level_name AS user_level_name,
                         d.departments_name AS department_name,
-                        r.reservation_start_date,
-                        r.reservation_end_date,
+                        CASE 
+                            WHEN latest_status.reservation_status_status_id = 14 
+                                 AND r.reschedule_start_date IS NOT NULL 
+                            THEN r.reschedule_start_date 
+                            ELSE r.reservation_start_date 
+                        END AS reservation_start_date,
+                        CASE 
+                            WHEN latest_status.reservation_status_status_id = 14 
+                                 AND r.reschedule_end_date IS NOT NULL 
+                            THEN r.reschedule_end_date 
+                            ELSE r.reservation_end_date 
+                        END AS reservation_end_date,
                         r.reschedule_start_date,
                         r.reschedule_end_date,
                         latest_status.reservation_status_status_id,
@@ -1505,7 +1612,7 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
@@ -1513,10 +1620,11 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                     WHERE cv.vehicle_id IN ($placeholders)
                       AND rv.reservation_change_vehicle_id IS NOT NULL
+                      AND latest_status.reservation_status_status_id IN (6, 10, 11, 14)
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                 ";
                 
@@ -1537,14 +1645,32 @@ public function fetchEquipmentsWithStatus() {
                     $vehicleType = $result['vehicle_type'];
                     
                     // Handle the logic for displaying reservations based on status and vehicle type
-                    if ($statusId === 10 || $statusId === 14) {
-                        // Special handling for status 14 with active=1
-                        if ($statusId === 14 && $reservationActive === 1) {
+                    if ($statusId === 10 || $statusId === 11 || $statusId === 14) {
+                        // Special handling for status 11 - always display 2 entries
+                        if ($statusId === 11) {
                             // Check if change_vehicle_id exists
                             if (!empty($result['reservation_change_vehicle_id'])) {
-                                // Only display one entry (prioritize change vehicle)
-                                if ($vehicleType === 'change' && !in_array($reservationId, $processedReservations)) {
-                                    // For change vehicles, use rescheduled dates
+                                // Display both original and change vehicles
+                                if ($vehicleType === 'original') {
+                                    // Original vehicle uses original dates
+                                    // Keep original dates as they are
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['vehicle_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_vehicle_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                } else if ($vehicleType === 'change') {
+                                    // Change vehicle uses reschedule dates
                                     if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                         $result['reservation_start_date'] = $result['reschedule_start_date'];
                                         $result['reservation_end_date'] = $result['reschedule_end_date'];
@@ -1564,23 +1690,85 @@ public function fetchEquipmentsWithStatus() {
                                     $result['reservation_status'] = 'Rescheduled';
                                     
                                     $filteredResults[] = $result;
+                                }
+                            } else {
+                                // No change vehicle - display both original and reschedule dates
+                                if ($vehicleType === 'original') {
+                                    // Original vehicle with original dates
+                                    // Keep original dates as they are
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['vehicle_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_vehicle_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                } else if ($vehicleType === 'reschedule_original') {
+                                    // Same vehicle with reschedule dates (already set in query)
+                                    // Reschedule dates are already set as reservation dates
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['vehicle_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_vehicle_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
+                                }
+                            }
+                        }
+                        // Special handling for status 14 with active=1
+                        else if ($statusId === 14 && $reservationActive === 1) {
+                            // Check if change_vehicle_id exists
+                            if (!empty($result['reservation_change_vehicle_id'])) {
+                                // Only display one entry (prioritize change vehicle)
+                                if ($vehicleType === 'change' && !in_array($reservationId, $processedReservations)) {
+                                    // For status 14 change vehicles, reschedule dates are already set in the query
+                                    // No need to modify dates as they're already correct
+                                    
+                                    // Clean up helper fields
+                                    unset($result['reschedule_start_date']);
+                                    unset($result['reschedule_end_date']);
+                                    unset($result['vehicle_type']);
+                                    unset($result['has_active_reschedule']);
+                                    unset($result['reservation_change_vehicle_id']);
+                                    
+                                    // Set availability based on status
+                                    $result['is_available'] = false;
+                                    
+                                    // Set reservation status text
+                                    $result['reservation_status'] = 'Rescheduled';
+                                    
+                                    $filteredResults[] = $result;
                                     $processedReservations[] = $reservationId;
                                 }
                             } else {
-                                // Display both original and reschedule dates when change_vehicle_id is null
+                                // Display reschedule dates when change_vehicle_id is null
                                 if (!in_array($reservationId, $processedReservations)) {
-                                    if ($vehicleType === 'change') {
-                                        // For change vehicles, use rescheduled dates
+                                    if ($vehicleType === 'reschedule_original') {
+                                        // For status 14 original vehicles, reschedule dates are already set as reservation dates
+                                        // No need to modify dates
+                                    } else if ($vehicleType === 'original') {
+                                        // For status 14 original vehicles, use reschedule dates
                                         if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                             $result['reservation_start_date'] = $result['reschedule_start_date'];
                                             $result['reservation_end_date'] = $result['reschedule_end_date'];
                                         }
-                                    } else if ($vehicleType === 'original') {
-                                        // For original vehicles, keep original dates
-                                        // Original dates are already in reservation_start_date and reservation_end_date
-                                    } else if ($vehicleType === 'reschedule_original') {
-                                        // This vehicle type already has reschedule dates as reservation dates
-                                        // No need to modify dates
                                     }
                                     
                                     // Clean up helper fields
@@ -1605,16 +1793,21 @@ public function fetchEquipmentsWithStatus() {
                                 }
                             }
                         } else {
-                            // For other statuses (10 or 14 with active=0), handle based on vehicle type
+                            // For other statuses (10, 11, or 14 with active=0), handle based on vehicle type
                             if ($vehicleType === 'change') {
-                                // For change vehicles, use rescheduled dates
-                                if (!empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                                // For status 14 change vehicles, reschedule dates are already set in the query
+                                // For status 10 and 11 change vehicles, use rescheduled dates
+                                if (($statusId === 10 || $statusId === 11) && !empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
                                     $result['reservation_start_date'] = $result['reschedule_start_date'];
                                     $result['reservation_end_date'] = $result['reschedule_end_date'];
                                 }
                             } else if ($vehicleType === 'original') {
-                                // For original vehicles, keep original dates (don't use reschedule dates)
-                                // Original dates are already in reservation_start_date and reservation_end_date
+                                // For status 14 and 11 original vehicles, use reschedule dates
+                                if (($statusId === 14 || $statusId === 11) && !empty($result['reschedule_start_date']) && !empty($result['reschedule_end_date'])) {
+                                    $result['reservation_start_date'] = $result['reschedule_start_date'];
+                                    $result['reservation_end_date'] = $result['reschedule_end_date'];
+                                }
+                                // For status 10 original vehicles, keep original dates (don't use reschedule dates)
                             } else if ($vehicleType === 'reschedule_original') {
                                 // This vehicle type already has reschedule dates as reservation dates
                                 // No need to modify dates
@@ -1748,14 +1941,14 @@ public function fetchEquipmentsWithStatus() {
                     LEFT JOIN (
                         SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                         FROM tbl_reservation_status
-                        WHERE reservation_status_status_id IN (10, 14) AND reservation_active = 1
+                        WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                         GROUP BY reservation_reservation_id
                     ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                     WHERE e.equip_id IN ($placeholders)
                       AND r.reservation_id NOT IN (
                           SELECT DISTINCT reservation_reservation_id 
                           FROM tbl_reservation_status 
-                          WHERE reservation_status_status_id IN (2, 5)
+                          WHERE reservation_status_status_id IN (2, 5, 4)
                       )
                 ";
                 $stmt = $this->conn->prepare($sql);
@@ -1799,6 +1992,9 @@ public function fetchEquipmentsWithStatus() {
                             $result['reservation_status'] = 'Reserved';
                             break;
                         case 10:
+                            $result['reservation_status'] = 'Rescheduled';
+                            break;
+                        case 11:
                             $result['reservation_status'] = 'Rescheduled';
                             break;
                         case 14:
@@ -5932,16 +6128,10 @@ public function venueExists($venueName) {
                             )
                         )
                         OR 
-                        -- Show status 11 only if it has reserved status (6)
+                        -- Show status 11 (Change Request) regardless of whether status 6 exists
                         (
                             rs.reservation_status_status_id = 11 
                             AND rs.reservation_active = 0
-                            AND EXISTS (
-                                SELECT 1 
-                                FROM tbl_reservation_status rs_has_6 
-                                WHERE rs_has_6.reservation_reservation_id = r.reservation_id 
-                                AND rs_has_6.reservation_status_status_id = 6
-                            )
                         )
                     )
                     AND NOT EXISTS (
@@ -6176,7 +6366,7 @@ public function venueExists($venueName) {
                 JOIN tbl_status_master sm ON rs.reservation_status_status_id = sm.status_master_id
                 LEFT JOIN tbl_users u ON rs.reservation_users_id = u.users_id
                 WHERE rs.reservation_reservation_id = :reservation_id
-                ORDER BY rs.reservation_updated_at DESC
+                ORDER BY rs.reservation_status_id DESC, rs.reservation_updated_at DESC
             ";
             
             $statusStmt = $this->conn->prepare($statusHistorySql);
@@ -6670,6 +6860,8 @@ public function fetchRecord() {
                 r.reservation_description, 
                 r.reservation_start_date, 
                 r.reservation_end_date, 
+                r.reschedule_start_date,
+                r.reschedule_end_date,
                 r.reservation_participants, 
                 r.reservation_user_id, 
                 r.reservation_created_at, 
@@ -6702,6 +6894,20 @@ public function fetchRecord() {
         $stmt->execute();
 
         $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Process each reservation to apply reschedule date logic
+        foreach ($reservations as &$reservation) {
+            $statusId = $reservation['reservation_status_status_id'];
+            $active = $reservation['reservation_active'];
+            
+            // Only show reschedule dates when status is 14 and active is 1
+            // Otherwise, set reschedule dates to null
+            if (!($statusId == 14 && $active == 1)) {
+                $reservation['reschedule_start_date'] = null;
+                $reservation['reschedule_end_date'] = null;
+            }
+        }
+
         return json_encode(['status' => 'success', 'data' => $reservations]);
 
     } catch (PDOException $e) {
