@@ -1,128 +1,33 @@
 <?php
 // Fix OpenSSL configuration issue for Windows/XAMPP
-if (function_exists('openssl_get_cipher_methods')) {
-    // Create a comprehensive OpenSSL config for Windows compatibility
-    $configContent = "
-# OpenSSL Configuration for Windows/XAMPP Push Notifications
-openssl_conf = default_conf
-
-[default_conf]
-ssl_conf = ssl_sect
-
-[ssl_sect]
-system_default = system_default_sect
-
-[system_default_sect]
-MinProtocol = TLSv1.2
-CipherString = DEFAULT@SECLEVEL=0
-
-[req]
+if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+    // Set OpenSSL configuration path for Windows
+    $opensslConf = 'C:\xampp\php\extras\ssl\openssl.cnf';
+    if (file_exists($opensslConf)) {
+        putenv("OPENSSL_CONF=$opensslConf");
+    }
+    
+    // Alternative: Create temporary config if main one doesn't exist
+    if (!getenv('OPENSSL_CONF') || !file_exists(getenv('OPENSSL_CONF'))) {
+        $tempConf = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'openssl_temp.cnf';
+        $configContent = "[req]
 default_bits = 2048
-default_keyfile = server-key.pem
 distinguished_name = req_distinguished_name
 req_extensions = v3_req
 
 [req_distinguished_name]
-countryName = Country Name (2 letter code)
-countryName_default = US
-stateOrProvinceName = State or Province Name (full name)
-stateOrProvinceName_default = NY
-localityName = Locality Name (eg, city)
-localityName_default = New York
-organizationName = Organization Name (eg, company)
-organizationName_default = Internet Widgits Pty Ltd
-commonName = Common Name (e.g. server FQDN or YOUR name)
-commonName_default = localhost
 
 [v3_req]
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 
-[ec_params]
-curve_name = prime256v1
-
-[ec]
-default_ec_params = ec_params
+[v3_ca]
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always,issuer:always
+basicConstraints = CA:true
 ";
-    
-    $configPath = __DIR__ . '/openssl_xampp.cnf';
-    file_put_contents($configPath, $configContent);
-    
-    // Set OpenSSL configuration
-    putenv('OPENSSL_CONF=' . $configPath);
-    
-    // Also try setting the path for Windows
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        putenv('OPENSSL_CONF=' . str_replace('/', '\\', $configPath));
-    }
-    
-    // Register shutdown function to clean up
-    register_shutdown_function(function() use ($configPath) {
-        if (file_exists($configPath)) {
-            unlink($configPath);
-        }
-    });
-    
-    // Test OpenSSL functionality
-    if (!function_exists('openssl_pkey_new')) {
-        error_log("OpenSSL key functions not available");
-    } else {
-        error_log("OpenSSL key functions available");
-    }
-    
-    // Check for required extensions
-    $requiredExtensions = ['openssl', 'curl', 'json', 'mbstring'];
-    foreach ($requiredExtensions as $ext) {
-        if (!extension_loaded($ext)) {
-            error_log("Missing required extension: " . $ext);
-        } else {
-            error_log("Extension loaded: " . $ext);
-        }
-    }
-    
-    // Test EC key creation with multiple approaches
-    $testPassed = false;
-    $testConfigs = [
-        [
-            'name' => 'Prime256v1 with config',
-            'config' => [
-                'curve_name' => 'prime256v1',
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-                'config' => $configPath
-            ]
-        ],
-        [
-            'name' => 'Prime256v1 basic',
-            'config' => [
-                'curve_name' => 'prime256v1',
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-            ]
-        ],
-        [
-            'name' => 'Secp256r1',
-            'config' => [
-                'curve_name' => 'secp256r1',
-                'private_key_type' => OPENSSL_KEYTYPE_EC,
-            ]
-        ]
-    ];
-    
-    foreach ($testConfigs as $test) {
-        try {
-            $testKey = openssl_pkey_new($test['config']);
-            if ($testKey) {
-                error_log("OpenSSL EC key creation test successful with: " . $test['name']);
-                openssl_free_key($testKey);
-                $testPassed = true;
-                break;
-            }
-        } catch (Exception $e) {
-            error_log("OpenSSL EC key creation test failed with " . $test['name'] . ": " . $e->getMessage());
-        }
-    }
-    
-    if (!$testPassed) {
-        error_log("All OpenSSL EC key creation tests failed - WebPush may not work properly");
+        file_put_contents($tempConf, $configContent);
+        putenv("OPENSSL_CONF=$tempConf");
     }
 }
 
@@ -143,10 +48,10 @@ require_once './vendor/autoload.php';
 use Minishlink\WebPush\WebPush;
 use Minishlink\WebPush\Subscription;
 
-// VAPID Configuration
-const VAPID_SUBJECT = 'mailto:your-email@example.com';
-const VAPID_PUBLIC_KEY = 'BNJzMVgF6ddVcZwqoQWEFEP2qRkxaLJAOBhfr9E8oo8HkS8w-2anVQ1O4rJQbdPpnlrRxwHb6UkrZJQrpRyFfVg';
-const VAPID_PRIVATE_KEY = 'aMGb2U9FihKO0d2ura2YMnB8FJhXOqpa5cVa0lVgUm4';
+// VAPID Configuration - Using recommended keys from memory
+const VAPID_SUBJECT = 'mailto:vallechristianmark@gmail.com';
+const VAPID_PUBLIC_KEY = 'BH02Y33VwIvpIqMHVSoPc42a-Agj3r7WVL19X54a0PGyvSYfpbdn2QtuPF4q33CwGdy1E4iPgSiix-D0XcCIoLA';
+const VAPID_PRIVATE_KEY = 'WjaEaxZd7YGRi2Gh_0F4FsDNNlIyk2XV2-m6VlWRhZ0';
 
 class PushNotificationHandler {
     private $conn;
@@ -509,4 +414,5 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 } else {
     http_response_code(405);
     echo json_encode(['error' => 'Method not allowed']);
+    exit;
 }

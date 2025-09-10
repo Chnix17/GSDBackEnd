@@ -680,32 +680,59 @@ class FacultyStaff {
 
             // 2) Handle status insertion based on active value
             if ($active == 1) {
-                // For confirmed reschedule (active = 1), check if status 6 already exists
+                // For confirmed reschedule (active = 1), check if status 1 or 8 is active before inserting status 6
                 $checkSql = "
                     SELECT COUNT(*) as count 
                     FROM tbl_reservation_status 
                     WHERE reservation_reservation_id = :rid 
-                    AND reservation_status_status_id = 6
+                    AND reservation_status_status_id IN (1, 8)
                     AND reservation_active = 1
                 ";
                 $check = $this->conn->prepare($checkSql);
                 $check->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
                 $check->execute();
                 $result = $check->fetch(PDO::FETCH_ASSOC);
-
-                // Only insert status 6 if it doesn't already exist
-                if ($result['count'] == 0) {
-                    $insSql = "
-                        INSERT INTO tbl_reservation_status
-                            (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
-                        VALUES (6, :rid, 1, NOW(), :user_id)
+            
+                // Only insert status 6 if status 1 or 8 is active
+                if ($result['count'] > 0) {
+                    $checkExistingSql = "
+                        SELECT COUNT(*) as count 
+                        FROM tbl_reservation_status 
+                        WHERE reservation_reservation_id = :rid 
+                        AND reservation_status_status_id = 6
+                        AND reservation_active = 1
                     ";
-                    $ins = $this->conn->prepare($insSql);
-                    $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
-                    $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
-                    $ins->execute();
+                    $checkExisting = $this->conn->prepare($checkExistingSql);
+                    $checkExisting->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                    $checkExisting->execute();
+                    $existingResult = $checkExisting->fetch(PDO::FETCH_ASSOC);
+            
+                    // Insert status 6 if it doesn't already exist
+                    if ($existingResult['count'] == 0) {
+                        $insSql = "
+                            INSERT INTO tbl_reservation_status
+                                (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                            VALUES (6, :rid, 1, NOW(), :user_id)
+                        ";
+                        $ins = $this->conn->prepare($insSql);
+                        $ins->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                        $ins->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+                        $ins->execute();
+                    }
                 }
-            } else {
+            
+                // ✅ Always insert status 14 after confirming reschedule
+                $ins14Sql = "
+                    INSERT INTO tbl_reservation_status
+                        (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                    VALUES (14, :rid, 1, NOW(), :user_id)
+                ";
+                $ins14 = $this->conn->prepare($ins14Sql);
+                $ins14->bindValue(':rid', (int)$reservationId, PDO::PARAM_INT);
+                $ins14->bindValue(':user_id', $actingUserId !== null ? (int)$actingUserId : null, $actingUserId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+                $ins14->execute();
+            }
+             else {
                 // For declined reschedule (active = -1), insert status 5
                 $insSql = "
                     INSERT INTO tbl_reservation_status
@@ -728,6 +755,114 @@ class FacultyStaff {
             return json_encode(['status' => 'error', 'message' => 'Error updating reschedule: ' . $e->getMessage()]);
         }
     }
+
+    public function updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id) {
+        try {
+            if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+            }
+    
+            $sql = "UPDATE tbl_reservation_venue
+                    SET reservation_change_venue_id = :reservation_change_venue_id
+                    WHERE reservation_venue_id = :reservation_venue_id";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindValue(':reservation_change_venue_id', (int)$reservation_change_venue_id, PDO::PARAM_INT);
+            $stmt->bindValue(':reservation_venue_id', (int)$reservation_venue_id, PDO::PARAM_INT);
+    
+            $ok = $stmt->execute();
+            if ($ok) {
+                return json_encode(['status' => 'success', 'message' => 'Venue reschedule updated successfully']);
+            }
+            return json_encode(['status' => 'error', 'message' => 'Failed to update venue reschedule']);
+        } catch (PDOException $e) {
+            error_log('Database error in updateVenueReschedule: ' . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
+    
+    public function updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id) {
+        try {
+            if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+            }
+    
+            $sql = "UPDATE tbl_reservation_vehicle
+                    SET reservation_change_vehicle_id = :reservation_change_vehicle_id
+                    WHERE reservation_vehicle_id = :reservation_vehicle_id";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindValue(':reservation_change_vehicle_id', (int)$reservation_change_vehicle_id, PDO::PARAM_INT);
+            $stmt->bindValue(':reservation_vehicle_id', (int)$reservation_vehicle_id, PDO::PARAM_INT);
+    
+            $ok = $stmt->execute();
+            if ($ok) {
+                return json_encode(['status' => 'success', 'message' => 'Vehicle reschedule updated successfully']);
+            }
+            return json_encode(['status' => 'error', 'message' => 'Failed to update vehicle reschedule']);
+        } catch (PDOException $e) {
+            error_log('Database error in updateVehicleReschedule: ' . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
+
+    public function updateReservationReschedule($reservation_id, $reschedule_start_date, $reschedule_end_date, $user_admin_id = null) {
+        try {
+            if ($reservation_id === null || $reschedule_start_date === null || $reschedule_end_date === null) {
+                return json_encode(['status' => 'error', 'message' => 'Missing required parameters']);
+            }
+    
+            $this->conn->beginTransaction();
+    
+            // 1) Update reschedule dates on reservation
+            $sql = "UPDATE tbl_reservation
+                    SET reschedule_start_date = :reschedule_start_date,
+                        reschedule_end_date = :reschedule_end_date
+                    WHERE reservation_id = :reservation_id";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->bindValue(':reschedule_start_date', $reschedule_start_date, PDO::PARAM_STR);
+            $stmt->bindValue(':reschedule_end_date', $reschedule_end_date, PDO::PARAM_STR);
+            $stmt->bindValue(':reservation_id', (int)$reservation_id, PDO::PARAM_INT);
+            $stmt->execute();
+    
+            // 2) Update status ID 8 to active (reservation_active = 1) for this reservation
+            $updateStatusSql = "UPDATE tbl_reservation_status 
+                               SET reservation_active = 1, 
+                                   reservation_updated_at = NOW(),
+                                   reservation_users_id = :user_admin_id
+                               WHERE reservation_reservation_id = :reservation_id 
+                               AND reservation_status_status_id = 10";
+            $updateStmt = $this->conn->prepare($updateStatusSql);
+            $updateStmt->bindValue(':reservation_id', (int)$reservation_id, PDO::PARAM_INT);
+            if ($user_admin_id === null || $user_admin_id === '') {
+                $updateStmt->bindValue(':user_admin_id', null, PDO::PARAM_NULL);
+            } else {
+                $updateStmt->bindValue(':user_admin_id', (int)$user_admin_id, PDO::PARAM_INT);
+            }
+            $updateStmt->execute();
+    
+            // 3) Insert a new status row with reservation_active = 0 and status id 11
+            $ins = $this->conn->prepare("INSERT INTO tbl_reservation_status
+                (reservation_status_status_id, reservation_reservation_id, reservation_active, reservation_updated_at, reservation_users_id)
+                VALUES (:status_id, :reservation_id, 0, NOW(), :user_admin_id)");
+            $ins->bindValue(':status_id', 11, PDO::PARAM_INT);
+            $ins->bindValue(':reservation_id', (int)$reservation_id, PDO::PARAM_INT);
+            if ($user_admin_id === null || $user_admin_id === '') {
+                $ins->bindValue(':user_admin_id', null, PDO::PARAM_NULL);
+            } else {
+                $ins->bindValue(':user_admin_id', (int)$user_admin_id, PDO::PARAM_INT);
+            }
+            $ins->execute();
+    
+            $this->conn->commit();
+    
+            return json_encode(['status' => 'success', 'message' => 'Reservation reschedule updated successfully']);
+        } catch (PDOException $e) {
+            if ($this->conn->inTransaction()) {
+                $this->conn->rollBack();
+            }
+            error_log('Database error in updateReservationReschedule: ' . $e->getMessage());
+            return json_encode(['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+    }
 }
 
 
@@ -744,6 +879,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $facultyStaff = new FacultyStaff();
 
     switch ($operation) {
+
+        case "updateReservationReschedule":
+            $reservation_id = $input['reservation_id'] ?? ($_POST['reservation_id'] ?? null);
+            $reschedule_start_date = $input['reschedule_start_date'] ?? ($_POST['reschedule_start_date'] ?? null);
+            $reschedule_end_date = $input['reschedule_end_date'] ?? ($_POST['reschedule_end_date'] ?? null);
+            $user_admin_id = $input['user_admin_id'] ?? ($_POST['user_admin_id'] ?? null);
+            if ($reservation_id === null || $reschedule_start_date === null || $reschedule_end_date === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_id, reschedule_start_date, and reschedule_end_date are required']);
+                break;
+            }
+            echo $facultyStaff->updateReservationReschedule($reservation_id, $reschedule_start_date, $reschedule_end_date, $user_admin_id);
+            break;
+
+
+        case "updateVenueReschedule":
+            $reservation_venue_id = $input['reservation_venue_id'] ?? ($_POST['reservation_venue_id'] ?? null);
+            $reservation_change_venue_id = $input['reservation_change_venue_id'] ?? ($_POST['reservation_change_venue_id'] ?? null);
+            if ($reservation_venue_id === null || $reservation_change_venue_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_venue_id and reservation_change_venue_id are required']);
+                break;
+            }
+            echo $facultyStaff->updateVenueReschedule($reservation_venue_id, $reservation_change_venue_id);
+            break;
+
+        case "updateVehicleReschedule":
+            $reservation_vehicle_id = $input['reservation_vehicle_id'] ?? ($_POST['reservation_vehicle_id'] ?? null);
+            $reservation_change_vehicle_id = $input['reservation_change_vehicle_id'] ?? ($_POST['reservation_change_vehicle_id'] ?? null);
+            if ($reservation_vehicle_id === null || $reservation_change_vehicle_id === null) {
+                echo json_encode(['status' => 'error', 'message' => 'reservation_vehicle_id and reservation_change_vehicle_id are required']);
+                break;
+            }
+            echo $facultyStaff->updateVehicleReschedule($reservation_vehicle_id, $reservation_change_vehicle_id);
+            break;
         case 'fetchDeansApproval':
             if (!$reservationId) {
                 echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);

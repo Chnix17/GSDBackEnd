@@ -1218,8 +1218,9 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             $this->conn->beginTransaction();
     
             if ($isAccepted) {
-                // For user ID 99, handle status ID 8
+                // For user ID 99, handle acceptance
                 if ($userId == 99) {
+                    // Update status ID 1 to active = 1
                     $sqlUpdate = "
                         UPDATE tbl_reservation_status 
                         SET reservation_active = 1 
@@ -1227,22 +1228,34 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         AND reservation_status_status_id = 8";
                     
                     $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                    $reservation_id = $reservationId;
-                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
                     $stmtUpdate->execute();
                     
-                    // Insert status 6
-                    $sqlInsert = "
+                    // Insert 2 new statuses: status_id 6 and status_id 12
+                    
+    
+                    $sqlInsert12 = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 12, 1, NOW(), :user_id)";
+                    
+                    $stmtInsert12 = $this->conn->prepare($sqlInsert12);
+                    $stmtInsert12->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert12->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert12->execute();
+
+                    $sqlInsert6 = "
                         INSERT INTO tbl_reservation_status 
                         (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
                         VALUES (:reservation_id, 6, 1, NOW(), :user_id)";
                     
-                    $stmtInsert = $this->conn->prepare($sqlInsert);
-                    $stmtInsert->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
-                    $stmtInsert->bindParam(':user_id', $userId, PDO::PARAM_INT);
-                    $stmtInsert->execute();
+                    $stmtInsert6 = $this->conn->prepare($sqlInsert6);
+                    $stmtInsert6->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert6->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert6->execute();
                 } else {
-                    // For other users, handle status ID 1 normally
+                    // For other users, handle acceptance
+                    // Update status ID 1 to active = 1
                     $sqlUpdate = "
                         UPDATE tbl_reservation_status 
                         SET reservation_active = 1 
@@ -1252,54 +1265,76 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     $stmtUpdate = $this->conn->prepare($sqlUpdate);
                     $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
                     $stmtUpdate->execute();
+    
+                    // Insert new status: status_id 7
+                    $sqlInsert7 = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 7, 1, NOW(), :user_id)";
+                    
+                    $stmtInsert7 = $this->conn->prepare($sqlInsert7);
+                    $stmtInsert7->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert7->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert7->execute();
                 }
             } else {
+                // DECLINE logic
                 if ($userId == 99) {
+                    // For user ID 99, handle decline
+                    // Update status ID 8 to active = 1 (do NOT set to -1)
                     $sqlUpdate = "
                         UPDATE tbl_reservation_status 
-                        SET reservation_active = -1 
-                        WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 8";
+                        SET reservation_active = 1 
+                        WHERE reservation_reservation_id = :reservation_id 
+                        AND reservation_status_status_id = 8";
+                    
                     $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                    $reservation_id = $reservationId; // Store in variable
-                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
                     $stmtUpdate->execute();
-
-                    // Insert declined status (2) for user 99
-                    $sqlInsert = "
+    
+                    // Insert 2 new statuses: status_id 13 and status_id 2
+                    $sqlInsert13 = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 13, 1, NOW(), :user_id)";
+                    
+                    $stmtInsert13 = $this->conn->prepare($sqlInsert13);
+                    $stmtInsert13->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert13->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert13->execute();
+    
+                    $sqlInsert2 = "
                         INSERT INTO tbl_reservation_status 
                         (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
                         VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
                     
-                    $stmtInsert = $this->conn->prepare($sqlInsert);
-                    $reservation_id = $reservationId; // Store in variable
-                    $user_id = $userId; // Store in variable
-                    $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                    $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
-                    $stmtInsert->execute();
+                    $stmtInsert2 = $this->conn->prepare($sqlInsert2);
+                    $stmtInsert2->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert2->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert2->execute();
                 } else {
+                    // For other users, handle decline
+                    // Insert only status_id 9 with active = 1
+
                     $sqlUpdate = "
-                        UPDATE tbl_reservation_status 
-                        SET reservation_active = -1 
-                        WHERE reservation_reservation_id = :reservation_id AND reservation_status_status_id = 1";
+                    UPDATE tbl_reservation_status 
+                    SET reservation_active = 1 
+                    WHERE reservation_reservation_id = :reservation_id 
+                    AND reservation_status_status_id = 1";
+                
                     $stmtUpdate = $this->conn->prepare($sqlUpdate);
-                    $reservation_id = $reservationId; // Store in variable
-                    $stmtUpdate->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                    $stmtUpdate->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
                     $stmtUpdate->execute();
+
+                    $sqlInsert9 = "
+                        INSERT INTO tbl_reservation_status 
+                        (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
+                        VALUES (:reservation_id, 9, 1, NOW(), :user_id)";
                     
-                    // If acting user is 114 and not accepted, do NOT insert a new status row; only update active to -1
-                    if ($userId != 114) {
-                        $sqlInsert = "
-                            INSERT INTO tbl_reservation_status 
-                            (reservation_reservation_id, reservation_status_status_id, reservation_active, reservation_updated_at, reservation_users_id) 
-                            VALUES (:reservation_id, 2, 1, NOW(), :user_id)";
-                        
-                        $stmtInsert = $this->conn->prepare($sqlInsert);
-                        $reservation_id = $reservationId; // Store in variable
-                        $user_id = $userId; // Store in variable
-                        $stmtInsert->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
-                        $stmtInsert->bindParam(':user_id', $user_id, PDO::PARAM_INT);
-                        $stmtInsert->execute();
-                    }
+                    $stmtInsert9 = $this->conn->prepare($sqlInsert9);
+                    $stmtInsert9->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+                    $stmtInsert9->bindParam(':user_id', $userId, PDO::PARAM_INT);
+                    $stmtInsert9->execute();
                 }
             }
     
@@ -1310,11 +1345,10 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                                  VALUES (:message, :reservation_id, :notification_user_id, NOW())";
                 
                 $stmtNotification = $this->conn->prepare($sqlNotification);
-                $message = $notificationMessage; // Store in variable
-                $reservation_id = $reservationId; // Store in variable
-                $notification_user = $notification_user_id ?? $userId; // Store in variable
+                $message = $notificationMessage;
+                $notification_user = $notification_user_id ?? $userId;
                 $stmtNotification->bindParam(':message', $message, PDO::PARAM_STR);
-                $stmtNotification->bindParam(':reservation_id', $reservation_id, PDO::PARAM_INT);
+                $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
                 $stmtNotification->bindParam(':notification_user_id', $notification_user, PDO::PARAM_INT);
                 $stmtNotification->execute();
             }
@@ -1336,7 +1370,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 } catch (Throwable $te) {
                     error_log("Audit approver lookup failed (handleRequest): " . $te->getMessage());
                 }
-
+    
                 // Fetch reservation title
                 $resTitle = 'Reservation';
                 try {
@@ -1350,7 +1384,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 } catch (Throwable $te) {
                     error_log("Audit reservation lookup failed (handleRequest): " . $te->getMessage());
                 }
-
+    
                 $statusText = $isAccepted ? 'approved' : 'declined';
                 $desc = "Reservation '" . $resTitle . "' " . $statusText . " by " . $approverName;
                 $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
@@ -1372,7 +1406,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             } catch (Throwable $te) {
                 error_log("Audit logging error (handleRequest): " . $te->getMessage());
             }
-
+    
             // Send push notification to the requester after successful database operations
             $notificationUserId = $notification_user_id ?? $userId;
             // Compose notification content
@@ -1397,7 +1431,6 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             return json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
     }
-
     public function handleCancelReservation($reservationId, $userId) {
         try {
             $this->conn->beginTransaction();
@@ -1566,7 +1599,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
         }
     }
 
-    public function doubleCheckAvailability($startDateTime, $endDateTime) {
+    public function doubleCheckAvailability($startDateTime, $endDateTime, $reservationId = null) {
         try {
             // Initialize the result array with empty arrays for each resource type
             $result = [
@@ -1576,7 +1609,15 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 'unavailable_equipment' => [],
                 'unavailable_drivers' => []
             ];
-
+    
+            // Build the exclusion clause for the reservation ID
+            $excludeReservationClause = '';
+            $excludeParams = [];
+            if ($reservationId !== null) {
+                $excludeReservationClause = 'AND r.reservation_id != :excludeReservationId';
+                $excludeParams[':excludeReservationId'] = $reservationId;
+            }
+    
             // --- Query for Reserved Users (reservation_users) with latest-status and reschedule logic ---
             $userQuery = "
                 SELECT DISTINCT
@@ -1622,7 +1663,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                 LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                 WHERE (
-                    latest_status.reservation_status_status_id = 6
+                    latest_status.reservation_status_status_id IN (6, 8, 10)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1630,7 +1671,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
@@ -1641,21 +1682,23 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
                              AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                         THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
                 )
+                {$excludeReservationClause}
             ";
             $stmt = $this->conn->prepare($userQuery);
-            $stmt->execute([
+            $params = array_merge([
                 ':startDateTime' => $startDateTime,
                 ':endDateTime' => $endDateTime
-            ]);
+            ], $excludeParams);
+            $stmt->execute($params);
             $result['reservation_users'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+    
             // --- Unavailable Vehicles: pick effective vehicle when rescheduled, apply latest-status and reschedule dates ---
             $vehicleQuery = "
                 SELECT DISTINCT
@@ -1703,12 +1746,16 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         ) AND rv.reservation_change_vehicle_id IS NOT NULL
                         THEN cvmd.vehicle_model_name
                         ELSE vmd.vehicle_model_name
-                    END AS vehicle_model_name
+                    END AS vehicle_model_name,
+                    r.reservation_id,
+                    r.reservation_title,
+                    CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS reserved_by
                 FROM tbl_reservation r
                 INNER JOIN tbl_reservation_vehicle rv ON r.reservation_id = rv.reservation_reservation_id
                 INNER JOIN tbl_vehicle v ON rv.reservation_vehicle_vehicle_id = v.vehicle_id
                 INNER JOIN tbl_vehicle_model vmd ON v.vehicle_model_id = vmd.vehicle_model_id
                 INNER JOIN tbl_vehicle_make vm ON vmd.vehicle_model_vehicle_make_id = vm.vehicle_make_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
                 LEFT JOIN tbl_vehicle cv ON rv.reservation_change_vehicle_id = cv.vehicle_id
                 LEFT JOIN tbl_vehicle_model cvmd ON cv.vehicle_model_id = cvmd.vehicle_model_id
                 LEFT JOIN tbl_vehicle_make cvmk ON cvmd.vehicle_model_vehicle_make_id = cvmk.vehicle_make_id
@@ -1746,7 +1793,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id = 6
+                    latest_status.reservation_status_status_id IN (6, 8, 10)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1754,7 +1801,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
@@ -1765,21 +1812,19 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
                              AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                         THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
                 )
+                {$excludeReservationClause}
             ";
             $stmt = $this->conn->prepare($vehicleQuery);
-            $stmt->execute([
-                ':startDateTime' => $startDateTime,
-                ':endDateTime' => $endDateTime
-            ]);
+            $stmt->execute($params);
             $result['unavailable_vehicles'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+    
             // --- Unavailable Venues: pick effective venue when rescheduled, apply latest-status and reschedule dates ---
             $venueQuery = "
                 SELECT DISTINCT
@@ -1805,10 +1850,14 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         ) AND rv.reservation_change_venue_id IS NOT NULL
                         THEN change_venue.ven_name
                         ELSE v.ven_name
-                    END AS ven_name
+                    END AS ven_name,
+                    r.reservation_id,
+                    r.reservation_title,
+                    CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname) AS reserved_by
                 FROM tbl_reservation r
                 INNER JOIN tbl_reservation_venue rv ON r.reservation_id = rv.reservation_reservation_id
                 INNER JOIN tbl_venue v ON rv.reservation_venue_venue_id = v.ven_id
+                INNER JOIN tbl_users u ON r.reservation_user_id = u.users_id
                 LEFT JOIN tbl_venue change_venue ON rv.reservation_change_venue_id = change_venue.ven_id
                 LEFT JOIN (
                     SELECT rs1.*
@@ -1844,7 +1893,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id = 6
+                    latest_status.reservation_status_status_id IN (6, 8, 10)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1852,7 +1901,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
@@ -1863,21 +1912,19 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
                              AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                         THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
                 )
+                {$excludeReservationClause}
             ";
             $stmt = $this->conn->prepare($venueQuery);
-            $stmt->execute([
-                ':startDateTime' => $startDateTime,
-                ':endDateTime' => $endDateTime
-            ]);
+            $stmt->execute($params);
             $result['unavailable_venues'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+    
             // --- Unavailable Equipment: block when reserved qty >= total qty with latest-status & reschedule-aware overlap ---
             $equipmentQuery = "
                 WITH EquipmentTotalQuantities AS (
@@ -1897,11 +1944,17 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     e.equip_id,
                     e.equip_name,
                     COALESCE(etq.total_quantity, 0) AS total_quantity,
-                    COALESCE(SUM(re.reservation_equipment_quantity), 0) AS reserved_quantity
+                    COALESCE(SUM(re.reservation_equipment_quantity), 0) AS reserved_quantity,
+                    GROUP_CONCAT(
+                        DISTINCT CONCAT(r.reservation_id, ':', r.reservation_title, ':', 
+                        CONCAT(u.users_fname, ' ', u.users_mname, ' ', u.users_lname))
+                        SEPARATOR '|'
+                    ) AS reservations_info
                 FROM tbl_equipments e
                 INNER JOIN EquipmentTotalQuantities etq ON e.equip_id = etq.equip_id
                 LEFT JOIN tbl_reservation_equipment re ON e.equip_id = re.reservation_equipment_equip_id
                 LEFT JOIN tbl_reservation r ON r.reservation_id = re.reservation_reservation_id
+                LEFT JOIN tbl_users u ON r.reservation_user_id = u.users_id
                 LEFT JOIN (
                     SELECT rs1.*
                     FROM tbl_reservation_status rs1
@@ -1930,21 +1983,21 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id = 10 AND reservation_active = 1
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
-                WHERE r.reservation_id NOT IN (
+                WHERE (r.reservation_id IS NULL OR r.reservation_id NOT IN (
                     SELECT DISTINCT reservation_reservation_id 
                     FROM tbl_reservation_status 
                     WHERE reservation_status_status_id IN (2, 5)
-                )
-                AND (
-                    latest_status.reservation_status_status_id = 6
+                ))
+                AND (r.reservation_id IS NULL OR (
+                    latest_status.reservation_status_status_id IN (6, 8, 10)
                     AND latest_status.reservation_active IN (0, 1)
-                )
-                AND (
+                ))
+                AND (r.reservation_id IS NULL OR (
                     (CASE
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
@@ -1955,23 +2008,21 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
                              AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                         THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
-                )
+                ))
+                " . ($reservationId !== null ? "AND (r.reservation_id IS NULL OR r.reservation_id != :excludeReservationId)" : "") . "
                 GROUP BY e.equip_id, e.equip_name, etq.total_quantity
                 HAVING COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0)
             ";
             $stmt = $this->conn->prepare($equipmentQuery);
-            $stmt->execute([
-                ':startDateTime' => $startDateTime,
-                ':endDateTime' => $endDateTime
-            ]);
+            $stmt->execute($params);
             $result['unavailable_equipment'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
+    
             // --- Unavailable Drivers: use latest-status and reschedule-aware overlap to find reserved drivers ---
             $sqlReservedDrivers = "
                 SELECT DISTINCT rd.reservation_driver_user_id
@@ -2012,7 +2063,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                     WHERE reservation_status_status_id IN (2, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id = 6
+                    latest_status.reservation_status_status_id IN (6, 8, 10)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -2020,7 +2071,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
@@ -2031,21 +2082,19 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                         WHEN (
                                 (latest_status.reservation_status_status_id = 10 AND latest_status.reservation_active = 1)
                                 OR (
-                                    latest_status.reservation_status_status_id = 6 AND latest_status.reservation_active = 1
+                                    latest_status.reservation_status_status_id IN (6, 8) AND latest_status.reservation_active = 1
                                     AND active_resched.max_reschedule_status_id IS NOT NULL
                                 )
                              )
                              AND r.reschedule_start_date IS NOT NULL AND r.reschedule_end_date IS NOT NULL
                         THEN r.reschedule_end_date ELSE r.reservation_end_date END) >= :startDateTime
                 )
+                {$excludeReservationClause}
             ";
             $stmt = $this->conn->prepare($sqlReservedDrivers);
-            $stmt->execute([
-                ':startDateTime' => $startDateTime,
-                ':endDateTime' => $endDateTime
-            ]);
+            $stmt->execute($params);
             $reservedDriverIds = $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
-
+    
             if (!empty($reservedDriverIds)) {
                 $placeholders = implode(',', array_fill(0, count($reservedDriverIds), '?'));
                 $driverDetailsSql = "
@@ -2059,7 +2108,7 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
             } else {
                 $result['unavailable_drivers'] = [];
             }
-
+    
             // Return the results as a JSON success response
             return json_encode(['status' => 'success', 'data' => $result]);
         } catch (PDOException $e) {
@@ -2348,14 +2397,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case "doubleCheckAvailability":
-            $startDateTime = $data['start_datetime'] ?? null;
-            $endDateTime = $data['end_datetime'] ?? null;
-            if ($startDateTime === null || $endDateTime === null) {
-                echo json_encode(['status' => 'error', 'message' => 'Start and end datetime are required']);
+                $startDateTime = $data['start_datetime'] ?? null;
+                $endDateTime = $data['end_datetime'] ?? null;
+                $reservationId = $data['reservation_id'] ?? null; // Optional parameter
+                
+                if ($startDateTime === null || $endDateTime === null) {
+                    echo json_encode(['status' => 'error', 'message' => 'Start and end datetime are required']);
+                    break;
+                }
+                
+                echo $user->doubleCheckAvailability($startDateTime, $endDateTime, $reservationId);
                 break;
-            }
-            echo $user->doubleCheckAvailability($startDateTime, $endDateTime);
-            break;
         case "updateTripTicket":
             $reservationDriverId = $data['reservation_driver_id'] ?? null;
             if ($reservationDriverId === null) {
