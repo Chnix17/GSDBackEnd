@@ -1657,13 +1657,13 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN (
                     SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                     FROM tbl_reservation_status
-                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                 LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
                 WHERE (
-                    latest_status.reservation_status_status_id IN (6, 8, 10)
+                    latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1784,16 +1784,16 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN (
                     SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                     FROM tbl_reservation_status
-                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 WHERE r.reservation_id NOT IN (
                     SELECT DISTINCT reservation_reservation_id 
                     FROM tbl_reservation_status 
-                    WHERE reservation_status_status_id IN (2, 5)
+                    WHERE reservation_status_status_id IN (1, 2, 4, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (6, 8, 10)
+                    latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1884,16 +1884,16 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN (
                     SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                     FROM tbl_reservation_status
-                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 WHERE r.reservation_id NOT IN (
                     SELECT DISTINCT reservation_reservation_id 
                     FROM tbl_reservation_status 
-                    WHERE reservation_status_status_id IN (2, 5)
+                    WHERE reservation_status_status_id IN (1, 2, 4, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (6, 8, 10)
+                    latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -1980,16 +1980,16 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN (
                     SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                     FROM tbl_reservation_status
-                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 WHERE (r.reservation_id IS NULL OR r.reservation_id NOT IN (
                     SELECT DISTINCT reservation_reservation_id 
                     FROM tbl_reservation_status 
-                    WHERE reservation_status_status_id IN (2, 5)
+                    WHERE reservation_status_status_id IN (1, 2, 4, 5)
                 ))
                 AND (r.reservation_id IS NULL OR (
-                    latest_status.reservation_status_status_id IN (6, 8, 10)
+                    latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
                     AND latest_status.reservation_active IN (0, 1)
                 ))
                 AND (r.reservation_id IS NULL OR (
@@ -2017,7 +2017,8 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 ))
                 " . ($reservationId !== null ? "AND (r.reservation_id IS NULL OR r.reservation_id != :excludeReservationId)" : "") . "
                 GROUP BY e.equip_id, e.equip_name, etq.total_quantity
-                HAVING COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0)
+                HAVING COALESCE(etq.total_quantity, 0) > 0 
+                   AND COALESCE(SUM(re.reservation_equipment_quantity), 0) >= COALESCE(etq.total_quantity, 0)
             ";
             $stmt = $this->conn->prepare($equipmentQuery);
             $stmt->execute($params);
@@ -2054,16 +2055,16 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
                 LEFT JOIN (
                     SELECT reservation_reservation_id, MAX(reservation_status_id) AS max_reschedule_status_id
                     FROM tbl_reservation_status
-                    WHERE reservation_status_status_id = 10 AND reservation_active = 1
+                    WHERE reservation_status_status_id IN (10, 11, 14) AND reservation_active IN (0, 1)
                     GROUP BY reservation_reservation_id
                 ) active_resched ON active_resched.reservation_reservation_id = r.reservation_id
                 WHERE r.reservation_id NOT IN (
                     SELECT DISTINCT reservation_reservation_id 
                     FROM tbl_reservation_status 
-                    WHERE reservation_status_status_id IN (2, 5)
+                    WHERE reservation_status_status_id IN (1, 2, 4, 5)
                 )
                 AND (
-                    latest_status.reservation_status_status_id IN (6, 8, 10)
+                    latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
                     AND latest_status.reservation_active IN (0, 1)
                 )
                 AND (
@@ -2149,153 +2150,307 @@ public function handleApproval($reservationId, $isAccepted, $userId, $notificati
     //     }
     // }
     
-   public function insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate) {
-    try {
-        $this->conn->beginTransaction();
-        $results = [];
+    // public function insertUnits($equipIds, $quantities, $reservationId, $startDate, $endDate) {
+    //     try {
+    //         $this->conn->beginTransaction();
+    //         $results = [];
+    //         $allocatedUnits = []; // Track units allocated in this session
+            
+    //         // Log the start of unit allocation
+    //         error_log("insertUnits: Starting allocation for reservation_id: $reservationId, equipIds: " . json_encode($equipIds) . ", quantities: " . json_encode($quantities));
+    
+    //         for ($i = 0; $i < count($equipIds); $i++) {
+    //             $equipId = $equipIds[$i];
+    //             $quantity = $quantities[$i];
+    
+    //             // Get equipment type
+    //             $stmtType = $this->conn->prepare("SELECT equip_type FROM tbl_equipments WHERE equip_id = :equip_id");
+    //             $stmtType->execute([':equip_id' => $equipId]);
+    //             $equipData = $stmtType->fetch(PDO::FETCH_ASSOC);
+    
+    //             if (!$equipData) {
+    //                 throw new Exception("Equipment ID $equipId not found.");
+    //             }
+    
+    //             $equipType = strtolower($equipData['equip_type']);
+    
+    //             // Get reservation_equipment_id
+    //             $stmtReservationEquip = $this->conn->prepare("SELECT reservation_equipment_id 
+    //                                                           FROM tbl_reservation_equipment 
+    //                                                           WHERE reservation_equipment_equip_id = :equip_id 
+    //                                                           AND reservation_reservation_id = :reservation_id");
+    //             $stmtReservationEquip->execute([
+    //                 ':equip_id' => $equipId,
+    //                 ':reservation_id' => $reservationId
+    //             ]);
+    //             $reservationEquip = $stmtReservationEquip->fetch(PDO::FETCH_ASSOC);
+    
+    //             if (!$reservationEquip) {
+    //                 throw new Exception("No reservation_equipment found for equip_id $equipId and reservation_id $reservationId");
+    //             }
+    
+    //             $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
+    
+    //             if ($equipType === 'bulk') {
+    //                 // Check available quantity (but don't deduct)
+    //                 $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
+    //                 $stmtQty->execute([':equip_id' => $equipId]);
+    //                 $qtyData = $stmtQty->fetch(PDO::FETCH_ASSOC);
+    //                 $availableQty = $qtyData ? (int)$qtyData['quantity'] : 0;
+    
+    //                 if ($availableQty < $quantity) {
+    //                     throw new Exception("Not enough quantity for bulk equipment ID $equipId. Only $availableQty available.");
+    //                 }
+    
+    //                 // Commented out quantity deduction for bulk equipment
+    //                 // $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
+    //                 // $stmtUpdateQty->execute([
+    //                 //     ':qty' => $quantity,
+    //                 //     ':equip_id' => $equipId
+    //                 // ]);
+    
+    //                 $results[] = [
+    //                     'equip_id' => $equipId,
+    //                     'reservation_equipment_id' => $reservationEquipmentId,
+    //                     'type' => 'bulk',
+    //                     'quantity_used' => $quantity,
+    //                     'can_release' => true
+    //                 ];
+    //             } else {
+    //                 // New approach: Get all available units first, then filter step by step
+    //                 error_log("insertUnits: Processing serialized equipment $equipId, quantity needed: $quantity");
 
-        for ($i = 0; $i < count($equipIds); $i++) {
-            $equipId = $equipIds[$i];
-            $quantity = $quantities[$i];
+    //                 // Determine effective start/end datetime for the CURRENT reservation (use reschedule dates when applicable)
+    //                 // This avoids false negatives if $startDate/$endDate are passed as DATE only without time.
+    //                 $sqlLatestStatusCurrent = "
+    //                     SELECT 
+    //                         rs.reservation_status_status_id,
+    //                         rs.reservation_active,
+    //                         rs.reservation_updated_at
+    //                     FROM tbl_reservation_status rs
+    //                     WHERE rs.reservation_reservation_id = :reservation_id
+    //                     ORDER BY rs.reservation_updated_at DESC, rs.reservation_status_id DESC
+    //                     LIMIT 1";
 
-            // Get equipment type
-            $stmtType = $this->conn->prepare("SELECT equip_type FROM tbl_equipments WHERE equip_id = :equip_id");
-            $stmtType->execute([':equip_id' => $equipId]);
-            $equipData = $stmtType->fetch(PDO::FETCH_ASSOC);
+    //                 $stmtLatestCur = $this->conn->prepare($sqlLatestStatusCurrent);
+    //                 $stmtLatestCur->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+    //                 $stmtLatestCur->execute();
+    //                 $latestCur = $stmtLatestCur->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            if (!$equipData) {
-                throw new Exception("Equipment ID $equipId not found.");
-            }
+    //                 $sqlResHeader = "
+    //                     SELECT reservation_start_date, reservation_end_date, reschedule_start_date, reschedule_end_date
+    //                     FROM tbl_reservation
+    //                     WHERE reservation_id = :reservation_id";
+    //                 $stmtResHdr = $this->conn->prepare($sqlResHeader);
+    //                 $stmtResHdr->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+    //                 $stmtResHdr->execute();
+    //                 $resHdr = $stmtResHdr->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            $equipType = strtolower($equipData['equip_type']);
+    //                 $useResched = false;
+    //                 if (!empty($latestCur) && in_array((int)$latestCur['reservation_status_status_id'], [10,11,14], true)
+    //                     && !empty($resHdr['reschedule_start_date']) && !empty($resHdr['reschedule_end_date'])) {
+    //                     $useResched = true;
+    //                 }
 
-            // Get reservation_equipment_id
-            $stmtReservationEquip = $this->conn->prepare("SELECT reservation_equipment_id 
-                                                          FROM tbl_reservation_equipment 
-                                                          WHERE reservation_equipment_equip_id = :equip_id 
-                                                          AND reservation_reservation_id = :reservation_id");
-            $stmtReservationEquip->execute([
-                ':equip_id' => $equipId,
-                ':reservation_id' => $reservationId
-            ]);
-            $reservationEquip = $stmtReservationEquip->fetch(PDO::FETCH_ASSOC);
+    //                 $effectiveStart = $useResched ? $resHdr['reschedule_start_date'] : $resHdr['reservation_start_date'];
+    //                 $effectiveEnd   = $useResched ? $resHdr['reschedule_end_date']   : $resHdr['reservation_end_date'];
 
-            if (!$reservationEquip) {
-                throw new Exception("No reservation_equipment found for equip_id $equipId and reservation_id $reservationId");
-            }
+    //                 // Fallback: if for some reason header is missing, use provided parameters
+    //                 if (empty($effectiveStart)) { $effectiveStart = $startDate; }
+    //                 if (empty($effectiveEnd))   { $effectiveEnd   = $endDate; }
 
-            $reservationEquipmentId = $reservationEquip['reservation_equipment_id'];
-
-            if ($equipType === 'bulk') {
-                // Check available quantity (but don't deduct)
-                $stmtQty = $this->conn->prepare("SELECT quantity FROM tbl_equipment_quantity WHERE equip_id = :equip_id");
-                $stmtQty->execute([':equip_id' => $equipId]);
-                $qtyData = $stmtQty->fetch(PDO::FETCH_ASSOC);
-                $availableQty = $qtyData ? (int)$qtyData['quantity'] : 0;
-
-                if ($availableQty < $quantity) {
-                    throw new Exception("Not enough quantity for bulk equipment ID $equipId. Only $availableQty available.");
-                }
-
-                // Commented out quantity deduction for bulk equipment
-                // $stmtUpdateQty = $this->conn->prepare("UPDATE tbl_equipment_quantity SET quantity = quantity - :qty WHERE equip_id = :equip_id");
-                // $stmtUpdateQty->execute([
-                //     ':qty' => $quantity,
-                //     ':equip_id' => $equipId
-                // ]);
-
-                $results[] = [
-                    'equip_id' => $equipId,
-                    'reservation_equipment_id' => $reservationEquipmentId,
-                    'type' => 'bulk',
-                    'quantity_used' => $quantity,
-                    'can_release' => true
-                ];
-            } else {
-                // Serialized logic
-                $sqlUnits = "
-                    SELECT eu.unit_id, eu.serial_number 
-                    FROM tbl_equipment_unit eu
-                    WHERE eu.equip_id = :equip_id 
-                        AND eu.status_availability_id != 2 
-                        AND eu.is_active = 1
-                        AND eu.unit_id NOT IN (
-                            SELECT tru.unit_id
-                            FROM tbl_reservation_unit tru
-                            JOIN tbl_reservation_equipment tre ON tru.reservation_equipment_id = tre.reservation_equipment_id
-                            JOIN tbl_reservation tr ON tre.reservation_reservation_id = tr.reservation_id
-                            JOIN tbl_reservation_status trs ON tr.reservation_id = trs.reservation_reservation_id
-                            WHERE trs.reservation_status_status_id = 6
-                                AND trs.reservation_active = 1
-                                AND eu.unit_id = tru.unit_id
-                                AND (
-                                    (tr.reservation_start_date <= :end_date AND tr.reservation_end_date >= :start_date)
-                                )
-                        )
-                    LIMIT :qty";
-
-                $stmtUnits = $this->conn->prepare($sqlUnits);
-                $stmtUnits->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
-                $stmtUnits->bindValue(':qty', (int)$quantity, PDO::PARAM_INT);
-                $stmtUnits->bindParam(':start_date', $startDate);
-                $stmtUnits->bindParam(':end_date', $endDate);
-                $stmtUnits->execute();
-                $units = $stmtUnits->fetchAll(PDO::FETCH_ASSOC);
-
-                $availableUnits = count($units);
-
-                if ($availableUnits === 0) {
-                    $results[] = [
-                        'equip_id' => $equipId,
-                        'reservation_equipment_id' => $reservationEquipmentId,
-                        'type' => 'serialized',
-                        'units_inserted' => 0,
-                        'units' => [],
-                        'can_release' => false,
-                        'message' => "No available units for equipment ID $equipId"
-                    ];
-                    continue;
-                }
-
-                // Insert available units
-                $stmtInsert = $this->conn->prepare("INSERT INTO tbl_reservation_unit 
-                                                    (reservation_equipment_id, unit_id, active) 
-                                                    VALUES (:reservation_equipment_id, :unit_id, 0)");
-                foreach ($units as $unit) {
-                    $stmtInsert->execute([
-                        ':reservation_equipment_id' => $reservationEquipmentId,
-                        ':unit_id' => $unit['unit_id']
-                    ]);
-                }
-
-                $results[] = [
-                    'equip_id' => $equipId,
-                    'reservation_equipment_id' => $reservationEquipmentId,
-                    'type' => 'serialized',
-                    'units_inserted' => $availableUnits,
-                    'units_missing' => max(0, $quantity - $availableUnits),
-                    'units' => $units,
-                    'can_release' => $availableUnits > 0
-                ];
-            }
-        }
-
-        $this->conn->commit();
-
-        return json_encode([
-            'operation' => 'insertUnits',
-            'status' => 'success',
-            'data' => $results
-        ]);
-    } catch (Exception $e) {
-        $this->conn->rollBack();
-        return json_encode([
-            'operation' => 'insertUnits',
-            'status' => 'error',
-            'message' => $e->getMessage()
-        ]);
-    }
-}
+    //                 error_log("insertUnits: Effective window for reservation $reservationId -> start: $effectiveStart, end: $effectiveEnd (useResched=" . ($useResched ? '1' : '0') . ")");
+                    
+    //                 // Step 1: Get all units for this equipment that are active and not broken
+    //                 $sqlAllUnits = "
+    //                     SELECT eu.unit_id, eu.serial_number 
+    //                     FROM tbl_equipment_unit eu
+    //                     WHERE eu.equip_id = :equip_id 
+    //                         AND eu.status_availability_id != 2 
+    //                         AND eu.is_active = 1
+    //                     ORDER BY eu.unit_id ASC";
+                    
+    //                 $stmtAllUnits = $this->conn->prepare($sqlAllUnits);
+    //                 $stmtAllUnits->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+    //                 $stmtAllUnits->execute();
+    //                 $allUnits = $stmtAllUnits->fetchAll(PDO::FETCH_ASSOC);
+                    
+    //                 error_log("insertUnits: Found " . count($allUnits) . " total units for equipment $equipId");
+    //                 error_log("insertUnits: All units from tbl_equipment_unit: " . json_encode($allUnits));
+                    
+    //                 // Step 2: Get units already allocated to current reservation
+    //                 $sqlCurrentReservationUnits = "
+    //                     SELECT DISTINCT tru.unit_id
+    //                     FROM tbl_reservation_unit tru
+    //                     INNER JOIN tbl_reservation_equipment tre ON tru.reservation_equipment_id = tre.reservation_equipment_id
+    //                     WHERE tre.reservation_reservation_id = :reservation_id";
+                    
+    //                 $stmtCurrentUnits = $this->conn->prepare($sqlCurrentReservationUnits);
+    //                 $stmtCurrentUnits->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+    //                 $stmtCurrentUnits->execute();
+    //                 $currentReservationUnits = $stmtCurrentUnits->fetchAll(PDO::FETCH_COLUMN);
+                    
+    //                 error_log("insertUnits: Current reservation query: " . $sqlCurrentReservationUnits);
+    //                 error_log("insertUnits: Current reservation_id parameter: " . $reservationId);
+    //                 error_log("insertUnits: Units already allocated to current reservation: " . json_encode($currentReservationUnits));
+                    
+    //                 // Step 3: Get units reserved in other active reservations with date overlap
+    //                 $sqlOtherReservationUnits = "
+    //                     SELECT DISTINCT tru.unit_id
+    //                     FROM tbl_reservation_unit tru
+    //                     INNER JOIN tbl_reservation_equipment tre ON tru.reservation_equipment_id = tre.reservation_equipment_id
+    //                     INNER JOIN tbl_reservation tr ON tre.reservation_reservation_id = tr.reservation_id
+    //                     INNER JOIN (
+    //                         SELECT 
+    //                             rs1.reservation_reservation_id,
+    //                             rs1.reservation_status_status_id,
+    //                             rs1.reservation_active,
+    //                             rs1.reservation_updated_at
+    //                         FROM tbl_reservation_status rs1
+    //                         WHERE rs1.reservation_status_id = (
+    //                             SELECT MAX(rs2.reservation_status_id)
+    //                             FROM tbl_reservation_status rs2
+    //                             WHERE rs2.reservation_reservation_id = rs1.reservation_reservation_id
+    //                             AND rs2.reservation_updated_at = (
+    //                                 SELECT MAX(rs3.reservation_updated_at)
+    //                                 FROM tbl_reservation_status rs3
+    //                                 WHERE rs3.reservation_reservation_id = rs1.reservation_reservation_id
+    //                             )
+    //                         )
+    //                     ) latest_status ON latest_status.reservation_reservation_id = tr.reservation_id
+    //                     WHERE tr.reservation_id != :reservation_id
+    //                         AND latest_status.reservation_status_status_id IN (6, 8, 10, 11, 14)
+    //                         AND (
+    //                             (latest_status.reservation_status_status_id IN (10, 11, 14) AND 
+    //                              COALESCE(tr.reschedule_start_date, tr.reservation_start_date) <= :end_date AND 
+    //                              COALESCE(tr.reschedule_end_date, tr.reservation_end_date) >= :start_date)
+    //                             OR
+    //                             (latest_status.reservation_status_status_id NOT IN (10, 11, 14) AND 
+    //                              tr.reservation_start_date <= :end_date AND tr.reservation_end_date >= :start_date)
+    //                         )";
+                    
+    //                 $stmtOtherUnits = $this->conn->prepare($sqlOtherReservationUnits);
+    //                 $stmtOtherUnits->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+    //                 // Use effective start/end which include proper times and reschedules
+    //                 $stmtOtherUnits->bindParam(':start_date', $effectiveStart);
+    //                 $stmtOtherUnits->bindParam(':end_date', $effectiveEnd);
+                    
+    //                 error_log("insertUnits: SQL Query for other reservations: " . $sqlOtherReservationUnits);
+    //                 error_log("insertUnits: Query parameters - reservation_id: $reservationId, start_date: $effectiveStart, end_date: $effectiveEnd");
+                    
+    //                 $stmtOtherUnits->execute();
+    //                 $otherReservationUnits = $stmtOtherUnits->fetchAll(PDO::FETCH_COLUMN);
+                    
+    //                 error_log("insertUnits: Units reserved in other overlapping reservations: " . json_encode($otherReservationUnits));
+                    
+    //                 // Debug: Check if there are ANY units for equipment 48 in tbl_reservation_unit
+    //                 $debugSql = "
+    //                     SELECT DISTINCT tru.unit_id, tre.reservation_reservation_id
+    //                     FROM tbl_reservation_unit tru
+    //                     INNER JOIN tbl_reservation_equipment tre ON tru.reservation_equipment_id = tre.reservation_equipment_id
+    //                     WHERE tre.reservation_equipment_equip_id = :equip_id";
+    //                 $debugStmt = $this->conn->prepare($debugSql);
+    //                 $debugStmt->bindParam(':equip_id', $equipId, PDO::PARAM_INT);
+    //                 $debugStmt->execute();
+    //                 $debugUnits = $debugStmt->fetchAll(PDO::FETCH_ASSOC);
+    //                 error_log("insertUnits: DEBUG - All units for equipment $equipId in tbl_reservation_unit: " . json_encode($debugUnits));
+                    
+    //                 // Debug: Check reservation statuses for any reservations with unit 20
+    //                 if (!empty($debugUnits)) {
+    //                     foreach ($debugUnits as $debugUnit) {
+    //                         $statusSql = "
+    //                             SELECT rs.reservation_status_status_id, rs.reservation_active, rs.reservation_updated_at, tr.reservation_start_date, tr.reservation_end_date
+    //                             FROM tbl_reservation_status rs
+    //                             INNER JOIN tbl_reservation tr ON rs.reservation_reservation_id = tr.reservation_id
+    //                             WHERE rs.reservation_reservation_id = :res_id
+    //                             ORDER BY rs.reservation_updated_at DESC, rs.reservation_status_id DESC
+    //                             LIMIT 1";
+    //                         $statusStmt = $this->conn->prepare($statusSql);
+    //                         $statusStmt->bindParam(':res_id', $debugUnit['reservation_reservation_id'], PDO::PARAM_INT);
+    //                         $statusStmt->execute();
+    //                         $statusInfo = $statusStmt->fetch(PDO::FETCH_ASSOC);
+    //                         error_log("insertUnits: DEBUG - Unit " . $debugUnit['unit_id'] . " in reservation " . $debugUnit['reservation_reservation_id'] . " has status: " . json_encode($statusInfo));
+    //                     }
+    //                 }
+                    
+    //                 // Step 4: Combine all excluded units
+    //                 $excludedUnits = array_merge($currentReservationUnits, $otherReservationUnits, $allocatedUnits);
+    //                 $excludedUnits = array_unique($excludedUnits);
+                    
+    //                 error_log("insertUnits: All excluded units: " . json_encode($excludedUnits));
+                    
+    //                 // Step 5: Filter available units (get ALL available, don't break early)
+    //                 $availableUnits = [];
+    //                 foreach ($allUnits as $unit) {
+    //                     error_log("insertUnits: Checking unit " . $unit['unit_id'] . " - excluded: " . (in_array($unit['unit_id'], $excludedUnits) ? 'YES' : 'NO'));
+    //                     if (!in_array($unit['unit_id'], $excludedUnits)) {
+    //                         $availableUnits[] = $unit;
+    //                     }
+    //                 }
+                    
+    //                 error_log("insertUnits: Available units after filtering: " . json_encode(array_column($availableUnits, 'unit_id')));
+                    
+    //                 $actualUnitsToInsert = array_slice($availableUnits, 0, $quantity);
+                    
+    //                 if (count($actualUnitsToInsert) === 0) {
+    //                     error_log("insertUnits: No available units for equipment $equipId");
+    //                     $results[] = [
+    //                         'equip_id' => $equipId,
+    //                         'reservation_equipment_id' => $reservationEquipmentId,
+    //                         'type' => 'serialized',
+    //                         'units_inserted' => 0,
+    //                         'units' => [],
+    //                         'can_release' => false,
+    //                         'message' => "No available units for equipment ID $equipId"
+    //                     ];
+    //                     continue;
+    //                 }
+    
+    //                 // Step 6: Insert the selected units and track them
+    //                 $stmtInsert = $this->conn->prepare("INSERT INTO tbl_reservation_unit 
+    //                                                     (reservation_equipment_id, unit_id, active) 
+    //                                                     VALUES (:reservation_equipment_id, :unit_id, 0)");
+                    
+    //                 $insertedUnits = [];
+    //                 foreach ($actualUnitsToInsert as $unit) {
+    //                     $stmtInsert->execute([
+    //                         ':reservation_equipment_id' => $reservationEquipmentId,
+    //                         ':unit_id' => $unit['unit_id']
+    //                     ]);
+    //                     $insertedUnits[] = $unit;
+    //                     $allocatedUnits[] = $unit['unit_id']; // Track for next iteration
+    //                 }
+                    
+    //                 error_log("insertUnits: Inserted units for equipment $equipId: " . json_encode(array_column($insertedUnits, 'unit_id')));
+    
+    //                 $results[] = [
+    //                     'equip_id' => $equipId,
+    //                     'reservation_equipment_id' => $reservationEquipmentId,
+    //                     'type' => 'serialized',
+    //                     'units_inserted' => count($insertedUnits),
+    //                     'units_missing' => max(0, $quantity - count($insertedUnits)),
+    //                     'units' => $insertedUnits,
+    //                     'can_release' => count($insertedUnits) > 0
+    //                 ];
+    //             }
+    //         }
+    
+    //         $this->conn->commit();
+    
+    //         return json_encode([
+    //             'operation' => 'insertUnits',
+    //             'status' => 'success',
+    //             'data' => $results
+    //         ]);
+    //     } catch (Exception $e) {
+    //         $this->conn->rollBack();
+    //         return json_encode([
+    //             'operation' => 'insertUnits',
+    //             'status' => 'error',
+    //             'message' => $e->getMessage()
+    //         ]);
+    //     }
+    // }
 
 
 

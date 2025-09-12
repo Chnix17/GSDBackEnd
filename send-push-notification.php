@@ -50,8 +50,8 @@ use Minishlink\WebPush\Subscription;
 
 // VAPID Configuration - Using recommended keys from memory
 const VAPID_SUBJECT = 'mailto:vallechristianmark@gmail.com';
-const VAPID_PUBLIC_KEY = 'BH02Y33VwIvpIqMHVSoPc42a-Agj3r7WVL19X54a0PGyvSYfpbdn2QtuPF4q33CwGdy1E4iPgSiix-D0XcCIoLA';
-const VAPID_PRIVATE_KEY = 'WjaEaxZd7YGRi2Gh_0F4FsDNNlIyk2XV2-m6VlWRhZ0';
+const VAPID_PUBLIC_KEY = 'BBCHDpLuOIsXy3cOBIpaNPEs5SMLDDlqeyEsbVHaZbVVRccII2zkSkt4vm3AcZp8kKZkhXFBTXLcTZEaJaBTuVo';
+const VAPID_PRIVATE_KEY = 'WRxRXgxTI9MT9K7vwPVjUQWkWOyj867e8xOtzTUMeLM';
 
 class PushNotificationHandler {
     private $conn;

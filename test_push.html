@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Push Notification Tester</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    .card { max-width: 760px; padding: 1.25rem 1.5rem; border: 1px solid #ccc; border-radius: 12px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    label { font-weight: 600; }
+    input[type="number"], input[type="text"] { padding: 8px 10px; border-radius: 8px; border: 1px solid #bbb; min-width: 200px; }
+    button { padding: 10px 14px; border: 1px solid #444; background: #1f6feb; color: #fff; border-radius: 10px; cursor: pointer; }
+    button.secondary { background: #6e7781; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 10px; overflow: auto; max-height: 240px; }
+    .ok { color: #10b981; font-weight: 700; }
+    .err { color: #ef4444; font-weight: 700; }
+    .muted { color: #64748b; }
+  </style>
+</head>
+<body>
+  <h1>Web Push Test</h1>
+  <div class="card">
+    <div class="row" style="margin-bottom: 12px;">
+      <label for="userId">User ID:</label>
+      <input id="userId" type="number" placeholder="e.g. 42" />
+      <button id="btnSave" class="secondary" title="Save subscription for this user">Save Subscription</button>
+      <button id="btnSend">Send Test Notification</button>
+    </div>
+    <div class="row" style="margin-bottom: 12px;">
+      <button id="btnRegister" class="secondary">Register Service Worker</button>
+      <button id="btnSubscribe" class="secondary">Subscribe to Push</button>
+      <button id="btnUnsubscribe" class="secondary">Unsubscribe</button>
+      <button id="btnGetKey" class="secondary">Get Public Key</button>
+    </div>
+    <div class="row" style="margin-bottom: 8px;">
+      <span>VAPID Public Key:</span>
+      <span id="publicKey" class="muted"></span>
+    </div>
+    <div class="row" style="margin-bottom: 8px;">
+      <span>Endpoint:</span>
+      <span id="endpoint" class="muted"></span>
+    </div>
+    <div class="row" style="margin-bottom: 8px;">
+      <span>Status:</span>
+      <span id="status" class="muted">Idle</span>
+    </div>
+    <h3>Debug</h3>
+    <pre id="log"></pre>
+  </div>
+
+  <script>
+    // API endpoints (relative to this file location)
+    const SEND_API = 'send-push-notification.php';
+    const SAVE_API = 'save-push-subscription.php';
+
+    const els = {
+      userId: document.getElementById('userId'),
+      btnRegister: document.getElementById('btnRegister'),
+      btnSubscribe: document.getElementById('btnSubscribe'),
+      btnUnsubscribe: document.getElementById('btnUnsubscribe'),
+      btnGetKey: document.getElementById('btnGetKey'),
+      btnSave: document.getElementById('btnSave'),
+      btnSend: document.getElementById('btnSend'),
+      publicKey: document.getElementById('publicKey'),
+      endpoint: document.getElementById('endpoint'),
+      status: document.getElementById('status'),
+      log: document.getElementById('log'),
+    };
+
+    let registration = null;
+    let subscription = null;
+    let vapidPublicKey = null;
+
+    function log(...args) {
+      const line = args.map(a => {
+        try { return typeof a === 'string' ? a : JSON.stringify(a, null, 2); }
+        catch { return String(a); }
+      }).join(' ');
+      els.log.textContent += `\n${new Date().toLocaleTimeString()} ${line}`;
+    }
+
+    function setStatus(text, isError = false) {
+      els.status.textContent = text;
+      els.status.className = isError ? 'err' : 'ok';
+    }
+
+    async function getPublicKey() {
+      const res = await fetch(SEND_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'getPublicKey' })
+      });
+      const data = await res.json();
+      if (data && data.publicKey) {
+        vapidPublicKey = data.publicKey;
+        els.publicKey.textContent = vapidPublicKey;
+        log('Got VAPID public key');
+        return vapidPublicKey;
+      } else {
+        throw new Error('Unable to retrieve VAPID public key');
+      }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = window.atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+      }
+      return outputArray;
+    }
+
+    async function registerSW() {
+      if (!('serviceWorker' in navigator)) throw new Error('Service workers not supported');
+      registration = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      log('Service worker registered with scope:', registration.scope);
+      setStatus('Service worker registered');
+      return registration;
+    }
+
+    async function subscribePush() {
+      if (!registration) await registerSW();
+      if (!vapidPublicKey) await getPublicKey();
+
+      subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+        log('Created new subscription');
+      } else {
+        log('Using existing subscription');
+      }
+
+      const subJson = subscription.toJSON();
+      els.endpoint.textContent = subJson.endpoint;
+      setStatus('Subscribed to push');
+      log('Subscription:', subJson);
+      return subJson;
+    }
+
+    async function saveSubscription() {
+      const userId = parseInt(els.userId.value, 10);
+      if (!userId) { alert('Enter a numeric User ID first'); return; }
+      if (!subscription) await subscribePush();
+
+      const payload = {
+        operation: 'save',
+        user_id: userId,
+        subscription: subscription.toJSON()
+      };
+      const res = await fetch(SAVE_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      log('Save response:', data);
+      if (data.status === 'success') setStatus('Subscription saved');
+      else setStatus('Failed to save subscription', true);
+      return data;
+    }
+
+    async function sendTest() {
+      const userId = parseInt(els.userId.value, 10);
+      if (!userId) { alert('Enter a numeric User ID first'); return; }
+      const res = await fetch(SEND_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation: 'send',
+          user_id: userId,
+          title: 'Hello from Test Page',
+          body: 'This is a server-sent push test triggered from the UI',
+          data: { url: '/coc/gsd/' }
+        })
+      });
+      const data = await res.json();
+      log('Send response:', data);
+      if (data.status === 'success') setStatus('Push sent');
+      else setStatus('Failed to send push', true);
+    }
+
+    async function unsubscribe() {
+      if (!registration) await registerSW();
+      const sub = await registration.pushManager.getSubscription();
+      if (sub) {
+        await sub.unsubscribe();
+        log('Unsubscribed from push');
+        setStatus('Unsubscribed');
+      } else {
+        log('No subscription to unsubscribe');
+      }
+    }
+
+    // Wire up UI
+    els.btnRegister.addEventListener('click', registerSW);
+    els.btnSubscribe.addEventListener('click', subscribePush);
+    els.btnSave.addEventListener('click', saveSubscription);
+    els.btnSend.addEventListener('click', sendTest);
+    els.btnGetKey.addEventListener('click', getPublicKey);
+    els.btnUnsubscribe.addEventListener('click', unsubscribe);
+
+    // Auto-setup on load: register SW, get key, subscribe
+    (async () => {
+      try {
+        await registerSW();
+        await getPublicKey();
+        await subscribePush();
+        setStatus('Ready');
+      } catch (err) {
+        log('Init error:', err?.message || err);
+        setStatus('Init failed', true);
+      }
+    })();
+  </script>
+</body>
+</html>
