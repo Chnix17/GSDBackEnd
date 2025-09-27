@@ -1,0 +1,22 @@
+{
+    "name": "gsd/websocket-server",
+    "description": "WebSocket Chat Server for GSD Reservation System",
+    "type": "project",
+    "require": {
+        "php": ">=7.4",
+        "ratchet/pawl": "^0.4",
+        "ratchet/rfc6455": "^0.3",
+        "cboden/ratchet": "^0.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "MyApp\\": "src/"
+        }
+    },
+    "scripts": {
+        "start": "php chat_server.php"
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

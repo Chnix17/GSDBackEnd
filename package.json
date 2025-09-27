@@ -1,17 +1,17 @@
 {
-  "dependencies": {
-    "express": "^4.21.1",
-    "mysql2": "^3.14.0",
-    "ws": "^8.18.1"
-  },
-  "name": "gsd",
+  "name": "gsd-websocket-server",
   "version": "1.0.0",
-  "description": "\"# gs1\"",
-  "main": "index.js",
+  "description": "PHP WebSocket Chat Server using Ratchet",
+  "main": "chat_server.php",
   "scripts": {
+    "start": "php chat_server.php",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": ["websocket", "chat", "php", "ratchet"],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "engines": {
+    "php": ">=7.4"
+  },
+  "note": "This is a PHP-based WebSocket server using Ratchet. Run with 'php chat_server.php' or 'composer install' + 'php chat_server.php'"
 }
