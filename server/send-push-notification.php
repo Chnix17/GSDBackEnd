@@ -1,4 +1,9 @@
 <?php
+// Disable HTML error output to ensure JSON responses
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+error_reporting(E_ALL);
+
 // Fix OpenSSL configuration issue for Windows/XAMPP
 if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
     // Set OpenSSL configuration path for Windows
@@ -42,16 +47,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-require_once 'connection-pdo.php';
-require_once './vendor/autoload.php';
+require_once '../connection-pdo.php';
+require_once '../vendor/autoload.php';
 
 use Minishlink\WebPush\WebPush;
 use Minishlink\WebPush\Subscription;
 
 // VAPID Configuration - Using recommended keys from memory
 const VAPID_SUBJECT = 'mailto:vallechristianmark@gmail.com';
-const VAPID_PUBLIC_KEY = 'BBCHDpLuOIsXy3cOBIpaNPEs5SMLDDlqeyEsbVHaZbVVRccII2zkSkt4vm3AcZp8kKZkhXFBTXLcTZEaJaBTuVo';
-const VAPID_PRIVATE_KEY = 'WRxRXgxTI9MT9K7vwPVjUQWkWOyj867e8xOtzTUMeLM';
+const VAPID_PUBLIC_KEY = 'BL7W2qb8X8DQSMu3S8gozbbawaad68DCNE0wLc2_R7D3zg6FFL4vZI5oBP9AJwf-2UiE3iw4rM-gab_-NdDgrm8';
+const VAPID_PRIVATE_KEY = 'jX0InTBb-XZ-P6q8Jr34BwSoSwTq3IT6gtbx54BFaHA';
 
 class PushNotificationHandler {
     private $conn;
@@ -110,6 +115,13 @@ class PushNotificationHandler {
 
     public function sendTestNotification($userId) {
         try {
+            // Test WebPush initialization first
+            if (!$this->webPush) {
+                error_log("WebPush not initialized");
+                return ['status' => 'error', 'message' => 'WebPush not initialized'];
+            }
+            
+            error_log("Starting sendTestNotification for user: " . $userId);
             $stmt = $this->conn->prepare("SELECT * FROM tbl_push_subscriptions WHERE user_id = ? AND is_active = 1");
             $stmt->execute([$userId]);
             $subscriptionData = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -130,26 +142,62 @@ class PushNotificationHandler {
                 'authToken' => $subscriptionData['auth_key'],
             ]);
 
-            $payload = json_encode([
+            // Create notification payload
+            $notificationPayload = [
                 'title' => 'Test Notification',
                 'body' => 'This is a test from the server!',
-                'data' => ['url' => '/viewRequest']
-            ]);
-
+                // 'icon' => '/gsd-reservation/public/images/assets/phinma.png',
+                //'badge' => '/gsd-reservation/public/images/assets/phinma.png', // comment out temporarily
+                //'requireInteraction' => true, // comment out temporarily
+                'data' => [
+                    'url' => '/viewRequest',
+                    'timestamp' => time(),
+                    'type' => 'test_notification'
+                ]
+            ];
+            
+            
+            $payload = json_encode($notificationPayload);
+            error_log("Test notification payload: " . $payload);
+            
+            // Queue the notification
             $this->webPush->queueNotification($subscription, $payload);
             
+            // Send all queued notifications
+            $success = false;
+            $errorMessage = '';
+            $reportCount = 0;
+            
             foreach ($this->webPush->flush() as $report) {
+                $reportCount++;
+                error_log("Processing test notification report #" . $reportCount);
+                error_log("Report endpoint: " . $report->getEndpoint());
+                error_log("Report success: " . ($report->isSuccess() ? 'true' : 'false'));
+                
                 if ($report->isSuccess()) {
-                    error_log("Message sent successfully for subscription {$report->getEndpoint()}.");
+                    error_log("Test notification sent successfully for user {$userId}");
+                    $success = true;
                 } else {
-                    error_log("Message failed to send for subscription {$report->getEndpoint()}: {$report->getReason()}");
+                    $reason = $report->getReason();
+                    $response = $report->getResponse();
+                    error_log("Test notification failed for user {$userId}: {$reason}");
+                    error_log("Response body: " . ($response ? $response->getBody() : 'No response body'));
+                    error_log("Response status: " . ($response ? $response->getStatusCode() : 'No status code'));
+                    
+                    $errorMessage = $reason;
+                    
                     if ($report->isSubscriptionExpired()) {
+                        error_log("Subscription expired for user {$userId}");
                         $this->markSubscriptionInactive($userId);
                     }
                 }
             }
-
-            return ['status' => 'success', 'message' => 'Test notification sent.'];
+            
+            if ($success) {
+                return ['status' => 'success', 'message' => 'Test notification sent.'];
+            } else {
+                return ['status' => 'error', 'message' => 'Failed to send test notification: ' . $errorMessage];
+            }
 
         } catch (Exception $e) {
             error_log("Exception in sendTestNotification: " . $e->getMessage());
@@ -182,26 +230,87 @@ class PushNotificationHandler {
                 'authToken' => $subscriptionData['auth_key'],
             ]);
 
-            $payload = json_encode([
+            // Create notification payload
+            $notificationPayload = [
                 'title' => $title,
                 'body' => $body,
-                'data' => $data,
-            ]);
-
+                'icon' => '/gsd-reservation/public/images/assets/phinma.png',
+                'badge' => '/gsd-reservation/public/images/assets/phinma.png',
+                'requireInteraction' => true,
+                'data' => array_merge([
+                    'timestamp' => time(),
+                    'url' => '/'
+                ], $data)
+            ];
+            
+            // Add action buttons for reservation notifications
+            if (isset($data['type']) && in_array($data['type'], ['new_reservation', 'reservation_pending', 'reservation_approved', 'reservation_declined', 'reservation_confirmation'])) {
+                $viewButtonTitle = 'View Request';
+                
+                // Customize button title based on notification type
+                if ($data['type'] === 'new_reservation') {
+                    $viewButtonTitle = 'View Request';
+                } elseif ($data['type'] === 'reservation_pending') {
+                    $viewButtonTitle = 'View Approval';
+                } elseif (in_array($data['type'], ['reservation_approved', 'reservation_declined'])) {
+                    $viewButtonTitle = 'View Details';
+                }
+                
+                $notificationPayload['actions'] = [
+                    [
+                        'action' => 'view',
+                        'title' => $viewButtonTitle,
+                        'icon' => '/gsd-reservation/public/images/assets/phinma.png'
+                    ],
+                    [
+                        'action' => 'dismiss',
+                        'title' => 'Close',
+                        'icon' => '/gsd-reservation/public/images/assets/phinma.png'
+                    ]
+                ];
+            }
+            
+            $payload = json_encode($notificationPayload);
+            error_log("Notification payload: " . $payload);
+            
+            // Queue the notification
             $this->webPush->queueNotification($subscription, $payload);
-
+            
+            // Send all queued notifications
+            $success = false;
+            $errorMessage = '';
+            $reportCount = 0;
+            
             foreach ($this->webPush->flush() as $report) {
+                $reportCount++;
+                error_log("Processing notification report #" . $reportCount);
+                error_log("Report endpoint: " . $report->getEndpoint());
+                error_log("Report success: " . ($report->isSuccess() ? 'true' : 'false'));
+                
                 if ($report->isSuccess()) {
                     error_log("Notification for user {$userId} sent successfully.");
+                    $success = true;
                 } else {
-                    error_log("Notification for user {$userId} failed: {$report->getReason()}");
+                    $reason = $report->getReason();
+                    $response = $report->getResponse();
+                    error_log("Notification for user {$userId} failed: {$reason}");
+                    error_log("Response body: " . ($response ? $response->getBody() : 'No response body'));
+                    error_log("Response status: " . ($response ? $response->getStatusCode() : 'No status code'));
+                    
+                    $errorMessage = $reason;
+                    
                     if ($report->isSubscriptionExpired()) {
+                        error_log("Subscription expired for user {$userId}");
                         $this->markSubscriptionInactive($userId);
                     }
                 }
             }
-
-            return ['status' => 'success', 'message' => 'Notification sent.'];
+            
+            if ($success) {
+                return ['status' => 'success', 'message' => 'Notification sent.'];
+            } else {
+                return ['status' => 'error', 'message' => 'Failed to send notification: ' . $errorMessage];
+            }
 
         } catch (Exception $e) {
             error_log("Exception in sendNotification: " . $e->getMessage());
@@ -222,7 +331,7 @@ class PushNotificationHandler {
 
     private function markSubscriptionInactive($userId) {
         try {
-            $stmt = $this->conn->prepare("UPDATE tbl_push_subscriptions SET is_active = 0 WHERE user_id = ?");
+            $stmt = $this->conn->prepare("UPDATE tbl_push_subscriptions SET is_active = 1 WHERE user_id = ?");
             $stmt->execute([$userId]);
         } catch (Exception $e) {
             error_log("Failed to mark subscription inactive: " . $e->getMessage());
@@ -362,7 +471,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     try {
+        // Additional error suppression for clean JSON output
+        ob_start();
         $handler = new PushNotificationHandler();
+        ob_end_clean();
 
         switch ($input['operation']) {
             case 'test':
@@ -391,11 +503,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 'generateVAPIDKeys':
+            case 'generateNewVAPIDKeys':
                 echo json_encode($handler->generateNewVAPIDKeys());
                 break;
 
             case 'testOpenSSL':
                 echo json_encode($handler->testOpenSSLConfiguration());
+                break;
+                
+            case 'ping':
+                echo json_encode(['status' => 'success', 'message' => 'API is working', 'timestamp' => time()]);
                 break;
 
             default:

@@ -123,7 +123,6 @@ class Department_Dean {
                         v.reservation_venue_venue_id,
                         venue.ven_name,
                         venue.ven_occupancy,
-                        venue.ven_operating_hours,
                         IFNULL(venue.ven_pic,'')
                     )
                 ) AS venue_data,
@@ -811,9 +810,197 @@ public function fetchApprovalNotification($departmentId, $userLevelId) {
         }
     }
 
+    public function handleApproval($reservationId, $isAccepted, $userId, $notificationMessage = '', $notification_user_id = null) {
+        try {
+            $this->conn->beginTransaction();
+    
+            // 1. First get the user's department_id
+            $userSql = "SELECT users_department_id FROM tbl_users WHERE users_id = :user_id";
+            $userStmt = $this->conn->prepare($userSql);
+            $userStmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+            $userStmt->execute();
+            $user = $userStmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$user || !isset($user['users_department_id'])) {
+                throw new Exception("User department not found");
+            }
+    
+            $departmentId = $user['users_department_id'];
+    
+            // 2. Update only the specific department approval record
+            $sql = "UPDATE tbl_department_approval 
+                    SET department_is_approved = :approval_status,
+                        department_user_id = :user_id,
+                        department_updated_at = NOW()
+                    WHERE department_request_reservation_id = :reservation_id
+                    AND department_approval_department_id = :department_id";
+            
+            $stmt = $this->conn->prepare($sql);
+            $approval_status = $isAccepted ? 1 : -1;
+            $stmt->bindParam(':approval_status', $approval_status, PDO::PARAM_INT);
+            $stmt->bindParam(':user_id', $userId, PDO::PARAM_INT);
+            $stmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmt->bindParam(':department_id', $departmentId, PDO::PARAM_INT);
+            $stmt->execute();
+    
+            // Check if any rows were affected
+            if ($stmt->rowCount() === 0) {
+                throw new Exception("No matching department approval record found");
+            }
+    
+            // Set notification message based on approval status
+            $defaultMessage = $isAccepted ? 'Request Approved by Department' : 'Request Declined by Department';
+            $notificationMessage = !empty($notificationMessage) ? $notificationMessage : $defaultMessage;
+            
+            // Determine the requester (reservation owner) and insert user notification
+            $reqStmt = $this->conn->prepare("SELECT reservation_user_id FROM tbl_reservation WHERE reservation_id = :reservation_id");
+            $reqStmt->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $reqStmt->execute();
+            $reqRow = $reqStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$reqRow || empty($reqRow['reservation_user_id'])) {
+                throw new Exception("Requester not found for reservation");
+            }
+            $notificationUserId = (int)$reqRow['reservation_user_id'];
 
+            $sqlNotification = "INSERT INTO tbl_notification_reservation 
+                             (notification_message, notification_reservation_reservation_id, notification_user_id, notification_created_at) 
+                             VALUES (:message, :reservation_id, :notification_user_id, NOW())";
 
-    // ...existing code...
+            $stmtNotification = $this->conn->prepare($sqlNotification);
+            $stmtNotification->bindParam(':message', $notificationMessage, PDO::PARAM_STR);
+            $stmtNotification->bindParam(':reservation_id', $reservationId, PDO::PARAM_INT);
+            $stmtNotification->bindParam(':notification_user_id', $notificationUserId, PDO::PARAM_INT);
+            $stmtNotification->execute();
+            
+            $this->conn->commit();
+            
+            // Audit log: who approved/declined and which reservation
+            try {
+                // Fetch approver name
+                $approverName = 'User ID ' . (string)$userId;
+                try {
+                    $unameStmt = $this->conn->prepare("SELECT CONCAT_WS(' ', users_fname, users_mname, users_lname) AS full_name FROM tbl_users WHERE users_id = :uid");
+                    $unameStmt->bindParam(':uid', $userId, PDO::PARAM_INT);
+                    $unameStmt->execute();
+                    $uname = $unameStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($uname && !empty(trim((string)$uname['full_name']))) {
+                        $approverName = trim((string)$uname['full_name']);
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit approver lookup failed (handleApproval): " . $te->getMessage());
+                }
+    
+                // Fetch reservation title
+                $resTitle = 'Reservation';
+                try {
+                    $resStmt = $this->conn->prepare("SELECT reservation_title FROM tbl_reservation WHERE reservation_id = :rid");
+                    $resStmt->bindParam(':rid', $reservationId, PDO::PARAM_INT);
+                    $resStmt->execute();
+                    $res = $resStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($res && isset($res['reservation_title']) && trim((string)$res['reservation_title']) !== '') {
+                        $resTitle = (string)$res['reservation_title'];
+                    }
+                } catch (Throwable $te) {
+                    error_log("Audit reservation lookup failed (handleApproval): " . $te->getMessage());
+                }
+    
+                $statusText = $isAccepted ? 'approved' : 'declined';
+                $desc = "Reservation '" . $resTitle . "' " . $statusText . " by " . $approverName;
+                $auditSql = "INSERT INTO audit_log (description, action, created_at, created_by) VALUES (:description, :action, NOW(), :created_by)";
+                $audit = $this->conn->prepare($auditSql);
+                $action = $isAccepted ? 'APPROVE' : 'DECLINE';
+                $audit->bindParam(':description', $desc, PDO::PARAM_STR);
+                $audit->bindParam(':action', $action, PDO::PARAM_STR);
+                $audit->bindValue(':created_by', $userId, PDO::PARAM_INT);
+                if (!$audit->execute()) {
+                    error_log("Audit log insert failed (handleApproval): " . print_r($audit->errorInfo(), true));
+                } else {
+                    try {
+                        $latest = $this->conn->query("SELECT id, description, action, created_at, created_by FROM audit_log ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                        error_log("audit_log latest (handleApproval): " . json_encode($latest));
+                    } catch (Throwable $te) {
+                        error_log("Failed to read latest audit_log (handleApproval): " . $te->getMessage());
+                    }
+                }
+            } catch (Throwable $te) {
+                error_log("Audit logging error (handleApproval): " . $te->getMessage());
+            }
+    
+            // Send push notification
+            $this->sendApprovalPushNotification($reservationId, $isAccepted, $notificationUserId);
+            
+            return json_encode([
+                'status' => 'success', 
+                'message' => 'Department request ' . ($isAccepted ? 'approved' : 'declined') . ' successfully',
+                'reservation_id' => $reservationId,
+                'department_id' => $departmentId,
+                'approval_status' => $approval_status
+            ]);
+    
+        } catch (Exception $e) {
+            $this->conn->rollBack();
+            return json_encode([
+                'status' => 'error', 
+                'message' => $e->getMessage()
+            ]);
+        }
+    }
+
+    public function sendApprovalPushNotification($reservationId, $isAccepted, $userId, $data = []) {
+        try {
+            // Make a POST request to the push notification service
+            $pushNotificationUrl = 'http://' . $_SERVER['HTTP_HOST'] . dirname($_SERVER['REQUEST_URI']) . '/server/send-push-notification.php';
+            
+            $title = 'Department Approval Update';
+            $body = $isAccepted ? 'Your reservation has been approved by the department.' : 'Your reservation has been declined by the department.';
+            
+            $notificationData = array_merge([
+                'reservation_id' => $reservationId,
+                'status' => $isAccepted ? 'approved' : 'declined',
+                'type' => 'department_approval'
+            ], $data);
+            
+            $postData = json_encode([
+                'operation' => 'send',
+                'user_id' => $userId,
+                'title' => $title,
+                'body' => $body,
+                'data' => $notificationData
+            ]);
+            
+            $context = stream_context_create([
+                'http' => [
+                    'method' => 'POST',
+                    'header' => [
+                        'Content-Type: application/json',
+                        'Content-Length: ' . strlen($postData)
+                    ],
+                    'content' => $postData,
+                    'timeout' => 10
+                ]
+            ]);
+            
+            $result = file_get_contents($pushNotificationUrl, false, $context);
+            
+            if ($result === false) {
+                error_log("Failed to send department approval push notification to user {$userId}");
+                return false;
+            }
+            
+            $response = json_decode($result, true);
+            if ($response && isset($response['status']) && $response['status'] === 'success') {
+                error_log("Department approval push notification sent successfully to user {$userId}");
+                return true;
+            } else {
+                error_log("Department approval push notification failed for user {$userId}: " . ($response['message'] ?? 'Unknown error'));
+                return false;
+            }
+            
+        } catch (Exception $e) {
+            error_log("Exception in sendApprovalPushNotification: " . $e->getMessage());
+            return false;
+        }
+    }
 }
 
 // Handle JSON POST
@@ -830,6 +1017,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = new Department_Dean();
 
     switch ($operation) {
+
+        case "handleApproval":
+            $reservationId = $data['reservation_id'] ?? null;
+            $isAccepted = $data['is_accepted'] ?? false;
+            $userId = $data['user_id'] ?? null;
+            $notificationMessage = $data['notification_message'] ?? '';
+            $notificationUserId = $data['notification_user_id'] ?? null;
+            if ($reservationId === null) {
+                echo json_encode(['status' => 'error', 'message' => 'Reservation ID is required']);
+                break;
+            }
+            if ($userId === null) {
+                echo json_encode(['status' => 'error', 'message' => 'User ID is required']);
+                break;
+            }
+            echo $user->handleApproval($reservationId, $isAccepted, $userId, $notificationMessage, $notificationUserId);
+            break;
+            
         case "fetchApprovalNotification":
             $departmentId = $data['department_id'] ?? null;
             $userLevelId = $data['user_level_id'] ?? null;

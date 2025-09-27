@@ -164,11 +164,12 @@ class Login {
                 ]);
             }
             
-            // Single query to check user in tbl_users with JOIN to get user level and department info
-            $sql = "SELECT u.*, ul.user_level_name, ul.user_level_desc, d.departments_name 
+            // Single query to check user in tbl_users with JOIN to get user level, department, and title info
+            $sql = "SELECT u.*, ul.user_level_name, ul.user_level_desc, d.departments_name, t.abbreviation AS title_abbreviation 
                     FROM tbl_users u
                     LEFT JOIN tbl_user_level ul ON u.users_user_level_id = ul.user_level_id
                     LEFT JOIN tbl_departments d ON u.users_department_id = d.departments_id
+                    LEFT JOIN titles t ON u.title_id = t.id
                     WHERE u.users_school_id = :username";
             
             $stmt = $this->conn->prepare($sql);
@@ -222,6 +223,9 @@ class Login {
                             'firstname' => $user['users_fname'] ?? '',
                             'middlename' => $user['users_mname'] ?? '',
                             'lastname' => $user['users_lname'] ?? '',
+                            'suffix' => $user['users_suffix'] ?? '',
+                            'title_id' => $user['title_id'] ?? null,
+                            'title_abbreviation' => $user['title_abbreviation'] ?? '',
                             'school_id' => $user['users_school_id'],
                             'contact_number' => $user['users_contact_number'],
                             'user_level_name' => $userLevelMap[$user['users_user_level_id']] ?? 'Unknown',
@@ -512,12 +516,20 @@ class Login {
         } catch (Exception $e) {
             return ["status" => "error", "message" => "Failed to send OTP: " . $e->getMessage()];
         }
-    }    public function sendLoginOTP($user_id) {
+    }    public function sendLoginOTP($user_id, $otp = null, $email = null) {
         try {
             // First check if the user_id exists in any table
-            $email = $this->findEmailById($user_id);
-            if (!$email) {
+            $userEmail = $this->findEmailById($user_id);
+            if (!$userEmail) {
                 return ["status" => "error", "message" => "User ID not found in records"];
+            }
+
+            // Use provided email or find from database
+            $recipientEmail = $email ?: $userEmail;
+            
+            // Validate email matches the user
+            if ($email && $email !== $userEmail) {
+                return ["status" => "error", "message" => "Email does not match user record"];
             }
 
             $current_time = new DateTime();
@@ -541,8 +553,8 @@ class Login {
             $stmt->execute();
             $existingRecord = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            // Generate new OTP and expiration
-            $otp = $this->generateOTP();
+            // Use provided OTP or generate new one
+            $otpCode = $otp ?: $this->generateOTP();
             $expiration = $current_time->modify('+3 minutes')->format('Y-m-d H:i:s');
 
             if ($existingRecord) {
@@ -562,7 +574,7 @@ class Login {
                         otp_until = :expiration,
                         is_active = 1
                     WHERE id = :id AND is_active = 1");
-                $updateStmt->bindParam(':otp', $otp);
+                $updateStmt->bindParam(':otp', $otpCode);
                 $updateStmt->bindParam(':expiration', $expiration);
                 $updateStmt->bindParam(':id', $existingRecord['id']);
                 $updateStmt->execute();
@@ -592,10 +604,10 @@ class Login {
                 );
 
                 $mail->setFrom('vallechristianmark@gmail.com', 'General Services Department');
-                $mail->addAddress($email);
+                $mail->addAddress($recipientEmail);
                 $mail->isHTML(true);
                 $mail->Subject = 'Login Authentication Code';
-                $mail->Body = $this->getLoginOTPEmailTemplate($otp);
+                $mail->Body = $this->getLoginOTPEmailTemplate($otpCode);
 
                 $mail->send();
                 return [
@@ -703,8 +715,27 @@ class Login {
         }
     }
 
-    public function validateLoginOTP($user_id, $otp) {
+    public function validateLoginOTP($user_id, $otp, $email = null) {
         try {
+            // Set timezone to Asia/Manila
+            date_default_timezone_set('Asia/Manila');
+            
+            // First validate email if provided
+            if ($email) {
+                $userEmail = $this->findEmailById($user_id);
+                if (!$userEmail || $email !== $userEmail) {
+                    return [
+                        "status" => "error",
+                        "message" => "Email does not match user record",
+                        "authenticated" => false
+                    ];
+                }
+            }
+
+            // Debug: Log the current time and OTP being validated
+            $currentTime = date('Y-m-d H:i:s');
+            error_log("Validating OTP: $otp for user: $user_id at time: $currentTime");
+
             // Check if OTP exists, not expired, and matches the user_id
             $stmt = $this->conn->prepare("SELECT * FROM tbl_user_2fa 
                 WHERE user_id = :user_id 
@@ -716,6 +747,20 @@ class Login {
             $stmt->bindParam(':otp', $otp);
             $stmt->execute();
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Debug: Log the result
+            if ($result) {
+                error_log("OTP found in database: " . json_encode($result));
+            } else {
+                error_log("No OTP found for user: $user_id with OTP: $otp");
+                
+                // Let's check what OTPs exist for this user
+                $debugStmt = $this->conn->prepare("SELECT user_id, otp_code, otp_until, is_active FROM tbl_user_2fa WHERE user_id = :user_id");
+                $debugStmt->bindParam(':user_id', $user_id, PDO::PARAM_STR);
+                $debugStmt->execute();
+                $debugResult = $debugStmt->fetchAll(PDO::FETCH_ASSOC);
+                error_log("All OTPs for user $user_id: " . json_encode($debugResult));
+            }
 
             if ($result) {
                 // Update the OTP to used (deactivate it)
@@ -1052,6 +1097,73 @@ public function fetch2FA($user_id) {
     }
 }
 
+public function check2FAStatus($user_id) {
+    try {
+        // First get user email from multiple tables
+        $email = null;
+        $tables = [
+            ['table' => 'tbl_admin', 'id_field' => 'admin_id', 'email_field' => 'admin_email'],
+            ['table' => 'tbl_personnel', 'id_field' => 'personnel_id', 'email_field' => 'personnel_email'],
+            ['table' => 'tbl_department_dean', 'id_field' => 'department_dean_id', 'email_field' => 'department_dean_email'],
+            ['table' => 'tbl_faculty_staff', 'id_field' => 'faculty_staff_id', 'email_field' => 'faculty_staff_email'],
+            ['table' => 'tbl_driver', 'id_field' => 'driver_id', 'email_field' => 'driver_email']
+        ];
+
+        foreach ($tables as $tableInfo) {
+            $stmt = $this->conn->prepare("SELECT {$tableInfo['email_field']} as email FROM {$tableInfo['table']} WHERE {$tableInfo['id_field']} = :user_id LIMIT 1");
+            $stmt->bindParam(':user_id', $user_id, PDO::PARAM_STR);
+            $stmt->execute();
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($result && !empty($result['email'])) {
+                $email = $result['email'];
+                break;
+            }
+        }
+
+        if (!$email) {
+            return [
+                "status" => "error",
+                "message" => "User email not found",
+                "requires_2fa" => false
+            ];
+        }
+
+        // Check 2FA status in tbl_user_2fa
+        $stmt = $this->conn->prepare("
+            SELECT user_id, is_active 
+            FROM tbl_user_2fa 
+            WHERE user_id = :user_id AND is_active = 1
+            LIMIT 1
+        ");
+        $stmt->bindParam(':user_id', $user_id, PDO::PARAM_STR);
+        $stmt->execute();
+        
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($result) {
+            return [
+                "status" => "success",
+                "requires_2fa" => true,
+                "email" => $email
+            ];
+        } else {
+            return [
+                "status" => "success",
+                "requires_2fa" => false,
+                "email" => $email
+            ];
+        }
+        
+    } catch (Exception $e) {
+        return [
+            "status" => "error",
+            "message" => "Error checking 2FA status: " . $e->getMessage(),
+            "requires_2fa" => false
+        ];
+    }
+}
+
 }
 
 // Handle the request
@@ -1105,18 +1217,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit;
             }
             $result = $login->validateOTPKey($otp, $email);
-            echo json_encode($result);
-            break;
-        case 'update_password':
-            $email = $input['email'] ?? '';
-            $newPassword = $input['password'] ?? '';
-            
-            if (empty($email) || empty($newPassword)) {
-                echo json_encode(["status" => "error", "message" => "Email and password are required"]);
-                exit;
-            }
-            
-            $result = $login->updatePassword($email, $newPassword);
             echo json_encode($result);
             break;
         case 'sendLoginOTP':
@@ -1179,6 +1279,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 exit;
             }
             $result = $login->fetch2FA($user_id);
+            echo json_encode($result);
+            break;
+        case 'check_2fa_status':
+            $user_id = isset($input['json']['user_id']) ? $input['json']['user_id'] : '';
+            
+            if ($user_id === '') {
+                echo json_encode(["status" => "error", "message" => "User ID is required"]);
+                exit;
+            }
+            $result = $login->check2FAStatus($user_id);
             echo json_encode($result);
             break;
         case "admin":
@@ -1252,22 +1362,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo json_encode($result);
             break;
         case "sendLoginOTP":
-            $user_id = $input['json']['user_id'] ?? '';
+            $user_id = $input['json']['id'] ?? $input['json']['user_id'] ?? '';
+            $otp = $input['json']['otp'] ?? null;
+            $email = $input['json']['email'] ?? null;
             if (empty($user_id)) {
                 echo json_encode(['status' => 'error', 'message' => 'User ID is required']);
                 break;
             }
-            $result = $login->sendLoginOTP($user_id);
+            $result = $login->sendLoginOTP($user_id, $otp, $email);
             echo json_encode($result);
             break;
         case "validateLoginOTP":
             $user_id = $input['json']['user_id'] ?? '';
             $otp = $input['json']['otp'] ?? '';
+            $email = $input['json']['email'] ?? null;
             if (empty($user_id) || empty($otp)) {
                 echo json_encode(['status' => 'error', 'message' => 'User ID and OTP are required']);
                 break;
             }
-            $result = $login->validateLoginOTP($user_id, $otp);
+            $result = $login->validateLoginOTP($user_id, $otp, $email);
             echo json_encode($result);
             break;
         case "updateAuthPeriod":
