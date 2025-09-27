@@ -3,7 +3,7 @@
     "description": "WebSocket Chat Server for GSD Reservation System",
     "type": "project",
     "require": {
-        "php": "^8.1",
+       
         "ratchet/pawl": "^0.4",
         "ratchet/rfc6455": "^0.3",
         "cboden/ratchet": "^0.4"
