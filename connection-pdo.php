@@ -1,15 +1,18 @@
 <?php
-    $servername = "localhost";
-    $dbusername = "root";
-    $dbpassword = "";
-    $dbname = "dbgsd";
+// Railway backend connecting to InfinityFree database
+$host = $_ENV['DB_HOST'] ?? 'sql312.infinityfree.com';
+$database = $_ENV['DB_NAME'] ?? 'if0_40037383_dbgsd';
+$username = $_ENV['DB_USER'] ?? 'if0_40037383';
+$password = $_ENV['DB_PASS'] ?? '';
+$port = $_ENV['DB_PORT'] ?? 3306;
 
-    try {
-        $conn = new PDO("mysql:host=$servername;dbname=$dbname", $dbusername, $dbpassword);
-        // set the PDO error mode to exception
-        $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        //echo "Connected successfully";
-    } catch(PDOException $e) {
-        echo "Connection failed: " . $e->getMessage();
-    }
+try {
+    $dsn = "mysql:host={$host};port={$port};dbname={$database};charset=utf8mb4";
+    $pdo = new PDO($dsn, $username, $password);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    
+    echo "Successfully connected to InfinityFree database!";
+} catch (PDOException $e) {
+    die("Connection failed: " . $e->getMessage());
+}
 ?>
